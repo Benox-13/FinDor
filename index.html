@@ -1577,30 +1577,39 @@ async function pushAllToSupabase(){
 // Botón "Sincronizar": primero intenta traer lo más reciente de la nube;
 // si la nube sigue vacía después de eso, ofrece subir los datos locales
 // (con confirmación explícita — es una operación de un solo uso importante).
-async function manualSync(){
+// PRIMERO subimos cualquier cambio local que se haya quedado atascado sin
+// sincronizar. Esto va ANTES de traer de la nube a propósito: si trajéramos
+// primero, ese paso reemplaza los datos locales con lo que haya en la nube
+// — y si la nube nunca llegó a conocer esos cambios atascados (por ejemplo,
+// una transacción que acabas de registrar y que el push en segundo plano
+// todavía no terminaba de confirmar), se perderían de la pantalla antes de
+// que este paso tuviera oportunidad de rescatarlos.
+// Dos mecanismos complementarios:
+// (a) la cola de reintentos (updates/deletes que fallaron ya sabiendo que
+//     fallaron, con su acción exacta guardada)
+// (b) un barrido por formato de id, para cualquier cosa vieja que se haya
+//     quedado atascada de antes de que existiera la cola.
+// Se usa en TODO lugar donde se llama a pullFromSupabase(): al abrir la
+// app, al iniciar sesión, y en la sincronización manual — nunca se debe
+// traer de la nube sin haber empujado primero.
+async function safeSyncPull(){
   if(!sb||!currentUserId)return;
-  // 1. PRIMERO subimos cualquier cambio local que se haya quedado
-  //    atascado sin sincronizar. Esto va ANTES de traer de la nube a
-  //    propósito: si trajéramos primero, ese paso reemplaza los datos
-  //    locales con lo que haya en la nube — y si la nube nunca llegó a
-  //    conocer esos cambios atascados, se perderían de la pantalla antes
-  //    de que este paso tuviera oportunidad de rescatarlos.
-  //    Dos mecanismos complementarios:
-  //    (a) la cola de reintentos (updates/deletes que fallaron ya sabiendo
-  //        que fallaron, con su acción exacta guardada)
-  //    (b) un barrido por formato de id, para cualquier cosa vieja que se
-  //        haya quedado atascada de antes de que existiera la cola.
   await processSyncQueue();
   const pendingTx=S.transactions.filter(t=>!isUUID(t.id));
   for(const t of pendingTx)await Store._pushTransaction(t,false);
   if(pendingTx.length)toast(`Se recuperaron ${pendingTx.length} transacción(es) pendiente(s) de sincronizar`);
 
-  // 2. Ahora sí, traemos lo más reciente de la nube (incluye lo recién
-  //    subido arriba, más cualquier cambio hecho desde otro dispositivo).
+  // Ahora sí, traemos lo más reciente de la nube (incluye lo recién
+  // subido arriba, más cualquier cambio hecho desde otro dispositivo).
   await pullFromSupabase();
+}
 
-  // 3. Si después de todo esto la nube sigue vacía, es la primera vez que
-  //    se usa — ofrecemos subir todo lo local.
+async function manualSync(){
+  if(!sb||!currentUserId)return;
+  await safeSyncPull();
+
+  // Si después de todo esto la nube sigue vacía, es la primera vez que
+  // se usa — ofrecemos subir todo lo local.
   const {data,error}=await sb.from('accounts').select('id').limit(1);
   if(!error&&(!data||data.length===0)&&(S.accounts.length||S.transactions.length)){
     const ok=await confirm_('Tu nube está vacía','¿Subir tus datos locales actuales a Supabase por primera vez? Es un proceso de un solo uso — después de esto, cada cambio se sincroniza solo.','Subir datos');
@@ -1622,7 +1631,7 @@ async function authInit(){
   if(session){
     currentUserId=session.user.id;
     $('auth-screen').style.display='none';
-    pullFromSupabase();
+    safeSyncPull();
   }
   // Si más adelante la sesión cambia en otra pestaña (ej. cierras sesión en
   // el Mac mientras tienes el iPhone abierto), lo reflejamos aquí también.
@@ -1652,7 +1661,7 @@ async function authLogin(){
   currentUserId=data.user.id;
   $('auth-pass').value='';
   $('auth-screen').style.display='none';
-  pullFromSupabase();
+  safeSyncPull();
 }
 
 async function authLogout(){
