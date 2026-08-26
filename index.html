@@ -2330,7 +2330,7 @@ function go(page){
   updateNW();
 }
 function updateNW(){
-  const assets=S.accounts.reduce((a,x)=>a+M(x.balance||0),0);
+  const assets=S.accounts.reduce((a,x)=>a+(x.type==='credit'?0:M(x.balance||0)),0);
   const owedToMe=S.debts_owed.reduce((a,d)=>a+Math.max(0,d.amount-(d.paid||0)),0);
   const iOwe=S.debts_iowe.reduce((a,d)=>a+Math.max(0,d.amount-(d.paid||0)),0);
   const nw=assets+owedToMe-iOwe;
@@ -4167,7 +4167,7 @@ function snapshotNW(){
   if(!S.nwHistory)S.nwHistory=[];
   const now=new Date();const key=now.getFullYear()+'-'+String(now.getMonth()+1).padStart(2,'0');
   if(S.nwHistory.find(x=>x.k===key))return; // already snapped this month
-  const assets=S.accounts.reduce((a,x)=>a+M(x.balance||0),0);
+  const assets=S.accounts.reduce((a,x)=>a+(x.type==='credit'?0:M(x.balance||0)),0);
   const owedToMe=S.debts_owed.reduce((a,d)=>a+Math.max(0,d.amount-(d.paid||0)),0);
   const iOwe=S.debts_iowe.reduce((a,d)=>a+Math.max(0,d.amount-(d.paid||0)),0);
   S.nwHistory.push({k:key,nw:assets+owedToMe-iOwe,assets,debts:iOwe});
