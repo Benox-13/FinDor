@@ -511,9 +511,30 @@ input:checked+.sl:before{transform:translateX(18px);background:#fff}
     <div class="ss"><h3>Datos</h3>
       <div class="sr"><div><div class="si-l">Exportar datos</div><div class="si-s">Backup en JSON</div></div><button class="btn bg_ sm" onclick="exportData()">Exportar</button></div>
       <div class="sr"><div><div class="si-l">Importar datos</div><div class="si-s">Restaurar desde backup</div></div><label class="btn bg_ sm" style="cursor:pointer">Importar<input type="file" accept=".json" onchange="importData(event)" style="display:none"></label></div>
-      <div class="sr"><div><div class="si-l" style="color:var(--red)">Borrar todo</div><div class="si-s">Acción irreversible</div></div><button class="btn bd sm" onclick="nukeData()">Borrar</button></div>
+      <div class="sr"><div><div class="si-l" style="color:var(--red)">Borrar todo</div><div class="si-s">Acción irreversible</div></div><button class="btn bd sm" onclick="oM('mo-nuke')">Borrar</button></div>
     </div>
   </div>
+
+<!-- BORRAR TODO — con opción de alcance (antes borraba solo local, y como
+     la nube seguía intacta, un simple refresh traía todo de vuelta) -->
+<div class="mo" id="mo-nuke">
+  <div class="md">
+    <div class="mh"><span class="mttl">¿Qué quieres borrar?</span><button class="btn bg_ ico sm" onclick="cM('mo-nuke')">✕</button></div>
+    <div class="mbody">
+      <div style="display:flex;flex-direction:column;gap:10px">
+        <button class="btn bg_" style="text-align:left;padding:14px" onclick="nukeLocalOnly()">
+          <div style="font-weight:500;margin-bottom:3px">Solo este dispositivo</div>
+          <div style="font-size:12px;color:var(--t3);font-weight:400">Borra lo guardado aquí. Tu cuenta en la nube (Supabase) queda intacta — si vuelves a iniciar sesión, tus datos se descargan de nuevo.</div>
+        </button>
+        <button class="btn bd" style="text-align:left;padding:14px" onclick="nukeEverything()">
+          <div style="font-weight:500;margin-bottom:3px;color:var(--red)">Todo, incluida la nube</div>
+          <div style="font-size:12px;color:var(--t3);font-weight:400">Borra este dispositivo Y todos tus datos en Supabase, para siempre. No se puede deshacer.</div>
+        </button>
+      </div>
+    </div>
+    <div class="mfoot"><button class="btn bg_ sm" onclick="cM('mo-nuke')">Cancelar</button></div>
+  </div>
+</div>
   <div id="cfg-aspecto" style="display:none">
     <div class="ss"><h3>Tema</h3>
       <div class="sr"><div><div class="si-l">Modo oscuro</div></div><label class="sw"><input type="checkbox" id="cfg-dark" checked onchange="applyTheme()"><span class="sl"></span></label></div>
@@ -2586,6 +2607,8 @@ function calcMsiPay(){const a=M($('tx-amt').value)||0;const m=parseInt($('tx-msi
 async function saveTx(){
   const amt=M($('tx-amt').value);const dt=$('tx-dt').value;
   if(!isValidAmount(amt)||!dt){toast('Monto y fecha son requeridos (el monto debe ser mayor a 0)',false);return}
+  const cat=$('tx-cat').value;
+  if(txType!=='transfer'&&!cat){toast('Selecciona una categoría',false);return}
   const accId=$('tx-acc').value;
   const time=$('tx-time').value||tnow_();
   const msiOn=$('tx-msi').checked&&txType==='expense';
@@ -2594,11 +2617,11 @@ async function saveTx(){
     const ok=await confirm_('¿Guardar cambios?','Se actualizará esta transacción y se ajustará el balance de la cuenta.','Guardar');
     if(!ok)return;
     // EDIT: Store.updateTransaction revierte el balance viejo y aplica el nuevo internamente
-    const patch={type:txType,amount:amt,date:dt,time,description:$('tx-dsc').value||'Sin descripción',category:$('tx-cat').value,accountId:accId,accountId2:$('tx-acc2').value,notes:$('tx-notes').value};
+    const patch={type:txType,amount:amt,date:dt,time,description:$('tx-dsc').value||'Sin descripción',category:cat,accountId:accId,accountId2:$('tx-acc2').value,notes:$('tx-notes').value};
     Store.updateTransaction(editingTxId,patch);
     cM('mo-tx');renderTxP();renderDash();toast('Transacción actualizada');return;
   }
-  const tx={type:txType,amount:amt,date:dt,time,description:$('tx-dsc').value||'Sin descripción',category:$('tx-cat').value,accountId:accId,accountId2:$('tx-acc2').value,notes:$('tx-notes').value,
+  const tx={type:txType,amount:amt,date:dt,time,description:$('tx-dsc').value||'Sin descripción',category:cat,accountId:accId,accountId2:$('tx-acc2').value,notes:$('tx-notes').value,
     msi:msiOn?{months:msiMo,paid:0,monthly:amt/msiMo,paidAmt:0}:null};
   Store.addTransaction(tx);
   cM('mo-tx');renderDash();renderTxP();toast('Transacción guardada');
@@ -3522,7 +3545,34 @@ function saveDW(){['metrics','txs','cats','accs','goals','budget'].forEach(k=>{c
 function saveNotif(){if(!S.notif)S.notif={};['bgt','dbt','sub','gol'].forEach(k=>{const el=$('n-'+k);if(el)S.notif[k]=el.checked});save();toast('Preferencias guardadas')}
 function exportData(){const a=document.createElement('a');a.href='data:application/json,'+encodeURIComponent(JSON.stringify(S,null,2));a.download='finance-backup.json';a.click();toast('Datos exportados')}
 function importData(e){const f=e.target.files[0];if(!f)return;const r=new FileReader();r.onload=ev=>{try{S=JSON.parse(ev.target.result);save();renderDash();toast('Datos importados')}catch{toast('Archivo inválido',false)}};r.readAsText(f)}
-async function nukeData(){const ok=await confirm_('¿Borrar todos los datos?','Esta acción es irreversible. Se perderá todo.','Borrar todo');if(!ok)return;localStorage.removeItem('finance_v4');location.reload()}
+async function nukeLocalOnly(){
+  const ok=await confirm_('¿Borrar solo este dispositivo?','Se borrarán los datos guardados aquí. Tu cuenta en la nube sigue intacta — si vuelves a iniciar sesión, se descargan de nuevo.','Borrar local');
+  if(!ok)return;
+  cM('mo-nuke');
+  localStorage.removeItem('finance_v4');
+  localStorage.removeItem('finance_v4_syncqueue');
+  location.reload();
+}
+async function nukeEverything(){
+  const ok=await confirm_('¿Borrar TODO, incluida la nube?','Esto borra permanentemente todos tus datos en Supabase, no solo en este dispositivo. No se puede deshacer.','Borrar todo para siempre');
+  if(!ok)return;
+  cM('mo-nuke');
+  if(sb&&currentUserId){
+    toast('Borrando todo de la nube...');
+    // Hijos antes que padres — aunque las FKs ya tienen on delete
+    // cascade/set null en el esquema, este orden evita depender de eso.
+    const tables=['transactions','debts','goals','subscriptions','budgets',
+      'vehicle_records','vehicles','custom_section_records','custom_section_members',
+      'custom_section_categories','custom_sections','subcategories','categories',
+      'accounts','settings','net_worth_snapshots'];
+    for(const t of tables){
+      await cloudWrite(sb.from(t).delete().eq('user_id',currentUserId),`borrar todo de ${t}`);
+    }
+  }
+  localStorage.removeItem('finance_v4');
+  localStorage.removeItem('finance_v4_syncqueue');
+  location.reload();
+}
 
 // ==================== INIT ====================
 if(S.settings?.theme)document.documentElement.setAttribute('data-theme',S.settings.theme);
