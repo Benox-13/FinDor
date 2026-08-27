@@ -454,6 +454,10 @@ input:checked+.sl:before{transform:translateX(18px);background:#fff}
   <div id="loans-iowe-panel" style="display:none">
     <div id="iowe-list" class="g2"></div>
   </div>
+  <div class="ss" style="margin-top:20px">
+    <h3>Historial de préstamos</h3>
+    <div id="loans-history"></div>
+  </div>
 </div>
 
 <!-- GOALS -->
@@ -645,9 +649,10 @@ input:checked+.sl:before{transform:translateX(18px);background:#fff}
         <div class="fg"><label class="fl">Monto</label><input class="fc" type="number" id="tx-amt" placeholder="0.00" step="0.01" oninput="calcMsiPay()"></div>
         <div class="fg"><label class="fl">Fecha</label><input class="fc" type="date" id="tx-dt"></div>
       </div>
-      <div class="fg"><label class="fl">Hora <span style="color:var(--t3);font-weight:400">(para ordenar bien varias del mismo día)</span></label><input class="fc" type="time" id="tx-time"></div>
+      <div class="fg"><label class="fl">Hora <span style="color:var(--t3);font-weight:400">(para ordenar bien varias del mismo día)</span></label><input class="fc" type="time" id="tx-time" step="1"></div>
       <div class="fg"><label class="fl">Descripción</label><input class="fc" type="text" id="tx-dsc" placeholder="Ej: Súper, Gasolina..."></div>
-      <div class="fg" id="tx-cat-g"><label class="fl">Categoría</label><select class="fc" id="tx-cat"></select></div>
+      <div class="fg" id="tx-cat-g"><label class="fl">Categoría</label><select class="fc" id="tx-cat" onchange="fillTxSubcatSel()"></select></div>
+      <div class="fg" id="tx-subcat-g"><label class="fl">Subcategoría</label><select class="fc" id="tx-subcat"><option value="">Sin subcategoría</option></select></div>
       <div class="g2">
         <div class="fg"><label class="fl" id="tx-acc-lbl">Cuenta</label><select class="fc" id="tx-acc" onchange="onAccChange()"></select></div>
         <div class="fg" id="tx-acc2-g" style="display:none"><label class="fl">Cuenta destino</label><select class="fc" id="tx-acc2"></select></div>
@@ -1262,8 +1267,8 @@ async function pullFromSupabase(){
       const subcat=t.subcategory_id?subcatById[t.subcategory_id]:null;
       return{
         id:t.id,type:t.type,amount:centsToAmt(t.amount_cents),date:t.date,
-        time:(t.updated_at||t.created_at||'').slice(11,16)||undefined,
-        description:t.description||'',category:subcat?subcat.name:(cat?cat.name:''),
+        time:(t.updated_at||t.created_at||'').slice(11,19)||undefined,
+        description:t.description||'',category:cat?cat.name:'',subcategory:subcat?subcat.name:undefined,
         accountId:t.account_id||'',accountId2:t.related_account_id||'',
         notes:t.notes||'',msi:t.msi||null,subscriptionId:t.subscription_id||undefined,
       };
@@ -1400,10 +1405,13 @@ function categoryToCloud(c){
   return{id:c.id,user_id:currentUserId,name:c.name,icon:c.icon||null,type:c.type};
 }
 function transactionToCloud(t,catId,subcatId){
+  // t.time puede venir como "HH:MM" (datos guardados antes de este cambio)
+  // o "HH:MM:SS" (formato nuevo, con segundos) — normalizamos a segundos.
+  const timeNorm=t.time?(t.time.length===5?t.time+':00':t.time):null;
   return{id:t.id,user_id:currentUserId,type:t.type,amount_cents:amtToCents(t.amount),date:t.date,
     description:t.description||'',category_id:catId||null,subcategory_id:subcatId||null,
     account_id:t.accountId||null,related_account_id:t.accountId2||null,notes:t.notes||null,
-    msi:t.msi||null,updated_at:t.time?`${t.date}T${t.time}:00`:new Date().toISOString()};
+    msi:t.msi||null,updated_at:timeNorm?`${t.date}T${timeNorm}`:new Date().toISOString()};
 }
 function debtToCloud(d,direction){
   return{id:d.id,user_id:currentUserId,direction,person:d.person,amount_cents:amtToCents(d.amount),
@@ -1725,7 +1733,7 @@ const uid=()=>'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g,c=>{
 });
 const isUUID=s=>typeof s==='string'&&/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(s);
 const td_=()=>new Date().toISOString().split('T')[0];
-const tnow_=()=>{const d=new Date();return String(d.getHours()).padStart(2,'0')+':'+String(d.getMinutes()).padStart(2,'0')};
+const tnow_=()=>{const d=new Date();return String(d.getHours()).padStart(2,'0')+':'+String(d.getMinutes()).padStart(2,'0')+':'+String(d.getSeconds()).padStart(2,'0')};
 const fmt=n=>M(n||0).toLocaleString('es-MX',{style:'currency',currency:S?.settings?.currency||'MXN',minimumFractionDigits:2,maximumFractionDigits:2});
 const oM=id=>$(id).classList.add('op');
 const cM=id=>$(id).classList.remove('op');
@@ -1893,16 +1901,18 @@ const Store = {
     }
   },
   // Sube una transacción a Supabase, resolviendo category_id/subcategory_id
-  // por nombre (localmente tx.category es un nombre de texto, puede ser de
-  // categoría o de subcategoría — igual que en pullFromSupabase, revisa
-  // ambas listas para encontrar el id correcto).
+  // por nombre (localmente tx.category/tx.subcategory son texto).
   async _pushTransaction(tx,isUpdate){
     let catId=null,subcatId=null;
     if(tx.category){
-      for(const c of S.categories){
-        if(c.name===tx.category){catId=isUUID(c.id)?c.id:null;break}
-        if((c.subs||[]).includes(tx.category)&&isUUID(c.id)){catId=c.id;break}
-      }
+      const c=S.categories.find(c=>c.name===tx.category);
+      if(c&&isUUID(c.id))catId=c.id;
+    }
+    if(tx.subcategory&&catId){
+      // Localmente las subcategorías son solo texto (sin id propio) — se
+      // resuelve/crea por nombre en la nube, igual que en otras partes de
+      // la app (ej. al guardar una categoría nueva desde Ajustes).
+      subcatId=await findOrCreateByName('subcategories','category_id',catId,tx.subcategory,{});
     }
     const payload=transactionToCloud(tx,catId,subcatId);
     if(isUpdate&&isUUID(tx.id)){
@@ -2630,6 +2640,8 @@ function openTxM(editId=null){
     $('tx-dsc').value=tx.description;$('tx-notes').value=tx.notes||'';
     fillTxSelects();
     $('tx-cat').value=tx.category||'';
+    fillTxSubcatSel();
+    $('tx-subcat').value=tx.subcategory||'';
     $('tx-acc').value=tx.accountId||'';
     if(tx.accountId2)$('tx-acc2').value=tx.accountId2;
     onAccChange();
@@ -2656,6 +2668,7 @@ function setTxT(t){
   else $('tb-t').classList.add('tton-t');
   $('tx-acc2-g').style.display=t==='transfer'?'block':'none';
   $('tx-cat-g').style.display=t==='transfer'?'none':'block';
+  $('tx-subcat-g').style.display=t==='transfer'?'none':'block';
   $('tx-acc-lbl').textContent=t==='transfer'?'Cuenta origen':'Cuenta';
   fillTxCatSel();onAccChange();
 }
@@ -2672,11 +2685,21 @@ function fillTxCatSel(){
   const isIncome=txType==='income';
   sel.innerHTML='<option value="">Sin categoría</option>';
   S.categories.filter(c=>isIncome?c.type==='income':c.type==='expense').forEach(c=>{
-    const og=document.createElement('optgroup');og.label=c.icon+' '+c.name;
-    const mo=document.createElement('option');mo.value=c.name;mo.textContent=c.icon+' '+c.name;og.appendChild(mo);
-    (c.subs||[]).forEach(s=>{const o=document.createElement('option');o.value=s;o.textContent='  └ '+s;og.appendChild(o)});
-    sel.appendChild(og);
+    const o=document.createElement('option');o.value=c.name;o.textContent=c.icon+' '+c.name;sel.appendChild(o);
   });
+  fillTxSubcatSel();
+}
+
+// Rellena el selector de subcategoría SOLO con las subcategorías de la
+// categoría actualmente seleccionada — se llama al abrir el formulario y
+// cada vez que cambia la categoría (onchange en tx-cat).
+function fillTxSubcatSel(){
+  const sel=$('tx-subcat');if(!sel)return;
+  const catName=$('tx-cat').value;
+  const cat=S.categories.find(c=>c.name===catName);
+  const subs=cat?.subs||[];
+  sel.innerHTML='<option value="">Sin subcategoría</option>'+subs.map(s=>`<option value="${esc(s)}">${esc(s)}</option>`).join('');
+  $('tx-subcat-g').style.display=subs.length?'block':'none';
 }
 
 function onAccChange(){
@@ -2692,20 +2715,25 @@ async function saveTx(){
   const amt=M($('tx-amt').value);const dt=$('tx-dt').value;
   if(!isValidAmount(amt)||!dt){toast('Monto y fecha son requeridos (el monto debe ser mayor a 0)',false);return}
   const cat=$('tx-cat').value;
+  const subcat=$('tx-subcat').value;
   if(txType!=='transfer'&&!cat){toast('Selecciona una categoría',false);return}
   const accId=$('tx-acc').value;
   const time=$('tx-time').value||tnow_();
+  // Si no se escribió descripción, usamos la subcategoría (o si no hay,
+  // la categoría) como descripción por defecto — mejor que un genérico
+  // "Sin descripción" para identificar la transacción en las listas.
+  const desc=$('tx-dsc').value||subcat||cat||'Sin descripción';
   const msiOn=$('tx-msi').checked&&txType==='expense';
   const msiMo=parseInt($('tx-msi-mo').value)||0;
   if(editingTxId){
     const ok=await confirm_('¿Guardar cambios?','Se actualizará esta transacción y se ajustará el balance de la cuenta.','Guardar');
     if(!ok)return;
     // EDIT: Store.updateTransaction revierte el balance viejo y aplica el nuevo internamente
-    const patch={type:txType,amount:amt,date:dt,time,description:$('tx-dsc').value||'Sin descripción',category:cat,accountId:accId,accountId2:$('tx-acc2').value,notes:$('tx-notes').value};
+    const patch={type:txType,amount:amt,date:dt,time,description:desc,category:cat,subcategory:subcat||undefined,accountId:accId,accountId2:$('tx-acc2').value,notes:$('tx-notes').value};
     Store.updateTransaction(editingTxId,patch);
     cM('mo-tx');renderTxP();renderDash();toast('Transacción actualizada');return;
   }
-  const tx={type:txType,amount:amt,date:dt,time,description:$('tx-dsc').value||'Sin descripción',category:cat,accountId:accId,accountId2:$('tx-acc2').value,notes:$('tx-notes').value,
+  const tx={type:txType,amount:amt,date:dt,time,description:desc,category:cat,subcategory:subcat||undefined,accountId:accId,accountId2:$('tx-acc2').value,notes:$('tx-notes').value,
     msi:msiOn?{months:msiMo,paid:0,monthly:amt/msiMo,paidAmt:0}:null};
   Store.addTransaction(tx);
   cM('mo-tx');renderDash();renderTxP();toast('Transacción guardada');
@@ -3006,7 +3034,7 @@ function execMsiPay(){
   // directo al arreglo local, y solo actualizaba tx.msi en localStorage —
   // nada de eso llegaba nunca a Supabase (ni los balances, ni la
   // transacción nueva, ni el progreso del MSI). Ahora todo pasa por Store.
-  Store.addTransaction({type:'transfer',amount:amt,date:td_(),description:`Pago MSI ${newPaid}/${tx.msi.months}: ${tx.description}`,category:'',accountId:payAccId,accountId2:tx.accountId,notes:'Pago MSI automático'});
+  Store.addTransaction({type:'transfer',amount:amt,date:td_(),description:`Pago MSI ${newPaid}/${tx.msi.months}: ${tx.description}`,category:tx.category||'',subcategory:tx.subcategory||undefined,accountId:payAccId,accountId2:tx.accountId,notes:'Pago MSI automático'});
   Store.updateTransaction(tx.id,{msi:{...tx.msi,paid:newPaid,paidAmt:newPaidAmt}});
   cM('mo-msi-pay');renderMSI();renderAccounts();renderDash();toast(`Pago ${newPaid}/${tx.msi.months} registrado`);
 }
@@ -3471,7 +3499,7 @@ async function saveDebt(){
         Store._syncAccountBalance(accId); // antes esto nunca llegaba a Supabase
       }
     }
-    const loanTx={id:uid(),type:startType,amount:amt,date:obj.start||td_(),description:startLabel+person,category:'Préstamos',accountId:accId||'',notes:`${k==='iowe'?'Me prestaron':'Presté'} — vence: ${obj.due||'sin fecha'}`+(accId&&$('d-autotx').checked?'':', sin efecto en cuenta')};
+    const loanTx={id:uid(),type:startType,amount:amt,date:obj.start||td_(),description:startLabel+person,category:'Préstamos',subcategory:k==='iowe'?'Debo':'Me deben',accountId:accId||'',notes:`${k==='iowe'?'Me prestaron':'Presté'} — vence: ${obj.due||'sin fecha'}`+(accId&&$('d-autotx').checked?'':', sin efecto en cuenta')};
     S.transactions.push(loanTx);
     save();
     // Antes la transacción se quedaba solo en localStorage — nunca se subía
@@ -3628,6 +3656,22 @@ function renderLoansMetrics(){
   const ioweRem=S.debts_iowe.reduce((a,d)=>a+Math.max(0,d.amount-(d.paid||0)),0);
   $('loans-owed-total').textContent=fmt(owedRem);
   $('loans-iowe-total').textContent=fmt(ioweRem);
+  renderLoansHistory();
+}
+// Historial completo de préstamos: todas las transacciones generadas por
+// la sección de Préstamos (registro inicial + cada pago), sin importar si
+// están ligadas a una cuenta o no — antes los pagos sin cuenta ligada no
+// dejaban ningún rastro más que el total acumulado en la deuda.
+function renderLoansHistory(){
+  const el=$('loans-history');if(!el)return;
+  const txs=Store.queryTransactions({category:'Préstamos',sortBy:'date',sortDir:'desc'});
+  if(!txs.length){el.innerHTML='<div style="color:var(--t3);font-size:13px">Sin movimientos todavía</div>';return}
+  el.innerHTML=txs.map(t=>{
+    const acc=Store.getAccountById(t.accountId);
+    const isIowe=t.subcategory==='Debo';
+    const clr=t.type==='income'?'var(--inc)':t.type==='expense'?'var(--exp)':'var(--blu)';
+    return`<div style="display:flex;justify-content:space-between;align-items:center;padding:10px 0;border-bottom:1px solid var(--bdr2)"><div><div style="font-size:13px;font-weight:500">${esc(t.description)}</div><div style="font-size:11px;color:var(--t3)">${esc(t.date)}${t.time?' '+esc(t.time):''} · ${isIowe?'Debo':'Me deben'}${acc?' · '+esc(acc.name):' · sin cuenta ligada'}</div></div><div style="font-family:'DM Mono',monospace;color:${clr};font-size:13px">${t.type==='expense'?'-':t.type==='income'?'+':''}${fmt(t.amount)}</div></div>`;
+  }).join('');
 }
 function applyTheme(){const d=$('cfg-dark').checked;document.documentElement.setAttribute('data-theme',d?'dark':'light');S.settings.theme=d?'dark':'light';save()}
 function setAccent(a,el){document.documentElement.setAttribute('data-accent',a==='green'?'':a);document.querySelectorAll('.swatch[data-a]').forEach(s=>s.classList.remove('sel'));el.classList.add('sel');S.settings.accent=a;save()}
@@ -4127,14 +4171,17 @@ function execDP(){
   const v=M($('dpay-amt').value)||0;if(!isValidAmount(v)){toast('Monto requerido (mayor a 0)',false);return}
   const d=Store.recordDebtPayment(k,id,v);
   if(!d)return;
-  // Ligar el pago a una cuenta es opcional. Aquí SÍ usamos
-  // Store.addTransaction (a diferencia de saveDebt) porque el signo del
-  // pago coincide exactamente con lo que applyBalance ya calcula para
-  // income/expense — confirmé la equivalencia antes de migrar esto.
+  // Antes esta transacción SOLO se creaba si el pago estaba ligado a una
+  // cuenta — si pagabas sin ligar cuenta, no quedaba ningún registro en el
+  // historial, solo el total acumulado en la deuda. Ahora siempre se crea
+  // un registro de historial; accountId vacío simplemente no afecta ningún
+  // balance (Store.addTransaction ya maneja ese caso con seguridad).
+  // Categoría/subcategoría: igual que en el resto de la app, la sección
+  // ("Préstamos") es la categoría, y la dirección (Me deben/Debo) la
+  // subcategoría — mismo patrón que ya usa saveDebt() para el registro
+  // inicial del préstamo.
   const accId=$('dpay-acc').value;const dt=$('dpay-dt').value||td_();
-  if(accId){
-    Store.addTransaction({type:k==='iowe'?'expense':'income',amount:v,date:dt,time:tnow_(),description:(k==='iowe'?'Pago a ':'Cobro de ')+d.person,category:'',accountId:accId,notes:'Pago de préstamo'});
-  }
+  Store.addTransaction({type:k==='iowe'?'expense':'income',amount:v,date:dt,time:tnow_(),description:(k==='iowe'?'Pago a ':'Cobro de ')+d.person,category:'Préstamos',subcategory:k==='iowe'?'Debo':'Me deben',accountId:accId||'',notes:'Pago de préstamo'});
   cM('mo-dpay');renderDebts(k);renderLoansMetrics();renderDash();updateNW();
   if(d.paid>=d.amount)toast('¡Deuda liquidada! 🎉');else toast('Pago registrado');
 }
