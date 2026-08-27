@@ -2101,7 +2101,7 @@ const Store = {
     if(!d)return null;
     Object.assign(d,patch);
     save();
-    if(sb&&currentUserId&&isUUID(id))cloudWrite(sb.from('debts').update(debtToCloud(d,k==='owed'?'owed_to_me':'i_owe')).eq('id',id),`actualizar deuda ${d.person}`);
+    if(sb&&currentUserId&&isUUID(id))cloudWrite(sb.from('debts').upsert(debtToCloud(d,k==='owed'?'owed_to_me':'i_owe'),{onConflict:'id'}),`actualizar deuda ${d.person}`);
     return d;
   },
   deleteDebt(k,id){
@@ -2137,7 +2137,7 @@ const Store = {
     if(!g)return null;
     Object.assign(g,patch);
     save();
-    if(sb&&currentUserId&&isUUID(id))cloudWrite(sb.from('goals').update(goalToCloud(g)).eq('id',id),`actualizar meta ${g.name}`);
+    if(sb&&currentUserId&&isUUID(id))cloudWrite(sb.from('goals').upsert(goalToCloud(g),{onConflict:'id'}),`actualizar meta ${g.name}`);
     return g;
   },
   deleteGoal(id){
@@ -2172,7 +2172,7 @@ const Store = {
     save();
     if(sb&&currentUserId&&isUUID(id)){
       const cat=S.categories.find(c=>c.name===s.category);
-      cloudWrite(sb.from('subscriptions').update(subscriptionToCloud(s,cat&&isUUID(cat.id)?cat.id:null)).eq('id',id),`actualizar suscripción ${s.name}`);
+      cloudWrite(sb.from('subscriptions').upsert(subscriptionToCloud(s,cat&&isUUID(cat.id)?cat.id:null),{onConflict:'id'}),`actualizar suscripción ${s.name}`);
     }
     return s;
   },
@@ -2197,7 +2197,7 @@ const Store = {
     if(!v)return null;
     Object.assign(v,patch);
     save();
-    if(sb&&currentUserId&&isUUID(id))cloudWrite(sb.from('vehicles').update(vehicleToCloud(v)).eq('id',id),`actualizar vehículo ${v.name}`);
+    if(sb&&currentUserId&&isUUID(id))cloudWrite(sb.from('vehicles').upsert(vehicleToCloud(v),{onConflict:'id'}),`actualizar vehículo ${v.name}`);
     return v;
   },
   deleteVehicle(id){
@@ -2222,7 +2222,7 @@ const Store = {
     if(idx<0)return null;
     v.records[idx]={...v.records[idx],...patch};
     save();
-    if(sb&&currentUserId&&isUUID(recordId))cloudWrite(sb.from('vehicle_records').update(vehicleRecordToCloud(v.records[idx],vehicleId)).eq('id',recordId),'actualizar registro de vehículo');
+    if(sb&&currentUserId&&isUUID(recordId))cloudWrite(sb.from('vehicle_records').upsert(vehicleRecordToCloud(v.records[idx],vehicleId),{onConflict:'id'}),'actualizar registro de vehículo');
     return v.records[idx];
   },
   deleteVehicleRecord(vehicleId,recordId){
@@ -2252,7 +2252,7 @@ const Store = {
     if(!s)return null;
     Object.assign(s,patch);
     save();
-    if(sb&&currentUserId&&isUUID(id))cloudWrite(sb.from('custom_sections').update(customSectionToCloud(s)).eq('id',id),`actualizar sección ${s.name}`);
+    if(sb&&currentUserId&&isUUID(id))cloudWrite(sb.from('custom_sections').upsert(customSectionToCloud(s),{onConflict:'id'}),`actualizar sección ${s.name}`);
     return s;
   },
   deleteCustomSection(id){
@@ -2552,14 +2552,14 @@ function execBillingPay(){
   const tdc=S.accounts.find(a=>a.id===accId);
   const src=S.accounts.find(a=>a.id===srcId);
   if(!tdc||!src){toast('Cuenta no encontrada',false);return}
-  // Deduct from source
-  src.balance=M(src.balance)-amt;
-  // Restore TDC balance (payment reduces debt = increases available)
-  tdc.balance=M(tdc.balance)+amt;
-  // Log transactions
-  S.transactions.push({id:uid(),type:'expense',amount:amt,date,description:`Pago TDC — ${tdc.name}`,category:'',accountId:srcId,notes:'Pago de tarjeta de crédito'});
-  S.transactions.push({id:uid(),type:'income',amount:amt,date,description:`Pago recibido — ${tdc.name}`,category:'',accountId:accId,notes:'Abono a tarjeta de crédito'});
-  save();cM('mo-billing-pay');renderBilling();renderAccounts();renderDash();toast('Pago registrado');
+  // Antes esto movía los balances a mano (src.balance-=amt, tdc.balance+=amt)
+  // y metía las dos transacciones directo a S.transactions, sin pasar por
+  // Store — así que ni las transacciones ni el cambio de balance llegaban
+  // nunca a Supabase. Store.addTransaction ya hace todo eso correctamente
+  // (aplica el balance Y lo sincroniza, sube la transacción con reintentos).
+  Store.addTransaction({type:'expense',amount:amt,date,description:`Pago TDC — ${tdc.name}`,category:'',accountId:srcId,notes:'Pago de tarjeta de crédito'});
+  Store.addTransaction({type:'income',amount:amt,date,description:`Pago recibido — ${tdc.name}`,category:'',accountId:accId,notes:'Abono a tarjeta de crédito'});
+  cM('mo-billing-pay');renderBilling();renderAccounts();renderDash();toast('Pago registrado');
 }
 
 // ==================== DASHBOARD ====================
@@ -3000,17 +3000,15 @@ function execMsiPay(){
   const tx=S.transactions.find(t=>t.id===txId);if(!tx)return;
   const payAccId=$('msi-pay-acc').value;
   const amt=M($('msi-pay-amt').value)||tx.msi.monthly;
-  // Debit the payment account
-  const payAcc=S.accounts.find(a=>a.id===payAccId);
-  if(payAcc)payAcc.balance=M(payAcc.balance)-amt;
-  // Credit the TDC (reduces debt)
-  const tdcAcc=S.accounts.find(a=>a.id===tx.accountId);
-  if(tdcAcc)tdcAcc.balance=M(tdcAcc.balance)+amt;
-  tx.msi.paid=(tx.msi.paid||0)+1;
-  tx.msi.paidAmt=(tx.msi.paidAmt||0)+amt;
-  // Register as a transaction for history
-  S.transactions.push({id:uid(),type:'transfer',amount:amt,date:td_(),description:`Pago MSI ${tx.msi.paid}/${tx.msi.months}: ${tx.description}`,category:'',accountId:payAccId,accountId2:tx.accountId,notes:'Pago MSI automático'});
-  save();cM('mo-msi-pay');renderMSI();renderAccounts();renderDash();toast(`Pago ${tx.msi.paid}/${tx.msi.months} registrado`);
+  const newPaid=(tx.msi.paid||0)+1;
+  const newPaidAmt=(tx.msi.paidAmt||0)+amt;
+  // Antes esto movía los balances a mano, metía la transacción nueva
+  // directo al arreglo local, y solo actualizaba tx.msi en localStorage —
+  // nada de eso llegaba nunca a Supabase (ni los balances, ni la
+  // transacción nueva, ni el progreso del MSI). Ahora todo pasa por Store.
+  Store.addTransaction({type:'transfer',amount:amt,date:td_(),description:`Pago MSI ${newPaid}/${tx.msi.months}: ${tx.description}`,category:'',accountId:payAccId,accountId2:tx.accountId,notes:'Pago MSI automático'});
+  Store.updateTransaction(tx.id,{msi:{...tx.msi,paid:newPaid,paidAmt:newPaidAmt}});
+  cM('mo-msi-pay');renderMSI();renderAccounts();renderDash();toast(`Pago ${newPaid}/${tx.msi.months} registrado`);
 }
 
 // ==================== ANALYSIS ====================
@@ -3468,10 +3466,18 @@ async function saveDebt(){
     const startLabel=k==='iowe'?'Préstamo recibido de ':'Préstamo a ';
     if($('d-autotx').checked&&accId){
       const acc=Store.getAccountById(accId);
-      if(acc)acc.balance=M(acc.balance)+(k==='iowe'?+amt:-amt);
+      if(acc){
+        acc.balance=M(acc.balance)+(k==='iowe'?+amt:-amt);
+        Store._syncAccountBalance(accId); // antes esto nunca llegaba a Supabase
+      }
     }
-    S.transactions.push({id:uid(),type:startType,amount:amt,date:obj.start||td_(),description:startLabel+person,category:'Préstamos',accountId:accId||'',notes:`${k==='iowe'?'Me prestaron':'Presté'} — vence: ${obj.due||'sin fecha'}`+(accId&&$('d-autotx').checked?'':', sin efecto en cuenta')});
+    const loanTx={id:uid(),type:startType,amount:amt,date:obj.start||td_(),description:startLabel+person,category:'Préstamos',accountId:accId||'',notes:`${k==='iowe'?'Me prestaron':'Presté'} — vence: ${obj.due||'sin fecha'}`+(accId&&$('d-autotx').checked?'':', sin efecto en cuenta')};
+    S.transactions.push(loanTx);
     save();
+    // Antes la transacción se quedaba solo en localStorage — nunca se subía
+    // a Supabase. Igual que en el resto de la app: anotar en la cola antes
+    // de intentar, para sobrevivir a un recargo a mitad de la subida.
+    if(sb&&currentUserId){enqueueTxSync(loanTx.id,'upsert');Store._pushTransaction(loanTx);}
   }
   cM('mo-debt');renderDebts(k);renderLoansMetrics();renderDash();updateNW();
 }
