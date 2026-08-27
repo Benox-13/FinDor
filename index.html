@@ -1206,6 +1206,15 @@ window.addEventListener('offline',updateOfflineBadge);
 // todos tus datos actuales sin avisarte — eso sería inaceptable para una
 // app financiera personal.
 function centsToAmt(c){return M((c||0)/100)}
+// La tabla `accounts` en Supabase tiene un CHECK constraint que solo
+// permite: checking, savings, credit, cash, investment, other. La app usa
+// internamente 'debit' para cuentas de débito (así se ve en toda la UI y el
+// resto del código) — pero ese valor NO existe en la lista permitida, así
+// que Supabase lo rechazaba con un 400 en cada intento de crear/actualizar
+// una cuenta de Débito. Traducimos en la frontera, sin tocar el resto de
+// la app: 'debit' (local) <-> 'checking' (nube).
+function accountTypeToCloud(t){return t==='debit'?'checking':t}
+function accountTypeFromCloud(t){return t==='checking'?'debit':t}
 
 async function pullFromSupabase(){
   if(!sb)return;
@@ -1241,7 +1250,7 @@ async function pullFromSupabase(){
 
     // --- accounts ---
     const newAccounts=results.accounts.map(a=>({
-      id:a.id,name:a.name,type:a.type,balance:centsToAmt(a.balance_cents),
+      id:a.id,name:a.name,type:accountTypeFromCloud(a.type),balance:centsToAmt(a.balance_cents),
       limit:a.limit_cents?centsToAmt(a.limit_cents):0,color:a.color||null,
       cutDay:a.cut_day||null,payDay:a.pay_day||null,
     }));
@@ -1384,7 +1393,7 @@ async function cloudWrite(promise,label){
 
 // ---- Conversores local -> nube (inverso exacto de pullFromSupabase) ----
 function accountToCloud(a){
-  return{id:a.id,user_id:currentUserId,name:a.name,type:a.type,balance_cents:amtToCents(a.balance),
+  return{id:a.id,user_id:currentUserId,name:a.name,type:accountTypeToCloud(a.type),balance_cents:amtToCents(a.balance),
     limit_cents:a.limit?amtToCents(a.limit):null,color:a.color||null,cut_day:a.cutDay||null,pay_day:a.payDay||null};
 }
 function categoryToCloud(c){
@@ -1815,7 +1824,12 @@ const Store = {
     if(!acc)return null;
     Object.assign(acc,patch);
     save();
-    if(sb&&currentUserId&&isUUID(id))cloudWrite(sb.from('accounts').update(accountToCloud(acc)).eq('id',id),`actualizar cuenta ${acc.name}`);
+    // upsert, no update: si esta cuenta nunca llegó a crearse en la nube
+    // (ej. falló antes por el CHECK constraint de 'type'), un .update()
+    // sobre una fila que no existe no hace nada y NO avisa error — la app
+    // pensaría que sincronizó sin haber creado nada. upsert crea si falta,
+    // actualiza si ya existía — seguro en ambos casos.
+    if(sb&&currentUserId&&isUUID(id))cloudWrite(sb.from('accounts').upsert(accountToCloud(acc),{onConflict:'id'}),`actualizar cuenta ${acc.name}`);
     return acc;
   },
   deleteAccount(id){
