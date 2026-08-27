@@ -493,7 +493,6 @@ input:checked+.sl:before{transform:translateX(18px);background:#fff}
         </div>
         <button class="btn bg_ sm" id="prof-edit-btn" onclick="toggleProfileEdit()">✎ Modificar</button>
         <button class="btn bp sm" id="prof-save-btn" style="display:none" onclick="saveProfileFull()">Guardar</button>
-        <button class="btn bg_ sm" onclick="manualSync()">↻ Sincronizar</button>
         <button class="btn bd sm" onclick="authLogout()">Cerrar sesión</button>
       </div>
     </div>
@@ -1574,9 +1573,6 @@ async function pushAllToSupabase(){
   }
 }
 
-// Botón "Sincronizar": primero intenta traer lo más reciente de la nube;
-// si la nube sigue vacía después de eso, ofrece subir los datos locales
-// (con confirmación explícita — es una operación de un solo uso importante).
 // PRIMERO subimos cualquier cambio local que se haya quedado atascado sin
 // sincronizar. Esto va ANTES de traer de la nube a propósito: si trajéramos
 // primero, ese paso reemplaza los datos locales con lo que haya en la nube
@@ -1589,8 +1585,7 @@ async function pushAllToSupabase(){
 //     fallaron, con su acción exacta guardada)
 // (b) un barrido por formato de id, para cualquier cosa vieja que se haya
 //     quedado atascada de antes de que existiera la cola.
-// Se usa en TODO lugar donde se llama a pullFromSupabase(): al abrir la
-// app, al iniciar sesión, y en la sincronización manual — nunca se debe
+// Se usa en TODO lugar donde se llama a pullFromSupabase() — nunca se debe
 // traer de la nube sin haber empujado primero.
 async function safeSyncPull(){
   if(!sb||!currentUserId)return;
@@ -1604,18 +1599,46 @@ async function safeSyncPull(){
   await pullFromSupabase();
 }
 
-async function manualSync(){
+// Sincronización completa: primero intenta traer lo más reciente de la
+// nube (de forma segura, empujando pendientes antes); si la nube sigue
+// vacía después de eso, ofrece subir los datos locales (con confirmación
+// explícita — es una operación de un solo uso importante). Se usa al
+// abrir la app, al iniciar sesión, y ya no hay botón manual — la
+// sincronización periódica de más abajo usa safeSyncPull() directo, sin
+// este chequeo de "primera subida", para no repetir el diálogo de
+// confirmación cada pocos minutos si la nube sigue vacía.
+async function fullSync(){
   if(!sb||!currentUserId)return;
   await safeSyncPull();
 
-  // Si después de todo esto la nube sigue vacía, es la primera vez que
-  // se usa — ofrecemos subir todo lo local.
   const {data,error}=await sb.from('accounts').select('id').limit(1);
   if(!error&&(!data||data.length===0)&&(S.accounts.length||S.transactions.length)){
     const ok=await confirm_('Tu nube está vacía','¿Subir tus datos locales actuales a Supabase por primera vez? Es un proceso de un solo uso — después de esto, cada cambio se sincroniza solo.','Subir datos');
     if(ok)await pushAllToSupabase();
   }
 }
+
+// ---- Sincronización automática en segundo plano (reemplaza el botón
+// manual) ----
+// Dos disparadores, ambos llaman a safeSyncPull() (empuja pendientes,
+// luego trae de la nube — nunca al revés):
+// (a) cuando vuelves a la pestaña/app después de tenerla en segundo plano
+//     (ej. cambiaste de app en el celular y regresaste)
+// (b) cada 5 minutos mientras la app sigue abierta
+// El "throttle" de 60s evita que ambos disparadores se disparen casi al
+// mismo tiempo y hagan doble trabajo innecesario.
+let lastAutoSyncAt=0;
+async function autoSyncTick(){
+  if(!sb||!currentUserId||!navigator.onLine)return;
+  const now=Date.now();
+  if(now-lastAutoSyncAt<60000)return;
+  lastAutoSyncAt=now;
+  await safeSyncPull();
+}
+document.addEventListener('visibilitychange',()=>{
+  if(document.visibilityState==='visible')autoSyncTick();
+});
+setInterval(autoSyncTick,5*60*1000);
 
 async function authInit(){
   if(!sb){
@@ -1631,7 +1654,7 @@ async function authInit(){
   if(session){
     currentUserId=session.user.id;
     $('auth-screen').style.display='none';
-    safeSyncPull();
+    fullSync();
   }
   // Si más adelante la sesión cambia en otra pestaña (ej. cierras sesión en
   // el Mac mientras tienes el iPhone abierto), lo reflejamos aquí también.
@@ -1661,7 +1684,7 @@ async function authLogin(){
   currentUserId=data.user.id;
   $('auth-pass').value='';
   $('auth-screen').style.display='none';
-  safeSyncPull();
+  fullSync();
 }
 
 async function authLogout(){
@@ -1809,7 +1832,18 @@ const Store = {
     S.transactions.push(tx);
     this.applyBalance(tx);
     save();
-    if(sb&&currentUserId)this._pushTransaction(tx);
+    if(sb&&currentUserId){
+      // La anotamos en la cola de reintentos DE UNA VEZ, antes de intentar
+      // subirla — no solo si falla. Si no hiciéramos esto, y la página se
+      // recarga justo mientras el push todavía está en camino (ni falló ni
+      // terminó), la transacción ya tiene UUID pero la nube todavía no la
+      // conoce; al recargar, safeSyncPull() no tendría nada que rescatar y
+      // el pull automático la borraría de la pantalla. Anotándola aquí,
+      // sigue en la cola (persistida en localStorage) hasta que
+      // _pushTransaction confirme éxito y la quite.
+      enqueueTxSync(tx.id,'upsert');
+      this._pushTransaction(tx);
+    }
     return tx;
   },
   updateTransaction(id,patch){
@@ -1821,7 +1855,12 @@ const Store = {
     S.transactions[idx]=updated;
     this.applyBalance(updated);
     save();
-    if(sb&&currentUserId)this._pushTransaction(updated,true);
+    if(sb&&currentUserId){
+      // Mismo razonamiento que en addTransaction: anotar antes de intentar,
+      // no solo si falla.
+      enqueueTxSync(id,'upsert');
+      this._pushTransaction(updated,true);
+    }
     return updated;
   },
   deleteTransaction(id){
@@ -1831,8 +1870,12 @@ const Store = {
     S.transactions=S.transactions.filter(t=>t.id!==id);
     save();
     if(sb&&currentUserId&&isUUID(id)){
+      // Igual: anotamos el borrado en la cola ANTES de intentarlo. Si la
+      // página se recarga a la mitad, el borrado sigue pendiente en la cola
+      // en vez de perderse silenciosamente.
+      enqueueTxSync(id,'delete');
       cloudWrite(sb.from('transactions').update({deleted_at:new Date().toISOString()}).eq('id',id),'borrar transacción')
-        .then(ok=>{if(!ok&&typeof enqueueTxSync==='function')enqueueTxSync(id,'delete');});
+        .then(ok=>{if(ok)dequeueTxSync(id);}); // si falla, se queda en la cola tal cual para el próximo reintento
     }
   },
   // Sube una transacción a Supabase, resolviendo category_id/subcategory_id
