@@ -734,9 +734,31 @@ input:checked+.sl:before{transform:translateX(18px);background:#fff}
     <div class="mbody">
       <input type="hidden" id="debt-k"><input type="hidden" id="debt-eid">
       <div class="fg"><label class="fl">Persona / Entidad</label><input class="fc" type="text" id="d-person" placeholder="Nombre"></div>
-      <div class="g2">
-        <div class="fg"><label class="fl">Monto total</label><input class="fc" type="number" id="d-amt" placeholder="0.00" step="0.01"></div>
+      <div class="sr" style="margin-top:4px;padding:10px;background:var(--bg3);border-radius:var(--r2);border:1px solid var(--bdr)">
+        <div><div class="si-l" style="font-size:13px">Incluye intereses</div><div class="si-s">Registra el capital y los intereses por separado</div></div>
+        <label class="sw"><input type="checkbox" id="d-has-interest" onchange="togDebtInterest()"><span class="sl"></span></label>
+      </div>
+      <div id="d-amt-simple-g" class="g2">
+        <div class="fg"><label class="fl">Monto total</label><input class="fc" type="number" id="d-amt" placeholder="0.00" step="0.01" oninput="calcDebtTotalFromInterest()"></div>
         <div class="fg"><label class="fl">Ya pagado</label><input class="fc" type="number" id="d-paid" placeholder="0.00" step="0.01"></div>
+      </div>
+      <div id="d-amt-interest-g" style="display:none">
+        <div class="g2">
+          <div class="fg"><label class="fl">Capital</label><input class="fc" type="number" id="d-capital" placeholder="0.00" step="0.01" oninput="calcDebtTotalFromInterest()"></div>
+          <div class="fg"><label class="fl">Intereses</label><input class="fc" type="number" id="d-interest" placeholder="0.00" step="0.01" oninput="calcDebtTotalFromInterest()"></div>
+        </div>
+        <div class="g2">
+          <div class="fg"><label class="fl">Monto total (calculado)</label><input class="fc" type="text" id="d-amt-total-display" disabled></div>
+          <div class="fg"><label class="fl">Ya pagado</label><input class="fc" type="number" id="d-paid-2" placeholder="0.00" step="0.01" oninput="$('d-paid').value=this.value"></div>
+        </div>
+      </div>
+      <div class="sr" style="margin-top:4px;padding:10px;background:var(--bg3);border-radius:var(--r2);border:1px solid var(--bdr)">
+        <div><div class="si-l" style="font-size:13px">Se paga en mensualidades fijas</div><div class="si-s">Define un número de meses y calcula el pago mensual sugerido</div></div>
+        <label class="sw"><input type="checkbox" id="d-has-installments" onchange="togDebtInstallments()"><span class="sl"></span></label>
+      </div>
+      <div id="d-installments-g" class="g2" style="display:none">
+        <div class="fg"><label class="fl">Número de meses</label><input class="fc" type="number" id="d-inst-months" placeholder="12" step="1" min="1" oninput="calcDebtInstallmentMonthly()"></div>
+        <div class="fg"><label class="fl">Pago mensual sugerido</label><input class="fc" type="text" id="d-inst-monthly" disabled></div>
       </div>
       <div class="g2">
         <div class="fg"><label class="fl">Fecha inicio</label><input class="fc" type="date" id="d-start"></div>
@@ -1278,10 +1300,16 @@ async function pullFromSupabase(){
     const newDebtsOwed=results.debts.filter(d=>d.direction==='owed_to_me').map(d=>({
       id:d.id,person:d.person,amount:centsToAmt(d.amount_cents),paid:centsToAmt(d.paid_cents),
       desc:d.description||'',start:d.start_date||'',due:d.due_date||'',accountId:d.account_id||'',
+      capital:d.extra?.capital_cents!=null?centsToAmt(d.extra.capital_cents):undefined,
+      interest:d.extra?.interest_cents!=null?centsToAmt(d.extra.interest_cents):undefined,
+      installments:d.extra?.installments||undefined,
     }));
     const newDebtsIowe=results.debts.filter(d=>d.direction==='i_owe').map(d=>({
       id:d.id,person:d.person,amount:centsToAmt(d.amount_cents),paid:centsToAmt(d.paid_cents),
       desc:d.description||'',start:d.start_date||'',due:d.due_date||'',accountId:d.account_id||'',
+      capital:d.extra?.capital_cents!=null?centsToAmt(d.extra.capital_cents):undefined,
+      interest:d.extra?.interest_cents!=null?centsToAmt(d.extra.interest_cents):undefined,
+      installments:d.extra?.installments||undefined,
     }));
 
     // --- goals ---
@@ -1414,9 +1442,18 @@ function transactionToCloud(t,catId,subcatId){
     msi:t.msi||null,updated_at:timeNorm?`${t.date}T${timeNorm}`:new Date().toISOString()};
 }
 function debtToCloud(d,direction){
+  // extra: columna jsonb nueva para el desglose opcional de capital+intereses
+  // y el plan de mensualidades fijas — null si no se usó ninguno de los dos,
+  // para no llenar de basura las deudas simples de siempre.
+  const hasExtra=d.capital!=null||d.interest!=null||d.installments;
+  const extra=hasExtra?{
+    capital_cents:d.capital!=null?amtToCents(d.capital):null,
+    interest_cents:d.interest!=null?amtToCents(d.interest):null,
+    installments:d.installments||null,
+  }:null;
   return{id:d.id,user_id:currentUserId,direction,person:d.person,amount_cents:amtToCents(d.amount),
     paid_cents:amtToCents(d.paid||0),description:d.desc||null,start_date:d.start||null,
-    due_date:d.due||null,account_id:d.accountId||null};
+    due_date:d.due||null,account_id:d.accountId||null,extra};
 }
 function goalToCloud(g){
   return{id:g.id,user_id:currentUserId,name:g.name,icon:g.icon||null,target_cents:amtToCents(g.target),
@@ -2567,8 +2604,8 @@ function execBillingPay(){
   // Store — así que ni las transacciones ni el cambio de balance llegaban
   // nunca a Supabase. Store.addTransaction ya hace todo eso correctamente
   // (aplica el balance Y lo sincroniza, sube la transacción con reintentos).
-  Store.addTransaction({type:'expense',amount:amt,date,description:`Pago TDC — ${tdc.name}`,category:'',accountId:srcId,notes:'Pago de tarjeta de crédito'});
-  Store.addTransaction({type:'income',amount:amt,date,description:`Pago recibido — ${tdc.name}`,category:'',accountId:accId,notes:'Abono a tarjeta de crédito'});
+  Store.addTransaction({type:'expense',amount:amt,date,time:tnow_(),description:`Pago TDC — ${tdc.name}`,category:'',accountId:srcId,notes:'Pago de tarjeta de crédito'});
+  Store.addTransaction({type:'income',amount:amt,date,time:tnow_(),description:`Pago recibido — ${tdc.name}`,category:'',accountId:accId,notes:'Abono a tarjeta de crédito'});
   cM('mo-billing-pay');renderBilling();renderAccounts();renderDash();toast('Pago registrado');
 }
 
@@ -2675,7 +2712,11 @@ function setTxT(t){
 
 function fillTxSelects(){
   const opts=S.accounts.map(a=>`<option value="${a.id}">${esc(a.name)} (${fmt(a.balance)})</option>`).join('');
-  $('tx-acc').innerHTML=opts;$('tx-acc2').innerHTML=opts;
+  // Opción vacía primero y a propósito: al crear una transacción nueva no
+  // debe quedar ninguna cuenta pre-seleccionada por default del navegador
+  // (antes elegía la primera de la lista sin que el usuario decidiera).
+  $('tx-acc').innerHTML='<option value="">Selecciona una cuenta</option>'+opts;
+  $('tx-acc2').innerHTML='<option value="">Selecciona una cuenta</option>'+opts;
   const sas=$('sub-acc');if(sas)sas.innerHTML=opts;
   fillTxCatSel();
 }
@@ -2718,6 +2759,8 @@ async function saveTx(){
   const subcat=$('tx-subcat').value;
   if(txType!=='transfer'&&!cat){toast('Selecciona una categoría',false);return}
   const accId=$('tx-acc').value;
+  if(!accId){toast('Selecciona una cuenta',false);return}
+  if(txType==='transfer'&&!$('tx-acc2').value){toast('Selecciona la cuenta destino',false);return}
   const time=$('tx-time').value||tnow_();
   // Si no se escribió descripción, usamos la subcategoría (o si no hay,
   // la categoría) como descripción por defecto — mejor que un genérico
@@ -2867,7 +2910,7 @@ function renderTxP(){
     const a=Store.getAccountById(t.accountId);
     const clr=t.type==='income'?'var(--inc)':t.type==='expense'?'var(--exp)':'var(--blu)';
     const msi=t.msi?`<span class="bdg bdg-p">${t.msi.months}MSI</span>`:'—';
-    return`<tr><td style="color:var(--t2)">${esc(t.date)}${t.time?`<span style="color:var(--t3);font-size:11px"> ${esc(t.time)}</span>`:''}</td><td>${esc(t.description)}</td><td>${getCatIcon(t.category)} ${esc(t.category)||'—'}</td><td style="color:var(--t2)">${a?esc(a.name):'—'}</td><td>${tl[t.type]}</td><td style="font-family:'DM Mono',monospace;color:${clr}">${t.type==='expense'?'-':''}${fmt(t.amount)}</td><td>${msi}</td><td><button class="btn bg_ ico sm" title="Más opciones" onclick="showRowMenu(this,[{label:'Editar',icon:'✎',onClick:()=>openTxM('${t.id}')},{label:'Eliminar',icon:'✕',danger:true,onClick:()=>delTx('${t.id}')}])">⋮</button></td></tr>`;
+    return`<tr><td style="color:var(--t2)">${esc(t.date)}${t.time?`<span style="color:var(--t3);font-size:11px"> ${esc(t.time)}</span>`:''}</td><td>${esc(t.description)}</td><td>${getCatIcon(t.category)} ${esc(t.category)||'—'}${t.subcategory?`<div style="font-size:11px;color:var(--t3)">${esc(t.subcategory)}</div>`:''}</td><td style="color:var(--t2)">${a?esc(a.name):'—'}</td><td>${tl[t.type]}</td><td style="font-family:'DM Mono',monospace;color:${clr}">${t.type==='expense'?'-':''}${fmt(t.amount)}</td><td>${msi}</td><td><button class="btn bg_ ico sm" title="Más opciones" onclick="showRowMenu(this,[{label:'Editar',icon:'✎',onClick:()=>openTxM('${t.id}')},{label:'Eliminar',icon:'✕',danger:true,onClick:()=>delTx('${t.id}')}])">⋮</button></td></tr>`;
   }).join('');
 }
 
@@ -3034,7 +3077,7 @@ function execMsiPay(){
   // directo al arreglo local, y solo actualizaba tx.msi en localStorage —
   // nada de eso llegaba nunca a Supabase (ni los balances, ni la
   // transacción nueva, ni el progreso del MSI). Ahora todo pasa por Store.
-  Store.addTransaction({type:'transfer',amount:amt,date:td_(),description:`Pago MSI ${newPaid}/${tx.msi.months}: ${tx.description}`,category:tx.category||'',subcategory:tx.subcategory||undefined,accountId:payAccId,accountId2:tx.accountId,notes:'Pago MSI automático'});
+  Store.addTransaction({type:'transfer',amount:amt,date:td_(),time:tnow_(),description:`Pago MSI ${newPaid}/${tx.msi.months}: ${tx.description}`,category:tx.category||'',subcategory:tx.subcategory||undefined,accountId:payAccId,accountId2:tx.accountId,notes:'Pago MSI automático'});
   Store.updateTransaction(tx.id,{msi:{...tx.msi,paid:newPaid,paidAmt:newPaidAmt}});
   cM('mo-msi-pay');renderMSI();renderAccounts();renderDash();toast(`Pago ${newPaid}/${tx.msi.months} registrado`);
 }
@@ -3450,6 +3493,31 @@ async function renewSub(id){
 async function delSub(id){const ok=await confirm_('¿Eliminar suscripción?','');if(!ok)return;Store.deleteSubscription(id);renderSubs();toast('Eliminada')}
 
 // ==================== DEBTS ====================
+function togDebtInterest(){
+  const on=$('d-has-interest').checked;
+  $('d-amt-simple-g').style.display=on?'none':'grid';
+  $('d-amt-interest-g').style.display=on?'block':'none';
+  if(on){$('d-capital').value=$('d-amt').value||'';$('d-interest').value='';calcDebtTotalFromInterest();}
+}
+function calcDebtTotalFromInterest(){
+  if(!$('d-has-interest').checked)return;
+  const cap=M($('d-capital').value)||0;const int=M($('d-interest').value)||0;
+  const total=cap+int;
+  $('d-amt-total-display').value=fmt(total);
+  $('d-amt').value=total; // el campo real que usa saveDebt sigue siendo d-amt
+  calcDebtInstallmentMonthly();
+}
+function togDebtInstallments(){
+  const on=$('d-has-installments').checked;
+  $('d-installments-g').style.display=on?'grid':'none';
+  if(on)calcDebtInstallmentMonthly();
+}
+function calcDebtInstallmentMonthly(){
+  if(!$('d-has-installments').checked)return;
+  const months=parseInt($('d-inst-months').value)||0;
+  const total=M($('d-amt').value)||0;
+  $('d-inst-monthly').value=months>0?fmt(total/months):'—';
+}
 function openDebtTypePicker(){oM('mo-debt-type')}
 function openDebtM(k,editId=null){
   $('debt-k').value=k;$('debt-eid').value=editId||'';
@@ -3458,11 +3526,20 @@ function openDebtM(k,editId=null){
   $('d-autotx').checked=false;
   if(editId){
     const d=Store.getDebtById(k,editId);if(!d)return;
-    $('d-person').value=d.person;$('d-amt').value=d.amount;$('d-paid').value=d.paid||0;
+    $('d-person').value=d.person;$('d-amt').value=d.amount;$('d-paid').value=d.paid||0;$('d-paid-2').value=d.paid||0;
     $('d-start').value=d.start||'';$('d-due').value=d.due||'';$('d-desc').value=d.desc||'';
     $('d-acc').value=d.accountId||'';
+    $('d-has-interest').checked=!!(d.capital!=null||d.interest!=null);
+    $('d-capital').value=d.capital!=null?d.capital:'';$('d-interest').value=d.interest!=null?d.interest:'';
+    togDebtInterest();if($('d-has-interest').checked)calcDebtTotalFromInterest();
+    $('d-has-installments').checked=!!d.installments;
+    $('d-inst-months').value=d.installments?.months||'';
+    togDebtInstallments();
   } else {
-    ['d-person','d-amt','d-paid','d-desc'].forEach(i=>$(i).value='');$('d-start').value=td_();$('d-due').value='';
+    ['d-person','d-amt','d-paid','d-desc','d-capital','d-interest','d-inst-months'].forEach(i=>$(i).value='');
+    $('d-paid-2').value='';$('d-start').value=td_();$('d-due').value='';
+    $('d-has-interest').checked=false;togDebtInterest();
+    $('d-has-installments').checked=false;togDebtInstallments();
   }
   oM('mo-debt');
 }
@@ -3470,8 +3547,17 @@ async function saveDebt(){
   const k=$('debt-k').value;const person=$('d-person').value.trim();const amt=M($('d-amt').value)||0;
   if(!person||!isValidAmount(amt)){toast('Persona y monto requeridos (mayor a 0)',false);return}
   const accId=$('d-acc').value;
-  const obj={person,amount:amt,paid:M($('d-paid').value)||0,desc:$('d-desc').value,start:$('d-start').value,due:$('d-due').value,accountId:accId};
   const eid=$('debt-eid').value;
+  const hasInterest=$('d-has-interest').checked;
+  const hasInstallments=$('d-has-installments').checked;
+  // Si ya existía la deuda y ya tenía mensualidades pagadas, preservamos ese
+  // conteo — editar la deuda no debe reiniciar el progreso de mensualidades.
+  const prevInstallments=eid?Store.getDebtById(k,eid)?.installments:null;
+  const obj={person,amount:amt,paid:M($('d-paid').value)||0,desc:$('d-desc').value,start:$('d-start').value,due:$('d-due').value,accountId:accId,
+    capital:hasInterest?(M($('d-capital').value)||0):undefined,
+    interest:hasInterest?(M($('d-interest').value)||0):undefined,
+    installments:hasInstallments?{months:parseInt($('d-inst-months').value)||0,paid:prevInstallments?.paid||0}:undefined,
+  };
   const isNew=!eid;
   if(eid){
     const ok=await confirm_('¿Guardar cambios?','Se actualizará esta deuda.','Guardar');
@@ -3499,7 +3585,7 @@ async function saveDebt(){
         Store._syncAccountBalance(accId); // antes esto nunca llegaba a Supabase
       }
     }
-    const loanTx={id:uid(),type:startType,amount:amt,date:obj.start||td_(),description:startLabel+person,category:'Préstamos',subcategory:k==='iowe'?'Debo':'Me deben',accountId:accId||'',notes:`${k==='iowe'?'Me prestaron':'Presté'} — vence: ${obj.due||'sin fecha'}`+(accId&&$('d-autotx').checked?'':', sin efecto en cuenta')};
+    const loanTx={id:uid(),type:startType,amount:amt,date:obj.start||td_(),time:tnow_(),description:startLabel+person,category:'Préstamos',subcategory:k==='iowe'?'Debo':'Me deben',accountId:accId||'',notes:`${k==='iowe'?'Me prestaron':'Presté'} — vence: ${obj.due||'sin fecha'}`+(accId&&$('d-autotx').checked?'':', sin efecto en cuenta')};
     S.transactions.push(loanTx);
     save();
     // Antes la transacción se quedaba solo en localStorage — nunca se subía
@@ -3515,7 +3601,8 @@ function renderDebts(k){
   el.innerHTML=list.map(d=>{
     const rem=d.amount-(d.paid||0);const pct=Math.min(100,((d.paid||0)/d.amount)*100).toFixed(0);
     const dl=d.due?Math.ceil((new Date(d.due)-new Date())/864e5):null;const ov=d.due&&new Date(d.due)<new Date()&&rem>0;
-    return`<div class="card"><div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:10px"><div><div style="font-size:15px;font-weight:500">${esc(d.person)}</div><div style="font-size:12px;color:var(--t3)">${esc(d.desc)||''}</div></div><div style="display:flex;align-items:center;gap:6px">${ov?'<span class="bdg bdg-r">Vencida</span>':dl!==null?`<span class="bdg ${dl<7?'bdg-y':'bdg-b'}">${dl<0?'Vencida':dl+'d'}</span>`:''}<button class="btn bg_ ico sm" title="Más opciones" onclick="showRowMenu(this,[{label:'Editar',icon:'✎',onClick:()=>openDebtM('${k}','${d.id}')},{label:'Eliminar',icon:'✕',danger:true,onClick:()=>delD('${k}','${d.id}')}])">⋮</button></div></div><div style="display:flex;justify-content:space-between;font-size:13px;margin-bottom:6px"><span style="color:var(--t2)">Total: <span style="font-family:'DM Mono',monospace">${fmt(d.amount)}</span></span><span style="color:${k==='owed'?'var(--inc)':'var(--exp)'}">Restante: <span style="font-family:'DM Mono',monospace">${fmt(rem)}</span></span></div><div class="pw" style="margin-bottom:6px"><div class="pb" style="width:${pct}%;background:${k==='owed'?'var(--inc)':'var(--exp)'}"></div></div><div style="font-size:11px;color:var(--t3);margin-bottom:10px">${pct}% · ${d.due?'Límite: '+d.due:'Sin fecha límite'}</div><button class="btn bg_ sm" style="width:100%" onclick="openDPayM('${k}','${d.id}')">+ Pago</button></div>`;
+    const extraLine=(d.capital!=null||d.installments)?`<div style="font-size:11px;color:var(--t3);margin-top:2px">${d.capital!=null?`Capital: ${fmt(d.capital)} · Intereses: ${fmt(d.interest||0)}`:''}${d.capital!=null&&d.installments?' · ':''}${d.installments?`Mensualidad ${d.installments.paid||0}/${d.installments.months} (${fmt(d.amount/d.installments.months)}/mes)`:''}</div>`:'';
+    return`<div class="card"><div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:10px"><div><div style="font-size:15px;font-weight:500">${esc(d.person)}</div><div style="font-size:12px;color:var(--t3)">${esc(d.desc)||''}</div></div><div style="display:flex;align-items:center;gap:6px">${ov?'<span class="bdg bdg-r">Vencida</span>':dl!==null?`<span class="bdg ${dl<7?'bdg-y':'bdg-b'}">${dl<0?'Vencida':dl+'d'}</span>`:''}<button class="btn bg_ ico sm" title="Más opciones" onclick="showRowMenu(this,[{label:'Editar',icon:'✎',onClick:()=>openDebtM('${k}','${d.id}')},{label:'Eliminar',icon:'✕',danger:true,onClick:()=>delD('${k}','${d.id}')}])">⋮</button></div></div><div style="display:flex;justify-content:space-between;font-size:13px;margin-bottom:6px"><span style="color:var(--t2)">Total: <span style="font-family:'DM Mono',monospace">${fmt(d.amount)}</span></span><span style="color:${k==='owed'?'var(--inc)':'var(--exp)'}">Restante: <span style="font-family:'DM Mono',monospace">${fmt(rem)}</span></span></div><div class="pw" style="margin-bottom:6px"><div class="pb" style="width:${pct}%;background:${k==='owed'?'var(--inc)':'var(--exp)'}"></div></div><div style="font-size:11px;color:var(--t3);margin-bottom:2px">${pct}% · ${d.due?'Límite: '+d.due:'Sin fecha límite'}</div>${extraLine}<button class="btn bg_ sm" style="width:100%;margin-top:8px" onclick="openDPayM('${k}','${d.id}')">+ Pago</button></div>`;
   }).join('');
 }
 function addDP(k,id){const d=Store.getDebtById(k,id);if(!d)return;$('dpay-k').value=k;$('dpay-id').value=id;$('dpay-info').textContent=d.person+' — Restante: '+fmt(Math.max(0,d.amount-(d.paid||0)));$('dpay-amt').value='';oM('mo-dpay')}
@@ -4169,6 +4256,9 @@ function openDPayM(k,id){
 function execDP(){
   const k=$('dpay-k').value;const id=$('dpay-id').value;
   const v=M($('dpay-amt').value)||0;if(!isValidAmount(v)){toast('Monto requerido (mayor a 0)',false);return}
+  const d0=Store.getDebtById(k,id);if(!d0)return;
+  const remaining=M(Math.max(0,d0.amount-(d0.paid||0)));
+  if(v>remaining){toast(`No puedes ${k==='iowe'?'pagar':'cobrar'} más del restante: ${fmt(remaining)}`,false);return}
   const d=Store.recordDebtPayment(k,id,v);
   if(!d)return;
   // Antes esta transacción SOLO se creaba si el pago estaba ligado a una
@@ -4182,6 +4272,12 @@ function execDP(){
   // inicial del préstamo.
   const accId=$('dpay-acc').value;const dt=$('dpay-dt').value||td_();
   Store.addTransaction({type:k==='iowe'?'expense':'income',amount:v,date:dt,time:tnow_(),description:(k==='iowe'?'Pago a ':'Cobro de ')+d.person,category:'Préstamos',subcategory:k==='iowe'?'Debo':'Me deben',accountId:accId||'',notes:'Pago de préstamo'});
+  // Si el préstamo usa mensualidades fijas, cada pago avanza el contador —
+  // igual que el patrón ya usado para MSI (un pago = una mensualidad,
+  // independientemente del monto exacto capturado).
+  if(d.installments){
+    Store.updateDebt(k,id,{installments:{months:d.installments.months,paid:Math.min(d.installments.months,(d.installments.paid||0)+1)}});
+  }
   cM('mo-dpay');renderDebts(k);renderLoansMetrics();renderDash();updateNW();
   if(d.paid>=d.amount)toast('¡Deuda liquidada! 🎉');else toast('Pago registrado');
 }
