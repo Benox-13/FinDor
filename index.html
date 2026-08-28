@@ -643,6 +643,7 @@ input:checked+.sl:before{transform:translateX(18px);background:#fff}
       <button class="btn bp" id="vd-add-btn" onclick="openVRec(currentVehicleId)">+ Registro</button>
     </div>
     <div class="g4" style="margin-bottom:16px" id="vd-stats"></div>
+    <div id="vd-financing" style="display:none;margin-bottom:16px"></div>
     <div class="tabs" id="vd-tabs"></div>
     <div class="card"><div class="tw"><table><thead><tr><th>Fecha</th><th>Tipo</th><th>Detalle</th><th>Cantidad</th><th>Costo</th><th></th></tr></thead><tbody id="vd-tb"></tbody></table></div></div>
   </div>
@@ -1005,11 +1006,18 @@ input:checked+.sl:before{transform:translateX(18px);background:#fff}
           <div class="swatch" data-c="#ff7043" style="background:#ff7043" onclick="selVColor('#ff7043',this)"></div>
         </div>
       </div>
+      <div class="sr" style="margin-top:4px;padding:10px;background:var(--bg3);border-radius:var(--r2);border:1px solid var(--bdr)">
+        <div><div class="si-l" style="font-size:13px">Vehículo financiado</div><div class="si-s">Registra la mensualidad para llevar el progreso de pagos</div></div>
+        <label class="sw"><input type="checkbox" id="v-financed" onchange="togVFinanced()"><span class="sl"></span></label>
+      </div>
+      <div id="v-financed-g" class="g2" style="display:none">
+        <div class="fg"><label class="fl">Mensualidad</label><input class="fc" type="number" id="v-monthly" placeholder="0.00" step="0.01"></div>
+        <div class="fg"><label class="fl">Número total de mensualidades</label><input class="fc" type="number" id="v-months" placeholder="60" step="1" min="1"></div>
+      </div>
     </div>
     <div class="mfoot"><button class="btn bg_ sm" onclick="cM('mo-vehicle')">Cancelar</button><button class="btn bp sm" onclick="saveVehicle()">Guardar</button></div>
   </div>
 </div>
-
 <!-- VEHICLE RECORD MODAL -->
 <div class="mo" id="mo-vrec">
   <div class="md">
@@ -1027,6 +1035,14 @@ input:checked+.sl:before{transform:translateX(18px);background:#fff}
       <div class="fg"><label class="fl">Costo ($)</label><input class="fc" type="number" id="vr-cost" placeholder="0.00" step="0.01"></div>
       <div class="fg"><label class="fl">Odómetro (km opcional)</label><input class="fc" type="number" id="vr-km" placeholder="Km actuales del vehículo"></div>
       <div class="fg"><label class="fl">Notas</label><input class="fc" type="text" id="vr-notes" placeholder="Detalle adicional"></div>
+      <div class="sr" style="margin-top:4px;padding:10px;background:var(--bg3);border-radius:var(--r2);border:1px solid var(--bdr)">
+        <div><div class="si-l" style="font-size:13px">¿Generar transacción?</div><div class="si-s">Descuenta este costo de una cuenta</div></div>
+        <label class="sw"><input type="checkbox" id="vr-autotx" onchange="togVrAutotx()"><span class="sl"></span></label>
+      </div>
+      <div id="vr-tx-fields-g" class="g2" style="display:none">
+        <div class="fg"><label class="fl">Cuenta</label><select class="fc" id="vr-acc"></select></div>
+        <div class="fg"><label class="fl">Categoría</label><select class="fc" id="vr-cat"></select></div>
+      </div>
     </div>
     <div class="mfoot"><button class="btn bg_ sm" onclick="cM('mo-vrec')">Cancelar</button><button class="btn bp sm" onclick="saveVRec()">Guardar</button></div>
   </div>
@@ -1442,6 +1458,9 @@ async function pullFromSupabase(){
     const newVehicles=results.vehicles.map(v=>({
       id:v.id,name:v.name,brand:v.brand||'',model:v.model||'',year:v.year||'',
       fuelType:v.fuel_type,plate:v.plate||'',color:v.color||null,
+      financed:v.extra?.financed||false,
+      monthlyPayment:v.extra?.monthly_payment_cents!=null?centsToAmt(v.extra.monthly_payment_cents):undefined,
+      totalMonths:v.extra?.total_months||undefined,
       records:results.vehicle_records.filter(r=>r.vehicle_id===v.id).map(r=>({
         id:r.id,dt:r.dt,type:r.type,qty:r.qty||0,cost:centsToAmt(r.cost_cents),km:r.km||0,notes:r.notes||'',
       })),
@@ -1562,8 +1581,10 @@ function subscriptionToCloud(s,catId){
     freq:s.freq,next_date:s.nextDate,account_id:s.accountId||null,category_id:catId||null};
 }
 function vehicleToCloud(v){
+  const hasExtra=v.financed||v.monthlyPayment!=null||v.totalMonths!=null;
+  const extra=hasExtra?{financed:!!v.financed,monthly_payment_cents:v.monthlyPayment!=null?amtToCents(v.monthlyPayment):null,total_months:v.totalMonths||null}:null;
   return{id:v.id,user_id:currentUserId,name:v.name,brand:v.brand||null,model:v.model||null,
-    year:v.year||null,fuel_type:v.fuelType,plate:v.plate||null,color:v.color||null};
+    year:v.year||null,fuel_type:v.fuelType,plate:v.plate||null,color:v.color||null,extra};
 }
 function vehicleRecordToCloud(r,vehicleId){
   return{id:r.id,user_id:currentUserId,vehicle_id:vehicleId,dt:r.dt,type:r.type,qty:r.qty||null,
@@ -3922,8 +3943,8 @@ initTxMonthNav();
 
 // ==================== VEHICLES ====================
 const V_FUEL_TYPES={electric:{label:'Eléctrico',icon:'⚡',energyUnit:'kWh',energyLabel:'kWh cargados'},gasoline:{label:'Gasolina',icon:'⛽',energyUnit:'L',energyLabel:'Litros cargados'},diesel:{label:'Diésel',icon:'🛢️',energyUnit:'L',energyLabel:'Litros cargados'},hybrid:{label:'Híbrido',icon:'🔋',energyUnit:'L',energyLabel:'Litros/kWh'}};
-const V_REC_TYPES=['charge','maintenance','parking','wash','insurance','other'];
-const V_TYPE_LABELS={charge:'Carga/Combustible',maintenance:'Mantenimiento',parking:'Parking',wash:'Lavado',insurance:'Seguro',other:'Otro'};
+const V_REC_TYPES=['charge','maintenance','parking','wash','insurance','installment','other'];
+const V_TYPE_LABELS={charge:'Carga/Combustible',maintenance:'Mantenimiento',parking:'Parking',wash:'Lavado',insurance:'Seguro',installment:'Mensualidad',other:'Otro'};
 const V_COLORS=['#30d693','#4e9eff','#a855f7','#ffb340','#ff5f6d','#fb923c','#f472b6','#34d399'];
 
 let currentVehicleId=null;
@@ -3987,6 +4008,23 @@ function renderVehicleDetail(id){
     <div class="ev-s"><div class="ev-v" style="color:var(--yel)">${fmt(chargeCost)}</div><div class="ev-l">${v.fuelType==='electric'?'cargas':'combustible'}</div></div>
     <div class="ev-s"><div class="ev-v" style="color:var(--blu)">${fmt(maintCost)}</div><div class="ev-l">mantenimiento</div></div>
     <div class="ev-s"><div class="ev-v" style="color:var(--pur)">${fmt(otherCost)}</div><div class="ev-l">parking+lavado+seguro</div></div>`;
+  // Tarjeta de progreso de mensualidades — solo si el vehículo está
+  // marcado como financiado. El conteo de "pagadas" se calcula contando
+  // los registros de tipo 'installment' que ya existen — así nunca se
+  // desincroniza con la realidad (a diferencia de guardar un contador
+  // aparte que podría quedar desactualizado si borras/editas un registro).
+  const finEl=$('vd-financing');
+  if(v.financed&&v.monthlyPayment&&v.totalMonths){
+    const paidCount=recs.filter(r=>r.type==='installment').length;
+    const paidAmount=recs.filter(r=>r.type==='installment').reduce((a,r)=>a+M(r.cost||0),0);
+    const totalAmount=v.monthlyPayment*v.totalMonths;
+    const remaining=Math.max(0,totalAmount-paidAmount);
+    const pct=Math.min(100,Math.round(paidCount/v.totalMonths*100));
+    finEl.style.display='block';
+    finEl.innerHTML=`<div class="card"><div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px"><span style="font-size:13px;color:var(--t2)">Mensualidad ${Math.min(paidCount,v.totalMonths)} de ${v.totalMonths}</span><span style="font-size:12px;color:var(--t3)">${fmt(v.monthlyPayment)}/mes</span></div><div class="pw" style="margin-bottom:8px"><div class="pb" style="width:${pct}%;background:var(--ac)"></div></div><div style="display:flex;justify-content:space-between;font-size:13px"><span style="color:var(--inc)">Pagado: ${fmt(paidAmount)}</span><span style="color:var(--exp)">Falta: ${fmt(remaining)}</span></div></div>`;
+  } else {
+    finEl.style.display='none';finEl.innerHTML='';
+  }
   // Tabs
   const tabs=$('vd-tabs');
   tabs.innerHTML=`<button class="tab ${evCurVTab==='all'?'on':''}" onclick="setVTab('all',this)">Todos</button>`+
@@ -3995,7 +4033,7 @@ function renderVehicleDetail(id){
   let shown=evCurVTab==='all'?recs:recs.filter(r=>r.type===evCurVTab);
   shown=[...shown].sort((a,b)=>new Date(b.dt)-new Date(a.dt));
   $('vd-tb').innerHTML=shown.length?shown.map(r=>`<tr>
-    <td style="color:var(--t2)">${r.dt}</td>
+    <td style="color:var(--t2)">${fmtDate(r.dt)}</td>
     <td><span class="bdg bdg-n">${V_TYPE_LABELS[r.type]||r.type}</span></td>
     <td style="color:var(--t2)">${esc(r.notes)||'—'}</td>
     <td style="font-family:'DM Mono',monospace">${r.qty?r.qty+' '+ft.energyUnit:'—'}</td>
@@ -4017,13 +4055,20 @@ function openVehicleM(editId=null){
     $('vehicle-modal-title').textContent='Editar vehículo';
     // Set color
     vColor=v.color||V_COLORS[0];document.querySelectorAll('#v-colors .swatch').forEach(s=>s.classList.toggle('sel',s.dataset.c===vColor));
+    $('v-financed').checked=!!v.financed;
+    $('v-monthly').value=v.monthlyPayment||'';$('v-months').value=v.totalMonths||'';
+    togVFinanced();
   } else {
-    ['v-name','v-brand','v-model','v-year','v-plate'].forEach(i=>$(i).value='');
+    ['v-name','v-brand','v-model','v-year','v-plate','v-monthly','v-months'].forEach(i=>$(i).value='');
     $('v-fuel').value='gasoline';vColor=V_COLORS[0];
     document.querySelectorAll('#v-colors .swatch').forEach((s,i)=>{s.classList.toggle('sel',i===0)});
     $('vehicle-modal-title').textContent='Nuevo vehículo';
+    $('v-financed').checked=false;togVFinanced();
   }
   oM('mo-vehicle');
+}
+function togVFinanced(){
+  $('v-financed-g').style.display=$('v-financed').checked?'grid':'none';
 }
 
 let vColor=V_COLORS[0];
@@ -4032,7 +4077,9 @@ function selVColor(c,el){vColor=c;document.querySelectorAll('#v-colors .swatch')
 async function saveVehicle(){
   const name=$('v-name').value.trim();if(!name){toast('Nombre requerido',false);return}
   const eid=$('v-eid').value;
-  const obj={name,brand:$('v-brand').value,model:$('v-model').value,year:$('v-year').value,fuelType:$('v-fuel').value,plate:$('v-plate').value,color:vColor};
+  const financed=$('v-financed').checked;
+  const obj={name,brand:$('v-brand').value,model:$('v-model').value,year:$('v-year').value,fuelType:$('v-fuel').value,plate:$('v-plate').value,color:vColor,
+    financed,monthlyPayment:financed?(M($('v-monthly').value)||0):undefined,totalMonths:financed?(parseInt($('v-months').value)||0):undefined};
   if(eid){
     const ok=await confirm_('¿Guardar cambios?','Se actualizará este vehículo.','Guardar');
     if(!ok)return;
@@ -4055,6 +4102,8 @@ function openVRec(vid,editId=null){
   $('vr-qty-label').textContent=ft.energyLabel;
   // Fill type select
   $('vr-type').innerHTML=V_REC_TYPES.map(t=>`<option value="${t}">${V_TYPE_LABELS[t]}</option>`).join('');
+  $('vr-acc').innerHTML='<option value="">Selecciona una cuenta</option>'+S.accounts.map(a=>`<option value="${a.id}">${esc(a.name)} (${fmt(a.balance)})</option>`).join('');
+  $('vr-cat').innerHTML='<option value="">Selecciona una categoría</option>'+S.categories.filter(c=>c.type==='expense').map(c=>`<option value="${esc(c.name)}">${c.icon} ${esc(c.name)}</option>`).join('');
   if(editId){
     const r=v.records?.find(x=>x.id===editId);if(!r)return;
     $('vr-dt').value=r.dt;$('vr-type').value=r.type;$('vr-qty').value=r.qty||'';
@@ -4063,8 +4112,17 @@ function openVRec(vid,editId=null){
     $('vr-dt').value=td_();$('vr-qty').value='';$('vr-cost').value='';$('vr-km').value='';$('vr-notes').value='';
     $('vr-type').value='charge';
   }
+  // El toggle de "generar transacción" siempre arranca apagado — un registro
+  // de vehículo editado no recuerda si generó una transacción antes (no se
+  // guarda ese vínculo), así que editar un registro nunca vuelve a tocar
+  // ninguna transacción existente, solo el registro del vehículo en sí.
+  $('vr-autotx').checked=false;togVrAutotx();
   onVrTypeChange();
   oM('mo-vrec');
+}
+
+function togVrAutotx(){
+  $('vr-tx-fields-g').style.display=$('vr-autotx').checked?'grid':'none';
 }
 
 function onVrTypeChange(){
@@ -4073,13 +4131,22 @@ function onVrTypeChange(){
   const ft=V_FUEL_TYPES[v?.fuelType]||V_FUEL_TYPES.gasoline;
   $('vr-qty-wrap').style.display=t==='charge'?'block':'none';
   $('vr-qty-label').textContent=ft.energyLabel;
+  // Si es una mensualidad y el vehículo tiene una mensualidad configurada,
+  // la sugerimos como costo por default (el usuario la puede cambiar).
+  if(t==='installment'&&v?.monthlyPayment&&!$('vr-cost').value){
+    $('vr-cost').value=v.monthlyPayment;
+  }
 }
 
 async function saveVRec(){
   const vid=$('vr-vid').value;const v=Store.getVehicleById(vid);if(!v)return;
   const dt=$('vr-dt').value;const cost=M($('vr-cost').value)||0;
   if(!dt){toast('Fecha requerida',false);return}
-  const obj={dt,type:$('vr-type').value,qty:M($('vr-qty').value)||0,cost,km:M($('vr-km').value)||0,notes:$('vr-notes').value};
+  const autotx=$('vr-autotx').checked;
+  const accId=$('vr-acc').value;const cat=$('vr-cat').value;
+  if(autotx&&(!accId||!cat)){toast('Selecciona cuenta y categoría para generar la transacción',false);return}
+  const type=$('vr-type').value;
+  const obj={dt,type,qty:M($('vr-qty').value)||0,cost,km:M($('vr-km').value)||0,notes:$('vr-notes').value};
   const eid=$('vr-eid').value;
   if(eid){
     const ok=await confirm_('¿Guardar cambios?','Se actualizará este registro.','Guardar');
@@ -4087,6 +4154,12 @@ async function saveVRec(){
     Store.updateVehicleRecord(vid,eid,obj);toast('Actualizado');
   }
   else{Store.addVehicleRecord(vid,obj);toast('Registro guardado')}
+  // Generar transacción es opcional — el registro del vehículo (arriba) se
+  // guarda siempre; esto solo además descuenta el costo de una cuenta si
+  // el usuario lo pidió explícitamente.
+  if(autotx&&cost>0){
+    Store.addTransaction({type:'expense',amount:cost,date:dt,time:tnow_(),description:`${V_TYPE_LABELS[type]} — ${v.name}`,category:cat,accountId:accId,notes:'Registro de vehículo'});
+  }
   cM('mo-vrec');renderVehicleDetail(vid);
 }
 
