@@ -238,7 +238,23 @@ input:checked+.sl:before{transform:translateX(18px);background:#fff}
 
 ::-webkit-scrollbar{width:4px;height:4px}::-webkit-scrollbar-track{background:transparent}::-webkit-scrollbar-thumb{background:var(--bg5);border-radius:4px}
 
-/* ============ RESPONSIVE / MÓVIL ============
+/* ============ EMPTY STATES ============
+   Antes cada lista vacía mostraba un texto gris genérico ("Sin
+   transacciones") sin explicar qué hacer. Este componente se reutiliza en
+   toda la app: ícono, título, mensaje, y un botón de acción opcional. */
+.empty-state{display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;padding:48px 20px;color:var(--t3)}
+.empty-state .es-icon{font-size:40px;margin-bottom:14px;opacity:.7}
+.empty-state .es-title{font-size:15px;font-weight:600;color:var(--t2);margin-bottom:4px}
+.empty-state .es-msg{font-size:13px;max-width:320px;line-height:1.5;margin-bottom:16px}
+
+/* ============ MICROINTERACCIONES: cards clicables ============
+   Sutil, rápido — solo para cards que de verdad llevan a algo al hacer
+   clic (cuentas, vehículos, secciones). Las cards puramente informativas
+   (métricas del dashboard) no la llevan, para no sugerir que son clicables
+   cuando no lo son. */
+.card-click{cursor:pointer;transition:transform .15s ease,border-color .15s ease,box-shadow .15s ease}
+.card-click:hover{transform:translateY(-2px);border-color:var(--bdr2);box-shadow:0 8px 24px rgba(0,0,0,.35)}
+
    Antes de esto no existía NI UN SOLO @media query en toda la app —
    diseño 100% de escritorio. El problema principal: el menú lateral (#sb)
    tiene 228px fijos, que en un iPhone (~375px de ancho) se comen casi
@@ -2778,7 +2794,7 @@ function renderDash(){
     let left='',right='';
     if(dw.txs){
       const r=[...S.transactions].sort((a,b)=>new Date(b.date)-new Date(a.date)).slice(0,6);
-      left=`<div class="card"><div class="slbl">Últimas transacciones</div>${r.length?r.map(t=>`<div style="display:flex;align-items:center;justify-content:space-between;padding:7px 0;border-bottom:1px solid var(--bdr)"><div style="display:flex;align-items:center;gap:9px"><div style="width:28px;height:28px;border-radius:50%;background:var(--bg4);display:flex;align-items:center;justify-content:center;font-size:12px">${getCatIcon(t.category)}</div><div><div style="font-size:13px">${esc(t.description)}</div><div style="font-size:11px;color:var(--t3)">${fmtDate(t.date)} · ${esc(t.category)||'—'}</div></div></div><div style="font-family:'DM Mono',monospace;font-size:13px;color:${t.type==='income'?'var(--inc)':t.type==='expense'?'var(--exp)':'var(--blu)'};">${t.type==='expense'?'-':''}${fmt(t.amount)}</div></div>`).join(''):'<div style="color:var(--t3);font-size:13px;padding:12px;text-align:center">Sin transacciones</div>'}</div>`;
+      left=`<div class="card"><div class="slbl">Últimas transacciones</div>${r.length?r.map(t=>`<div style="display:flex;align-items:center;justify-content:space-between;padding:7px 0;border-bottom:1px solid var(--bdr)"><div style="display:flex;align-items:center;gap:9px"><div style="width:28px;height:28px;border-radius:50%;background:var(--bg4);display:flex;align-items:center;justify-content:center;font-size:12px">${getCatIcon(t.category)}</div><div><div style="font-size:13px">${esc(t.description)}</div><div style="font-size:11px;color:var(--t3)">${fmtDate(t.date)} · ${esc(t.category)||'—'}</div></div></div><div style="font-family:'DM Mono',monospace;font-size:13px;color:${t.type==='income'?'var(--inc)':t.type==='expense'?'var(--exp)':'var(--blu)'};">${t.type==='expense'?'-':''}${fmt(t.amount)}</div></div>`).join(''):emptyState('💸','Aún no hay movimientos','Tu actividad reciente va a aparecer aquí en cuanto registres tu primera transacción.','+ Nueva transacción',"openTxM()")}</div>`;
     }
     const rightParts=[];
     if(dw.cats){
@@ -2805,6 +2821,12 @@ function renderDash(){
   updateNW();
 }
 
+// Estado vacío reutilizable — ícono + título + mensaje explicando qué
+// puede hacer el usuario + botón de acción opcional. Reemplaza los textos
+// grises genéricos ("Sin transacciones") que había en cada lista.
+function emptyState(icon,title,msg,ctaLabel,ctaOnclick){
+  return`<div class="empty-state"><div class="es-icon">${icon}</div><div class="es-title">${esc(title)}</div><div class="es-msg">${esc(msg)}</div>${ctaLabel?`<button class="btn bp sm" onclick="${ctaOnclick}">${esc(ctaLabel)}</button>`:''}</div>`;
+}
 function getCatIcon(catName){const c=S.categories.find(c=>c.name===catName||c.subs?.includes(catName));return c?c.icon:'💸'}
 function getCatParent(sub){const c=S.categories.find(c=>c.subs?.includes(sub));return c?c.name:null}
 function getCatType(catName){const c=S.categories.find(c=>c.name===catName||c.subs?.includes(catName));return c?c.type:null}
@@ -3261,7 +3283,7 @@ function renderTxP(){
     summaryHtml=`<tr style="background:var(--bg4);font-weight:500"><td colspan="5" style="font-size:12px;color:var(--t3);padding:8px 12px">${txs.length} movimientos${isTDC&&billingPeriod?' · periodo seleccionado':fm?' · '+fm:''}</td><td style="font-family:'DM Mono',monospace;font-size:12px;color:${bal>=0?'var(--inc)':'var(--exp)'};padding:8px 12px">${bal>=0?'+':''}${fmt(bal)}</td><td colspan="2"></td></tr>`;
   }
 
-  if(!txs.length){tb.innerHTML='<tr><td colspan="8" style="text-align:center;color:var(--t3);padding:24px">Sin transacciones</td></tr>';return}
+  if(!txs.length){tb.innerHTML=`<tr><td colspan="8" style="padding:0">${emptyState('💸','No tienes transacciones todavía','Agrega tu primera transacción para empezar a ver tus gastos e ingresos organizados.','+ Nueva transacción',"openTxM()")}</td></tr>`;return}
   const tl={income:`<span class="bdg bdg-g">↑ Ingreso</span>`,expense:`<span class="bdg bdg-r">↓ Gasto</span>`,transfer:`<span class="bdg bdg-b">⇄ Transfer.</span>`};
   tb.innerHTML=summaryHtml+txs.map(t=>{
     const a=Store.getAccountById(t.accountId);
@@ -3331,7 +3353,7 @@ function renderAccounts(){
     ls.innerHTML=`<div class="m_ m_-inc" style="cursor:pointer" onclick="go('loans')"><div class="ml">Me deben (pendiente)</div><div class="mv">${fmt(owedTotal)}</div><div class="ms">${S.debts_owed.length} préstamo(s) activo(s)</div></div><div class="m_ m_-exp" style="cursor:pointer" onclick="go('loans')"><div class="ml">Debo (pendiente)</div><div class="mv">${fmt(ioweTotal)}</div><div class="ms">${S.debts_iowe.length} préstamo(s) activo(s)</div></div>`;
   }
   const g=$('acc-grid');
-  if(!S.accounts.length){g.innerHTML='<div style="color:var(--t3);grid-column:1/-1">Sin cuentas.</div>';renderMSI();return}
+  if(!S.accounts.length){g.innerHTML=emptyState('▣','Sin cuentas todavía','Agrega tu primera cuenta (efectivo, débito o tarjeta de crédito) para empezar a registrar tus movimientos.','+ Nueva cuenta',"openAccM()");renderMSI();return}
   g.innerHTML=S.accounts.map(a=>{
     const tl={cash:'Efectivo',debit:'Débito',credit:'TDC'};const tc={cash:'bdg-g',debit:'bdg-b',credit:'bdg-p'};
     let extra='';
@@ -3797,7 +3819,7 @@ function renderSubs(){
   const sorted=[...subs].sort((a,b)=>new Date(a.nextDate)-new Date(b.nextDate));
   $('sub-nxt').textContent=sorted[0]?.nextDate||'—';
   const el=$('sub-list');
-  if(!subs.length){el.innerHTML='<div style="color:var(--t3);font-size:13px;text-align:center;padding:30px">Sin suscripciones registradas.</div>';return}
+  if(!subs.length){el.innerHTML=emptyState('↻','Sin suscripciones registradas','Agrega tus suscripciones recurrentes (streaming, software, membresías) para no perder de vista cuánto gastas en ellas al mes.','+ Nueva suscripción',"openSubM()");return}
   el.innerHTML=`<div class="g3">${sorted.map(s=>{
     const dl=Math.ceil((new Date(s.nextDate)-new Date())/864e5);
     const monthlyCost=s.freq==='monthly'?s.cost:s.freq==='annual'?s.cost/12:s.cost*4.33;
@@ -3954,7 +3976,12 @@ async function saveDebt(){
 }
 function renderDebts(k){
   const list=Store.getDebts(k);const eid=k==='owed'?'owed-list':'iowe-list';const el=$(eid);
-  if(!list.length){el.innerHTML=`<div style="color:var(--t3);font-size:13px;grid-column:1/-1">Sin registros</div>`;return}
+  if(!list.length){
+    el.innerHTML=k==='owed'
+      ?emptyState('⇅','Nadie te debe dinero por ahora','Cuando le prestes dinero a alguien, regístralo aquí para llevar el control de cuánto te deben y cuándo.','+ Registrar préstamo',"openDebtM('owed')")
+      :emptyState('⇅','No debes dinero por ahora','Cuando pidas prestado, regístralo aquí para llevar el control de cuánto debes y cuándo vence.','+ Registrar préstamo',"openDebtM('iowe')");
+    return;
+  }
   el.innerHTML=list.map(d=>{
     const rem=d.amount-(d.paid||0);const pct=Math.min(100,((d.paid||0)/d.amount)*100).toFixed(0);
     const dl=d.due?Math.ceil((new Date(d.due)-new Date())/864e5):null;const ov=d.due&&new Date(d.due)<new Date()&&rem>0;
@@ -3994,7 +4021,7 @@ async function saveGoal(){
 function renderGoals(){
   const el=$('goals-g');
   const goals=Store.getGoals();
-  if(!goals.length){el.innerHTML='<div style="color:var(--t3);grid-column:1/-1">Sin objetivos. ¡Crea tu primera meta!</div>';return}
+  if(!goals.length){el.innerHTML=emptyState('◎','Sin objetivos todavía','Crea tu primera meta de ahorro — un viaje, un fondo de emergencia, lo que quieras — y ve tu progreso reflejado aquí.','+ Nuevo objetivo',"openGoalM()");return}
   el.innerHTML=goals.map(g=>{const p=Math.min(100,(g.saved||0)/g.target*100).toFixed(0);const rem=Math.max(0,g.target-(g.saved||0));const dl=g.due?Math.ceil((new Date(g.due)-new Date())/864e5):null;
     return`<div class="card"><div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px"><div style="font-size:26px">${esc(g.icon)}</div><div style="display:flex;align-items:center;gap:6px">${dl!==null?`<span class="bdg ${dl<0?'bdg-r':dl<30?'bdg-y':'bdg-b'}">${dl<0?'Vencido':dl+'d'}</span>`:''}<button class="btn bg_ ico sm" title="Más opciones" onclick="showRowMenu(this,[{label:'Editar',icon:'✎',onClick:()=>openGoalM('${g.id}')},{label:'Eliminar',icon:'✕',danger:true,onClick:()=>delG('${g.id}')}])">⋮</button></div></div><div style="font-size:14px;font-weight:500;margin-bottom:2px">${esc(g.name)}</div><div style="font-size:11px;color:var(--t3);margin-bottom:10px">${g.due?'Límite: '+fmtDate(g.due):'Sin fecha límite'}</div><div style="display:flex;justify-content:space-between;font-size:13px;margin-bottom:4px"><span style="font-family:'DM Mono',monospace;color:var(--inc)">${fmt(g.saved||0)}</span><span style="font-family:'DM Mono',monospace;color:var(--t2)">${fmt(g.target)}</span></div><div class="pw" style="margin-bottom:6px"><div class="pb" style="width:${p}%;background:var(--ac)"></div></div><div style="font-size:11px;color:var(--t3);margin-bottom:10px">${p}% · faltan ${fmt(rem)}</div><button class="btn bg_ sm" style="width:100%" onclick="openGabM('${g.id}')">+ Abonar</button></div>`;
   }).join('');
@@ -4110,7 +4137,7 @@ function renderLoansMetrics(){
 function renderLoansHistory(){
   const el=$('loans-history');if(!el)return;
   const txs=Store.queryTransactions({category:'Préstamos',sortBy:'date',sortDir:'desc'});
-  if(!txs.length){el.innerHTML='<div style="color:var(--t3);font-size:13px">Sin movimientos todavía</div>';return}
+  if(!txs.length){el.innerHTML=emptyState('⇅','Sin movimientos todavía','Cuando registres un préstamo o un pago, va a aparecer aquí para llevar el historial completo.');return}
   el.innerHTML=txs.map(t=>{
     const acc=Store.getAccountById(t.accountId);
     const isIowe=t.subcategory==='Debo';
@@ -4202,18 +4229,15 @@ function renderVehicles(){
   g.style.display='';d.style.display='none';
   const vehicles=Store.getVehicles();
   if(!vehicles.length){
-    g.innerHTML=`<div style="grid-column:1/-1;text-align:center;padding:40px 0;color:var(--t3)">
-      <div style="font-size:48px;margin-bottom:12px">🚗</div>
-      <div style="font-size:15px;margin-bottom:6px">Sin vehículos</div>
-      <div style="font-size:13px">Agrega tu primer vehículo para comenzar</div>
-    </div>`;return;
+    g.innerHTML=emptyState('🚗','Sin vehículos','Agrega tu primer vehículo para llevar el control de gastos, mantenimiento y mensualidades.','+ Nuevo vehículo',"openVehicleM()");
+    return;
   }
   g.innerHTML=vehicles.map(v=>{
     const ft=V_FUEL_TYPES[v.fuelType]||V_FUEL_TYPES.gasoline;
     const recs=v.records||[];
     const totalCost=recs.reduce((a,r)=>a+M(r.cost||0),0);
     const lastKm=recs.filter(r=>r.km).sort((a,b)=>new Date(b.dt)-new Date(a.dt))[0]?.km||0;
-    return`<div class="card" style="cursor:pointer;border-left:3px solid ${v.color||'var(--ac)'};transition:all .15s" onclick="openVehicleDetail('${v.id}')" onmouseover="this.style.transform='translateY(-2px)'" onmouseout="this.style.transform=''">
+    return`<div class="card card-click" style="border-left:3px solid ${v.color||'var(--ac)'}" onclick="openVehicleDetail('${v.id}')">
       <div style="display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:14px">
         <div style="font-size:32px">${ft.icon}</div>
         <div style="display:flex;align-items:center;gap:6px" onclick="event.stopPropagation()"><span class="bdg bdg-n">${ft.label}</span><button class="btn bg_ ico sm" title="Más opciones" onclick="showRowMenu(this,[{label:'Editar',icon:'✎',onClick:()=>openVehicleM('${v.id}')},{label:'Eliminar',icon:'✕',danger:true,onClick:()=>delVehicle('${v.id}')}])">⋮</button></div>
@@ -4483,9 +4507,15 @@ function renderSecRecords(){
   if(cf)recs=recs.filter(r=>r.cat===cf);
   if(q)recs=recs.filter(r=>(r.desc||'').toLowerCase().includes(q)||(r.note||'').toLowerCase().includes(q)||(r.member||'').toLowerCase().includes(q));
   const tb=$('cs-tb');
-  if(!recs.length){tb.innerHTML='<tr><td colspan="7" style="text-align:center;color:var(--t3);padding:22px">Sin registros</td></tr>';return}
+  const hasFilter=!!(currentSecMemberFilter||cf||q);
+  if(!recs.length){
+    tb.innerHTML=hasFilter
+      ?'<tr><td colspan="7" style="text-align:center;color:var(--t3);padding:22px">Sin resultados para este filtro</td></tr>'
+      :`<tr><td colspan="7" style="padding:0">${emptyState('📁',`Sin registros en ${esc(sec.name)}`,'Agrega tu primer registro en esta sección para empezar a llevar el control.','+ Nuevo registro',`openSecRecordM()`)}</td></tr>`;
+    return;
+  }
   tb.innerHTML=recs.map(r=>`<tr>
-    <td style="color:var(--t2)">${r.dt}</td>
+    <td style="color:var(--t2)">${fmtDate(r.dt)}</td>
     <td><span class="bdg bdg-b">${esc(r.member)||'—'}</span></td>
     <td><span class="bdg bdg-n">${esc(r.cat)||'—'}</span></td>
     <td>${esc(r.desc)||'—'}</td>
