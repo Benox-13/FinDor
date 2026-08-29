@@ -238,6 +238,15 @@ input:checked+.sl:before{transform:translateX(18px);background:#fff}
 
 ::-webkit-scrollbar{width:4px;height:4px}::-webkit-scrollbar-track{background:transparent}::-webkit-scrollbar-thumb{background:var(--bg5);border-radius:4px}
 
+/* ============ DASHBOARD: HERO PATRIMONIO NETO ============
+   Antes el patrimonio neto solo vivía chico en el sidebar. Es el dato que
+   responde "¿cuál es mi situación financiera?" de un vistazo — merece ser
+   lo primero y más grande que se ve en el Dashboard. */
+.nw-hero{background:linear-gradient(135deg,var(--bg3),var(--bg2));border:1px solid var(--bdr2);border-radius:var(--r3);padding:24px 28px;margin-bottom:16px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:14px}
+.nw-hero-label{font-size:12px;color:var(--t3);text-transform:uppercase;letter-spacing:1px;margin-bottom:6px}
+.nw-hero-val{font-family:'DM Serif Display',serif;font-size:38px;line-height:1.1;color:var(--txt)}
+.nw-hero-delta{font-size:13px;margin-top:6px;font-family:'DM Mono',monospace}
+
 /* ============ EMPTY STATES ============
    Antes cada lista vacía mostraba un texto gris genérico ("Sin
    transacciones") sin explicar qué hacer. Este componente se reutiliza en
@@ -255,6 +264,7 @@ input:checked+.sl:before{transform:translateX(18px);background:#fff}
 .card-click{cursor:pointer;transition:transform .15s ease,border-color .15s ease,box-shadow .15s ease}
 .card-click:hover{transform:translateY(-2px);border-color:var(--bdr2);box-shadow:0 8px 24px rgba(0,0,0,.35)}
 
+/* ============ RESPONSIVE / MÓVIL ============
    Antes de esto no existía NI UN SOLO @media query en toda la app —
    diseño 100% de escritorio. El problema principal: el menú lateral (#sb)
    tiene 228px fijos, que en un iPhone (~375px de ancho) se comen casi
@@ -368,6 +378,7 @@ input:checked+.sl:before{transform:translateX(18px);background:#fff}
     <div><div class="pt">Dashboard</div><div class="ps" id="ddate"></div></div>
     <button class="btn bp" onclick="openTxM()">+ Nueva transacción</button>
   </div>
+  <div id="d-nw-hero"></div>
   <div id="d-metrics" class="g4" style="margin-bottom:16px">
     <div class="m_ m_-inc"><div class="ml">Ingresos mes</div><div class="mv" id="d-inc">$0</div></div>
     <div class="m_ m_-exp"><div class="ml">Gastos mes</div><div class="mv" id="d-exp">$0</div></div>
@@ -615,6 +626,7 @@ input:checked+.sl:before{transform:translateX(18px);background:#fff}
     <div class="ss"><h3>Widgets del dashboard</h3>
       <div class="sr"><div><div class="si-l">Métricas del mes</div></div><label class="sw"><input type="checkbox" id="w-metrics" checked onchange="saveDW()"><span class="sl"></span></label></div>
       <div class="sr"><div><div class="si-l">Últimas transacciones</div></div><label class="sw"><input type="checkbox" id="w-txs" checked onchange="saveDW()"><span class="sl"></span></label></div>
+      <div class="sr"><div><div class="si-l">Próximos pagos</div></div><label class="sw"><input type="checkbox" id="w-upcoming" checked onchange="saveDW()"><span class="sl"></span></label></div>
       <div class="sr"><div><div class="si-l">Gastos por categoría</div></div><label class="sw"><input type="checkbox" id="w-cats" checked onchange="saveDW()"><span class="sl"></span></label></div>
       <div class="sr"><div><div class="si-l">Resumen de cuentas</div></div><label class="sw"><input type="checkbox" id="w-accs" checked onchange="saveDW()"><span class="sl"></span></label></div>
       <div class="sr"><div><div class="si-l">Objetivos activos</div></div><label class="sw"><input type="checkbox" id="w-goals" onchange="saveDW()"><span class="sl"></span></label></div>
@@ -1527,7 +1539,7 @@ async function pullFromSupabase(){
       currency:setRow.currency||'MXN',theme:setRow.preferences?.theme||'dark',accent:setRow.preferences?.accent||'green',
       dateFormat:setRow.preferences?.dateFormat||'dmy',timeFormat:setRow.preferences?.timeFormat||'24h',
     }:S.settings;
-    const newDw=setRow?.preferences?.dashboardWidgets||S.dw;
+    const newDw=setRow?.preferences?.dashboardWidgets?{upcoming:true,...setRow.preferences.dashboardWidgets}:S.dw;
     const newNotif=setRow?.preferences?.notifications||S.notif;
 
     // --- net worth history ---
@@ -1950,7 +1962,7 @@ let S = JSON.parse(localStorage.getItem('finance_v4')||'null') || {
   ],
   debts_owed:[],debts_iowe:[],goals:[],ev_records:[],budgets:[],subscriptions:[],
   settings:{name:'',currency:'MXN',theme:'dark',accent:'green'},
-  dw:{metrics:true,txs:true,cats:true,accs:true,goals:false,budget:false},
+  dw:{metrics:true,txs:true,cats:true,accs:true,goals:false,budget:false,upcoming:true},
   notif:{budget:true,debts:true,subs:true,goals:true},
   vehicles:[],customSections:[],budgetRollover:false,nwHistory:[]
 };
@@ -2629,6 +2641,7 @@ function updateNW(){
   const iOwe=S.debts_iowe.reduce((a,d)=>a+Math.max(0,d.amount-(d.paid||0)),0);
   const nw=assets+owedToMe-iOwe;
   $('snw').textContent=fmt(nw);
+  return nw;
 }
 
 // ==================== BILLING ====================
@@ -2782,6 +2795,19 @@ function renderDash(){
   const exp=mtxs.filter(t=>t.type==='expense').reduce((a,t)=>a+M(t.amount),0);
   const bal=inc-exp,sav=inc>0?Math.round(bal/inc*100):0;
   const dw=S.dw;
+  // Hero de patrimonio neto — lo primero que se ve, respondiendo "¿cuál es
+  // mi situación financiera?" de un vistazo, con comparación contra el
+  // snapshot del mes pasado si existe.
+  const nw=updateNW();
+  const prevKey=new Date(yr,mo-1).getFullYear()+'-'+String(new Date(yr,mo-1).getMonth()+1).padStart(2,'0');
+  const prevSnap=(S.nwHistory||[]).find(h=>h.k===prevKey);
+  let deltaHTML='';
+  if(prevSnap){
+    const delta=nw-prevSnap.nw;
+    const pct=prevSnap.nw!==0?Math.round(delta/Math.abs(prevSnap.nw)*100):0;
+    deltaHTML=`<div class="nw-hero-delta" style="color:${delta>=0?'var(--inc)':'var(--exp)'}">${delta>=0?'↑':'↓'} ${fmt(Math.abs(delta))} (${pct>=0?'+':''}${pct}%) vs. mes pasado</div>`;
+  }
+  $('d-nw-hero').innerHTML=`<div class="nw-hero"><div><div class="nw-hero-label">Patrimonio neto</div><div class="nw-hero-val">${fmt(nw)}</div>${deltaHTML}</div></div>`;
   $('d-metrics').style.display=dw.metrics?'':'none';
   if(dw.metrics){
     $('d-inc').textContent=fmt(inc);$('d-exp').textContent=fmt(exp);
@@ -2817,8 +2843,28 @@ function renderDash(){
     const items=S.budgets.map(b=>{const sp=mtxs.filter(t=>t.type==='expense'&&(t.category===b.category||getCatParent(t.category)===b.category)).reduce((a,t)=>a+M(t.amount),0);const p=Math.min(100,sp/b.limit*100).toFixed(0);return`<div><div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:3px"><span>${getCatIcon(b.category)} ${esc(b.category)}</span><span style="font-family:'DM Mono',monospace;color:${p>90?'var(--red)':p>70?'var(--yel)':'var(--t2)'}">${fmt(sp)}/${fmt(b.limit)}</span></div><div class="pw"><div class="pb" style="width:${p}%;background:${p>90?'var(--redg)':p>70?'var(--yelg)':'var(--acg)'}"></div></div></div>`});
     parts.push(`<div class="card" style="margin-top:13px"><div class="slbl">Presupuesto del mes</div><div class="g2">${items.join('')}</div></div>`);
   }
+  // Próximos pagos: suscripciones y préstamos (que yo debo) con fecha
+  // dentro de los próximos 30 días — antes esto no existía en ningún lado
+  // del dashboard, había que ir a revisar cada sección por separado.
+  if(dw.upcoming){
+    const today=new Date();today.setHours(0,0,0,0);
+    const up=[];
+    S.subscriptions.forEach(s=>{
+      if(!s.nextDate)return;
+      const days=Math.round((new Date(s.nextDate+'T00:00:00')-today)/86400000);
+      if(days>=0&&days<=30)up.push({date:s.nextDate,days,label:s.name,amount:s.cost,icon:'↻',kind:'Suscripción'});
+    });
+    S.debts_iowe.forEach(d=>{
+      if(!d.due)return;
+      const rem=Math.max(0,d.amount-(d.paid||0));if(rem<=0)return;
+      const days=Math.round((new Date(d.due+'T00:00:00')-today)/86400000);
+      if(days>=0&&days<=30)up.push({date:d.due,days,label:d.person,amount:rem,icon:'⇅',kind:'Préstamo'});
+    });
+    up.sort((a,b)=>a.days-b.days);
+    const shown=up.slice(0,5);
+    parts.push(`<div class="card" style="margin-top:13px"><div class="slbl">Próximos pagos</div>${shown.length?shown.map(i=>`<div style="display:flex;justify-content:space-between;align-items:center;padding:8px 0;border-bottom:1px solid var(--bdr)"><div style="display:flex;align-items:center;gap:9px"><div style="width:28px;height:28px;border-radius:50%;background:var(--bg4);display:flex;align-items:center;justify-content:center;font-size:12px">${i.icon}</div><div><div style="font-size:13px">${esc(i.label)}</div><div style="font-size:11px;color:var(--t3)">${esc(i.kind)} · ${fmtDate(i.date)}${i.days===0?' · Hoy':i.days===1?' · Mañana':' · en '+i.days+' días'}</div></div></div><div style="font-family:'DM Mono',monospace;font-size:13px;color:var(--exp)">${fmt(i.amount)}</div></div>`).join(''):emptyState('📅','Sin pagos próximos','No tienes suscripciones ni préstamos con vencimiento en los próximos 30 días.')}</div>`);
+  }
   $('d-grid').innerHTML=parts.join('');
-  updateNW();
 }
 
 // Estado vacío reutilizable — ícono + título + mensaje explicando qué
@@ -4073,7 +4119,7 @@ function renderSettings(){
   $('cfg-dark').checked=!S.settings.theme||S.settings.theme==='dark';
   $('cfg-name').value=S.settings.name||'';$('cfg-cur').value=S.settings.currency||'MXN';
   $('cfg-datefmt').value=S.settings.dateFormat||'dmy';$('cfg-timefmt').value=S.settings.timeFormat||'24h';
-  const dw=S.dw;['metrics','txs','cats','accs','goals','budget'].forEach(k=>{const el=$('w-'+k);if(el)el.checked=!!dw[k]});
+  const dw=S.dw;['metrics','txs','cats','accs','goals','budget','upcoming'].forEach(k=>{const el=$('w-'+k);if(el)el.checked=!!dw[k]});
   const nt=S.notif||{};['bgt','dbt','sub','gol'].forEach(k=>{const el=$('n-'+k);if(el)el.checked=nt[k]!==false});
   document.querySelectorAll('.swatch[data-a]').forEach(s=>{s.classList.toggle('sel',s.dataset.a===(S.settings.accent||'green'))});
 }
@@ -4147,7 +4193,7 @@ function renderLoansHistory(){
 }
 function applyTheme(){const d=$('cfg-dark').checked;document.documentElement.setAttribute('data-theme',d?'dark':'light');S.settings.theme=d?'dark':'light';save();pushSettings();}
 function setAccent(a,el){document.documentElement.setAttribute('data-accent',a==='green'?'':a);document.querySelectorAll('.swatch[data-a]').forEach(s=>s.classList.remove('sel'));el.classList.add('sel');S.settings.accent=a;save();pushSettings();}
-function saveDW(){['metrics','txs','cats','accs','goals','budget'].forEach(k=>{const el=$('w-'+k);if(el)S.dw[k]=el.checked});save();renderDash();toast('Dashboard actualizado')}
+function saveDW(){['metrics','txs','cats','accs','goals','budget','upcoming'].forEach(k=>{const el=$('w-'+k);if(el)S.dw[k]=el.checked});save();pushSettings();renderDash();toast('Dashboard actualizado')}
 function saveNotif(){if(!S.notif)S.notif={};['bgt','dbt','sub','gol'].forEach(k=>{const el=$('n-'+k);if(el)S.notif[k]=el.checked});save();toast('Preferencias guardadas')}
 function exportData(){const a=document.createElement('a');a.href='data:application/json,'+encodeURIComponent(JSON.stringify(S,null,2));a.download='finance-backup.json';a.click();toast('Datos exportados')}
 function importData(e){const f=e.target.files[0];if(!f)return;const r=new FileReader();r.onload=ev=>{try{S=JSON.parse(ev.target.result);save();renderDash();toast('Datos importados')}catch{toast('Archivo inválido',false)}};r.readAsText(f)}
