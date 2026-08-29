@@ -365,7 +365,7 @@ input:checked+.sl:before{transform:translateX(18px);background:#fff}
 <div id="page-transactions" class="page">
   <div class="ph">
     <div><div class="pt">Transacciones</div><div class="ps">Historial completo</div></div>
-    <div style="display:flex;gap:8px"><button class="btn bg_" onclick="openImportM()">⭱ Importar Excel</button><button class="btn bp" onclick="openTxM()">+ Nueva</button></div>
+    <button class="btn bp" onclick="openTxM()">+ Nueva</button>
   </div>
   <div class="card">
     <div style="display:flex;gap:8px;margin-bottom:8px;flex-wrap:wrap">
@@ -555,6 +555,7 @@ input:checked+.sl:before{transform:translateX(18px);background:#fff}
     <div class="ss"><h3>Datos</h3>
       <div class="sr"><div><div class="si-l">Exportar datos</div><div class="si-s">Backup en JSON</div></div><button class="btn bg_ sm" onclick="exportData()">Exportar</button></div>
       <div class="sr"><div><div class="si-l">Importar datos</div><div class="si-s">Restaurar desde backup</div></div><label class="btn bg_ sm" style="cursor:pointer">Importar<input type="file" accept=".json" onchange="importData(event)" style="display:none"></label></div>
+      <div class="sr"><div><div class="si-l">Importar transacciones desde Excel</div><div class="si-s">Sube un .xlsx/.xls/.csv con tu historial</div></div><button class="btn bg_ sm" onclick="openImportM()">Importar Excel</button></div>
       <div class="sr"><div><div class="si-l" style="color:var(--red)">Borrar todo</div><div class="si-s">Acción irreversible</div></div><button class="btn bd sm" onclick="oM('mo-nuke')">Borrar</button></div>
     </div>
   </div>
@@ -2969,10 +2970,42 @@ function parseImportDate(v){
   }
   return null;
 }
+// Antes esta función simplemente BORRABA cualquier coma, asumiendo que
+// siempre era separador de miles (formato "1,234.56"). Pero Excel en
+// configuración regional español/México a veces exporta números con coma
+// como separador DECIMAL (formato "1234,56") — al borrar la coma en vez de
+// convertirla en punto, "1234,56" se leía como "123456", multiplicando el
+// monto por 100. Ahora se detecta cuál separador es el decimal según su
+// posición, en vez de asumir siempre lo mismo.
 function parseImportAmount(v){
   if(v==null||v==='')return null;
   if(typeof v==='number')return Math.abs(v);
-  const n=parseFloat(String(v).replace(/[^0-9.\-]/g,''));
+  let s=String(v).trim().replace(/[^0-9.,\-]/g,'');
+  if(!s)return null;
+  const lastComma=s.lastIndexOf(',');
+  const lastDot=s.lastIndexOf('.');
+  if(lastComma>-1&&lastDot>-1){
+    // Tiene los dos separadores: el que aparece AL FINAL es el decimal.
+    if(lastComma>lastDot)s=s.replace(/\./g,'').replace(',','.'); // 1.234,56 -> 1234.56
+    else s=s.replace(/,/g,''); // 1,234.56 -> 1234.56
+  } else if(lastComma>-1){
+    // Solo hay coma: si le siguen 1-2 dígitos, es decimal ("1234,56");
+    // si le siguen 3, es separador de miles ("1,234").
+    const after=s.length-lastComma-1;
+    s=(after===1||after===2)?s.replace(',','.'):s.replace(/,/g,'');
+  } else {
+    // Solo puntos (o ninguno). Con dos o más puntos, todos menos el
+    // último son separadores de miles. Con exactamente uno y 3 dígitos
+    // después (ej. "1.234"), también es separador de miles — un monto de
+    // dinero real casi nunca tiene 3 decimales.
+    const dotCount=(s.match(/\./g)||[]).length;
+    if(dotCount>1){const last=s.lastIndexOf('.');s=s.slice(0,last).replace(/\./g,'')+s.slice(last)}
+    else if(dotCount===1){
+      const idx=s.indexOf('.');
+      if(s.length-idx-1===3)s=s.replace('.','');
+    }
+  }
+  const n=parseFloat(s);
   return isNaN(n)?null:Math.abs(n);
 }
 function importAmountIsNegative(v){
@@ -3002,15 +3035,26 @@ function buildImportRows(){
     const subcategoryName=map.subcategory?String(row[map.subcategory]||'').trim():'';
     const type=normalizeImportType(map.type?row[map.type]:null,map.amount?row[map.amount]:null);
     let accountId=defaultAccId;
+    let accountErr=null;
     if(map.account){
-      const accName=String(row[map.account]||'').trim().toLowerCase();
-      const found=S.accounts.find(a=>a.name.toLowerCase()===accName);
-      if(found)accountId=found.id;
+      const rawAcc=String(row[map.account]||'').trim();
+      if(rawAcc){
+        // La cuenta SÍ viene especificada en esta fila — hay que respetarla,
+        // no usar la cuenta por default en su lugar. Si no coincide con
+        // ninguna cuenta real, es un error (no se adivina a cuál cuenta
+        // pertenece de verdad).
+        const found=S.accounts.find(a=>a.name.toLowerCase()===rawAcc.toLowerCase());
+        if(found)accountId=found.id;
+        else accountErr=`cuenta "${rawAcc}" no encontrada`;
+      }
+      // si la celda de cuenta viene vacía en esta fila, se usa la cuenta
+      // por default sin marcar error — eso sí es un caso esperado.
     }
     const errors=[];
     if(!date)errors.push('fecha inválida');
     if(amount==null||amount<=0)errors.push('monto inválido');
-    if(!accountId)errors.push('sin cuenta');
+    if(accountErr)errors.push(accountErr);
+    else if(!accountId)errors.push('sin cuenta');
     return{idx,date,amount,description,categoryName,subcategoryName,type,accountId,errors};
   });
 }
