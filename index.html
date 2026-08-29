@@ -238,6 +238,22 @@ input:checked+.sl:before{transform:translateX(18px);background:#fff}
 
 ::-webkit-scrollbar{width:4px;height:4px}::-webkit-scrollbar-track{background:transparent}::-webkit-scrollbar-thumb{background:var(--bg5);border-radius:4px}
 
+/* ============ LISTA DE TRANSACCIONES (Fase 5) ============
+   Antes era una <table> literal. Ahora es una lista agrupada por fecha
+   (cuando el orden es por fecha), con el mismo lenguaje visual que ya se
+   usa en "Últimas transacciones" del dashboard y el historial de
+   préstamos — ícono de categoría, descripción, contexto secundario, monto
+   alineado a la derecha. */
+.tx-date-hdr{font-size:11px;font-weight:700;color:var(--t3);text-transform:uppercase;letter-spacing:.5px;padding:14px 4px 8px}
+.tx-date-hdr:first-child{padding-top:2px}
+.tx-row{display:flex;align-items:center;gap:12px;padding:10px 4px;border-bottom:1px solid var(--bdr);border-radius:8px;transition:background .1s}
+.tx-row:hover{background:var(--bg3)}
+.tx-icon{width:36px;height:36px;border-radius:10px;background:var(--bg4);display:flex;align-items:center;justify-content:center;font-size:16px;flex-shrink:0}
+.tx-main{flex:1;min-width:0}
+.tx-desc{font-size:13px;font-weight:500;color:var(--txt);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.tx-meta{font-size:11px;color:var(--t3);margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.tx-amt{font-family:'DM Mono',monospace;font-size:14px;font-weight:600;white-space:nowrap;flex-shrink:0}
+
 /* ============ DASHBOARD: HERO PATRIMONIO NETO ============
    Antes el patrimonio neto solo vivía chico en el sidebar. Es el dato que
    responde "¿cuál es mi situación financiera?" de un vistazo — merece ser
@@ -418,7 +434,14 @@ input:checked+.sl:before{transform:translateX(18px);background:#fff}
         <span style="font-size:11px;color:var(--t3)">Periodo de facturación</span>
       </div>
     </div>
-    <div class="tw"><table><thead><tr><th onclick="setTxSort('date')" style="cursor:pointer;user-select:none">Fecha <span id="txsort-arrow-date"></span></th><th>Descripción</th><th>Categoría</th><th>Cuenta</th><th>Tipo</th><th onclick="setTxSort('amount')" style="cursor:pointer;user-select:none">Monto <span id="txsort-arrow-amount"></span></th><th>MSI</th><th></th></tr></thead><tbody id="tx-tb"></tbody></table></div>
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;flex-wrap:wrap;gap:8px">
+      <div id="tx-summary-bar" style="font-size:12px;color:var(--t3)"></div>
+      <div style="display:flex;gap:6px">
+        <button class="btn bg_ sm" onclick="setTxSort('date')" style="font-size:11px;padding:5px 10px">Fecha <span id="txsort-arrow-date"></span></button>
+        <button class="btn bg_ sm" onclick="setTxSort('amount')" style="font-size:11px;padding:5px 10px">Monto <span id="txsort-arrow-amount"></span></button>
+      </div>
+    </div>
+    <div id="tx-tb"></div>
   </div>
 </div>
 
@@ -3296,7 +3319,7 @@ function renderTxP(){
   const catSel=$('txcat');
   if(catSel&&catSel.options.length<=1)populateTxCatFilter();
 
-  // Flechas de orden en los encabezados clicables
+  // Flechas de orden en los botones compactos
   ['date','amount'].forEach(col=>{
     const arrow=$('txsort-arrow-'+col);
     if(!arrow)return;
@@ -3319,24 +3342,54 @@ function renderTxP(){
   else if(!isTDC&&fm){monthPrefix=fm;}
   const txs=Store.queryTransactions({type:ft||undefined,accountId:accId||undefined,category:cat||undefined,dateFrom,dateTo,monthPrefix,search:q||undefined,sortBy,sortDir});
 
-  // Summary row when account is filtered
   const tb=$('tx-tb');
-  let summaryHtml='';
+  const summaryBar=$('tx-summary-bar');
   if(accId&&txs.length){
     const totInc=txs.filter(t=>t.type==='income').reduce((a,t)=>a+M(t.amount),0);
     const totExp=txs.filter(t=>t.type==='expense').reduce((a,t)=>a+M(t.amount),0);
     const bal=totInc-totExp;
-    summaryHtml=`<tr style="background:var(--bg4);font-weight:500"><td colspan="5" style="font-size:12px;color:var(--t3);padding:8px 12px">${txs.length} movimientos${isTDC&&billingPeriod?' · periodo seleccionado':fm?' · '+fm:''}</td><td style="font-family:'DM Mono',monospace;font-size:12px;color:${bal>=0?'var(--inc)':'var(--exp)'};padding:8px 12px">${bal>=0?'+':''}${fmt(bal)}</td><td colspan="2"></td></tr>`;
+    summaryBar.innerHTML=`${txs.length} movimientos${isTDC&&billingPeriod?' · periodo seleccionado':fm?' · '+fm:''} · <span style="color:${bal>=0?'var(--inc)':'var(--exp)'};font-family:'DM Mono',monospace">${bal>=0?'+':''}${fmt(bal)}</span>`;
+  } else {
+    summaryBar.textContent=txs.length?`${txs.length} movimientos`:'';
   }
 
-  if(!txs.length){tb.innerHTML=`<tr><td colspan="8" style="padding:0">${emptyState('💸','No tienes transacciones todavía','Agrega tu primera transacción para empezar a ver tus gastos e ingresos organizados.','+ Nueva transacción',"openTxM()")}</td></tr>`;return}
-  const tl={income:`<span class="bdg bdg-g">↑ Ingreso</span>`,expense:`<span class="bdg bdg-r">↓ Gasto</span>`,transfer:`<span class="bdg bdg-b">⇄ Transfer.</span>`};
-  tb.innerHTML=summaryHtml+txs.map(t=>{
+  if(!txs.length){tb.innerHTML=emptyState('💸','No tienes transacciones todavía','Agrega tu primera transacción para empezar a ver tus gastos e ingresos organizados.','+ Nueva transacción',"openTxM()");return}
+
+  const tl={income:'Ingreso',expense:'Gasto',transfer:'Transferencia'};
+  const rowHTML=(t)=>{
     const a=Store.getAccountById(t.accountId);
     const clr=t.type==='income'?'var(--inc)':t.type==='expense'?'var(--exp)':'var(--blu)';
-    const msi=t.msi?`<span class="bdg bdg-p">${t.msi.months}MSI</span>`:'—';
-    return`<tr><td style="color:var(--t2)">${esc(fmtDate(t.date))}${t.time?`<span style="color:var(--t3);font-size:11px"> ${esc(fmtTime(t.time))}</span>`:''}</td><td>${esc(t.description)}</td><td>${getCatIcon(t.category)} ${esc(t.category)||'—'}${t.subcategory?`<div style="font-size:11px;color:var(--t3)">${esc(t.subcategory)}</div>`:''}</td><td style="color:var(--t2)">${a?esc(a.name):'—'}</td><td>${tl[t.type]}</td><td style="font-family:'DM Mono',monospace;color:${clr}">${t.type==='expense'?'-':''}${fmt(t.amount)}</td><td>${msi}</td><td><button class="btn bg_ ico sm" title="Más opciones" onclick="showRowMenu(this,[{label:'Editar',icon:'✎',onClick:()=>openTxM('${t.id}')},{label:'Eliminar',icon:'✕',danger:true,onClick:()=>delTx('${t.id}')}])">⋮</button></td></tr>`;
-  }).join('');
+    const metaParts=[esc(t.category)||'Sin categoría'];
+    if(t.subcategory)metaParts.push(esc(t.subcategory));
+    metaParts.push(a?esc(a.name):'Sin cuenta');
+    if(t.time)metaParts.push(fmtTime(t.time));
+    if(t.msi)metaParts.push(`${t.msi.months} MSI`);
+    return`<div class="tx-row"><div class="tx-icon">${getCatIcon(t.category)}</div><div class="tx-main"><div class="tx-desc">${esc(t.description)}</div><div class="tx-meta">${metaParts.join(' · ')}</div></div><div style="text-align:right;flex-shrink:0"><div class="tx-amt" style="color:${clr}">${t.type==='expense'?'-':t.type==='income'?'+':''}${fmt(t.amount)}</div><div class="tx-meta">${tl[t.type]}</div></div><button class="btn bg_ ico sm" title="Más opciones" style="margin-left:4px" onclick="showRowMenu(this,[{label:'Editar',icon:'✎',onClick:()=>openTxM('${t.id}')},{label:'Eliminar',icon:'✕',danger:true,onClick:()=>delTx('${t.id}')}])">⋮</button></div>`;
+  };
+
+  // Agrupar por fecha solo tiene sentido cuando el orden es por fecha —
+  // si se ordena por monto, una agrupación por fecha se vería salteada
+  // y confusa, así que ahí se muestra como lista plana.
+  if(sortBy==='date'){
+    const groups=[];let lastDate=null;
+    txs.forEach(t=>{
+      if(t.date!==lastDate){groups.push({date:t.date,items:[]});lastDate=t.date}
+      groups[groups.length-1].items.push(t);
+    });
+    tb.innerHTML=groups.map(g=>`<div class="tx-date-hdr">${esc(txGroupLabel(g.date))}</div>${g.items.map(rowHTML).join('')}`).join('');
+  } else {
+    tb.innerHTML=txs.map(rowHTML).join('');
+  }
+}
+// "Hoy"/"Ayer" para los encabezados de grupo — si no aplica ninguno,
+// usa el formato de fecha configurado en Ajustes.
+function txGroupLabel(dateStr){
+  const d=new Date(dateStr+'T00:00:00');
+  const today=new Date();today.setHours(0,0,0,0);
+  const diff=Math.round((today-d)/86400000);
+  if(diff===0)return 'Hoy';
+  if(diff===1)return 'Ayer';
+  return fmtDate(dateStr);
 }
 
 async function delTx(id){
