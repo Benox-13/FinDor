@@ -1097,10 +1097,7 @@ input:checked+.sl:before{transform:translateX(18px);background:#fff}
         <label class="fl">Elementos <button class="btn bg_ sm ico" style="margin-left:6px" onclick="addSecMemberInput()">+</button></label>
         <div id="sec-members-wrap" style="display:flex;flex-direction:column;gap:6px;margin-top:6px"></div>
       </div>
-      <div class="fg">
-        <label class="fl">Categorías <button class="btn bg_ sm ico" style="margin-left:6px" onclick="addSecCatInput()">+</button></label>
-        <div id="sec-cats-wrap" style="display:flex;flex-direction:column;gap:6px;margin-top:6px"></div>
-      </div>
+      <div style="font-size:12px;color:var(--t3);margin-top:2px">Las categorías de tus registros vienen de la lista global (Ajustes → Categorías) — no hace falta definirlas por sección.</div>
     </div>
     <div class="mfoot"><button class="btn bg_ sm" onclick="cM('mo-sec')">Cancelar</button><button class="btn bp sm" onclick="saveSec()">Guardar</button></div>
   </div>
@@ -1125,11 +1122,8 @@ input:checked+.sl:before{transform:translateX(18px);background:#fff}
         <div id="seccfg-members-list"></div>
       </div>
       <div id="seccfg-categorias" style="display:none">
-        <div style="display:flex;gap:8px;margin-bottom:12px">
-          <input class="fc" type="text" id="seccfg-new-cat" placeholder="Nueva categoría..." style="flex:1">
-          <button class="btn bp sm" onclick="addSecCat()">Agregar</button>
-        </div>
-        <div id="seccfg-cats-list"></div>
+        <div style="font-size:13px;color:var(--t2);margin-bottom:12px">Las categorías ahora son globales — se comparten entre Transacciones, Vehículos, Préstamos y todas las Secciones, para no tener la misma categoría duplicada en varios lugares. Adminístralas desde Ajustes.</div>
+        <button class="btn bg_ sm" onclick="cM('mo-sec-cfg');go('settings');cfgTab('categorias',document.querySelector('#cfg-tabs button[onclick*=categorias]'))">Ir a Ajustes → Categorías</button>
       </div>
       <div id="seccfg-general" style="display:none">
         <div class="fg"><label class="fl">Nombre</label><input class="fc" type="text" id="seccfg-name"></div>
@@ -1496,14 +1490,17 @@ async function pullFromSupabase(){
 
     // --- custom sections + members/categories/records anidados ---
     const memberById={};results.custom_section_members.forEach(m=>memberById[m.id]=m);
-    const secCatById={};results.custom_section_categories.forEach(c=>secCatById[c.id]=c);
     const newCustomSections=results.custom_sections.map(s=>({
       id:s.id,name:s.name,icon:s.icon||'📁',memberLabel:s.member_label||'Miembro',
       members:results.custom_section_members.filter(m=>m.section_id===s.id).map(m=>m.name),
+      // "categories" ya no se usa para poblar el selector (ahora usa la
+      // lista global), pero se conserva por compatibilidad con secciones
+      // viejas que aún puedan tener nombres guardados aquí.
       categories:results.custom_section_categories.filter(c=>c.section_id===s.id).map(c=>c.name),
       records:results.custom_section_records.filter(r=>r.section_id===s.id).map(r=>({
-        id:r.id,dt:r.dt,member:memberById[r.member_id]?.name||'',cat:secCatById[r.category_id]?.name||'',
+        id:r.id,dt:r.dt,member:memberById[r.member_id]?.name||'',cat:catById[r.category_id]?.name||'',
         amt:centsToAmt(r.amount_cents),desc:r.description||'',note:r.note||'',accountId:r.account_id||'',
+        txId:r.tx_id||null,
       })),
     }));
 
@@ -2510,14 +2507,21 @@ const Store = {
     if(sb&&currentUserId&&isUUID(sectionId))this._pushSectionRecord(sectionId,s.records[idx],true);
     return s.records[idx];
   },
-  // Sube un registro de sección resolviendo member/cat por nombre (buscando
-  // o creando la fila correspondiente en custom_section_members/categories
-  // si hiciera falta — mismo patrón que subcategorías).
+  // Sube un registro de sección resolviendo member por nombre (dentro de la
+  // sección, igual que antes) y categoría contra la tabla GLOBAL de
+  // categorías (antes usaba custom_section_categories, una tabla separada
+  // y aislada por sección — la misma raíz del problema de categorías
+  // duplicadas entre secciones).
   async _pushSectionRecord(sectionId,r,isUpdate){
     const memberId=r.member?await findOrCreateByName('custom_section_members','section_id',sectionId,r.member):null;
-    const catId=r.cat?await findOrCreateByName('custom_section_categories','section_id',sectionId,r.cat):null;
+    let catId=null;
+    if(r.cat){
+      let cat=S.categories.find(c=>c.name.toLowerCase()===r.cat.toLowerCase()&&c.type==='expense');
+      if(!cat)cat=this.addCategory({name:r.cat,icon:'📌',type:'expense'});
+      catId=isUUID(cat.id)?cat.id:null;
+    }
     const payload={user_id:currentUserId,section_id:sectionId,dt:r.dt,member_id:memberId,category_id:catId,
-      amount_cents:amtToCents(r.amt),description:r.desc||null,note:r.note||null,account_id:r.accountId||null};
+      amount_cents:amtToCents(r.amt),description:r.desc||null,note:r.note||null,account_id:r.accountId||null,tx_id:r.txId||null};
     if(isUpdate&&isUUID(r.id)){
       await cloudWrite(sb.from('custom_section_records').update(payload).eq('id',r.id),'actualizar registro de sección');
     } else if(isUUID(r.id)){
@@ -4439,7 +4443,7 @@ function goSection(id){
 function renderSecPage(){
   const sec=Store.getCustomSectionById(currentSecId);if(!sec)return;
   $('cs-page-title').textContent=sec.icon+' '+sec.name;
-  $('cs-page-sub').textContent=(sec.members?.length||0)+' '+(sec.memberLabel||'elemento').toLowerCase()+(sec.members?.length!==1?'s':'')+' · '+(sec.categories?.length||0)+' categorías';
+  $('cs-page-sub').textContent=(sec.members?.length||0)+' '+(sec.memberLabel||'elemento').toLowerCase()+(sec.members?.length!==1?'s':'')+' · '+(sec.records?.length||0)+' registros';
   $('cs-member-th').textContent=sec.memberLabel||'Miembro';
   // Member filter pills
   const mf=$('cs-member-filter');
@@ -4459,9 +4463,12 @@ function renderSecPage(){
     <div class="m_ m_-bal"><div class="ml">Total histórico</div><div class="mv">${fmt(totalAll)}</div></div>
     <div class="m_ m_-sav"><div class="ml">Este mes</div><div class="mv">${fmt(totalMo)}</div></div>
     ${statsCards.join('')}`;
-  // Cat filter
+  // Cat filter — se arma con las categorías que de verdad aparecen en los
+  // registros de esta sección (antes venía de sec.categories, una lista
+  // fija que ya no se define al crear una sección).
   const cf=$('cs-cat-filter');
-  cf.innerHTML='<option value="">Todas las categorías</option>'+(sec.categories||[]).map(c=>`<option value="${esc(c)}">${esc(c)}</option>`).join('');
+  const usedCats=[...new Set((sec.records||[]).map(r=>r.cat).filter(Boolean))].sort();
+  cf.innerHTML='<option value="">Todas las categorías</option>'+usedCats.map(c=>`<option value="${esc(c)}">${esc(c)}</option>`).join('');
   renderSecRecords();
 }
 
@@ -4495,28 +4502,22 @@ function openSecM(editId=null){
     const s=Store.getCustomSectionById(editId);if(!s)return;
     $('sec-name').value=s.name;$('sec-icon').value=s.icon||'';$('sec-member-label').value=s.memberLabel||'Miembro';
     $('sec-members-wrap').innerHTML=(s.members||[]).map(m=>memberInputHTML(m)).join('');
-    $('sec-cats-wrap').innerHTML=(s.categories||[]).map(c=>catInputHTML(c)).join('');
   } else {
     ['sec-name','sec-icon','sec-member-label'].forEach(i=>$(i).value='');
     $('sec-members-wrap').innerHTML=memberInputHTML('')+memberInputHTML('');
-    $('sec-cats-wrap').innerHTML=catInputHTML('')+catInputHTML('')+catInputHTML('');
   }
   oM('mo-sec');
 }
 
 function memberInputHTML(v){return`<div style="display:flex;gap:6px;margin-bottom:4px"><input class="fc sec-member-input" type="text" placeholder="Nombre del elemento" value="${esc(v)}"><button class="btn bd ico sm" onclick="this.parentElement.remove()">✕</button></div>`}
-function catInputHTML(v){return`<div style="display:flex;gap:6px;margin-bottom:4px"><input class="fc sec-cat-input" type="text" placeholder="Categoría" value="${esc(v)}"><button class="btn bd ico sm" onclick="this.parentElement.remove()">✕</button></div>`}
 function addSecMemberInput(){$('sec-members-wrap').insertAdjacentHTML('beforeend',memberInputHTML(''))}
-function addSecCatInput(){$('sec-cats-wrap').insertAdjacentHTML('beforeend',catInputHTML(''))}
 
 async function saveSec(){
   const name=$('sec-name').value.trim();if(!name){toast('Nombre requerido',false);return}
   const members=[...$('sec-members-wrap').querySelectorAll('.sec-member-input')].map(i=>i.value.trim()).filter(Boolean);
-  const categories=[...$('sec-cats-wrap').querySelectorAll('.sec-cat-input')].map(i=>i.value.trim()).filter(Boolean);
   if(!members.length){toast('Agrega al menos un elemento',false);return}
-  if(!categories.length){toast('Agrega al menos una categoría',false);return}
   const eid=$('sec-eid').value;
-  const obj={name,icon:$('sec-icon').value||'📁',memberLabel:$('sec-member-label').value||'Miembro',members,categories};
+  const obj={name,icon:$('sec-icon').value||'📁',memberLabel:$('sec-member-label').value||'Miembro',members};
   if(eid){
     const ok=await confirm_('¿Guardar cambios?','Se actualizará esta sección.','Guardar');
     if(!ok)return;
@@ -4552,7 +4553,6 @@ function secCfgTab(t,el){
 function renderSecCfgLists(){
   const sec=Store.getCustomSectionById(currentSecId);if(!sec)return;
   $('seccfg-members-list').innerHTML=(sec.members||[]).map(m=>`<div style="display:flex;justify-content:space-between;align-items:center;padding:9px 0;border-bottom:1px solid var(--bdr)"><span style="font-size:13px">${esc(m)}</span><button class="btn bd ico sm" onclick="delSecMember('${esc(m)}')">✕</button></div>`).join('')||'<div style="color:var(--t3);font-size:13px;padding:8px 0">Sin elementos</div>';
-  $('seccfg-cats-list').innerHTML=(sec.categories||[]).map(c=>`<div style="display:flex;justify-content:space-between;align-items:center;padding:9px 0;border-bottom:1px solid var(--bdr)"><span class="bdg bdg-n">${esc(c)}</span><button class="btn bd ico sm" onclick="delSecCat('${esc(c)}')">✕</button></div>`).join('')||'<div style="color:var(--t3);font-size:13px;padding:8px 0">Sin categorías</div>';
 }
 
 function addSecMember(){
@@ -4565,17 +4565,6 @@ async function delSecMember(m){
   const ok=await confirm_('¿Eliminar elemento?',`Se quitará "${m}" de la sección — sus registros pasados no se borran, pero perderán esta clasificación.`);
   if(!ok)return;
   Store.deleteSectionMember(currentSecId,m);renderSecCfgLists();renderSecPage();
-}
-function addSecCat(){
-  const n=$('seccfg-new-cat').value.trim();if(!n){toast('Escribe una categoría',false);return}
-  const s=Store.addSectionCategory(currentSecId,n);
-  if(!s){toast('Ya existe',false);return}
-  $('seccfg-new-cat').value='';renderSecCfgLists();renderSecPage();toast('Categoría agregada');
-}
-async function delSecCat(c){
-  const ok=await confirm_('¿Eliminar categoría?',`Se quitará "${c}" de la sección.`);
-  if(!ok)return;
-  Store.deleteSectionCategory(currentSecId,c);renderSecCfgLists();renderSecPage();
 }
 async function saveSecGeneral(){
   const ok=await confirm_('¿Guardar cambios?','Se actualizará el nombre/ícono de esta sección.','Guardar');
@@ -4599,7 +4588,10 @@ function openSecRecordM(editId=null){
   $('secrec-title').textContent=(editId?'Editar':'Nuevo registro en')+' '+sec.name;
   $('sr-member-lbl').textContent=sec.memberLabel||'Elemento';
   $('sr-member').innerHTML=(sec.members||[]).map(m=>`<option value="${esc(m)}">${esc(m)}</option>`).join('');
-  $('sr-cat').innerHTML=(sec.categories||[]).map(c=>`<option value="${esc(c)}">${esc(c)}</option>`).join('');
+  // Categorías GLOBALES (antes venían de sec.categories, una lista propia y
+  // aislada por sección — la misma categoría "Comida" en dos secciones
+  // distintas terminaba duplicada y sin relación entre sí).
+  $('sr-cat').innerHTML='<option value="">Sin categoría</option>'+S.categories.filter(c=>c.type==='expense').map(c=>`<option value="${esc(c.name)}">${c.icon} ${esc(c.name)}</option>`).join('');
   $('sr-acc').innerHTML='<option value="">No descontar de cuenta</option>'+S.accounts.map(a=>`<option value="${a.id}">${esc(a.name)} (${fmt(a.balance)})</option>`).join('');
   if(editId){
     const r=(sec.records||[]).find(x=>x.id===editId);if(!r)return;
@@ -4617,26 +4609,51 @@ async function saveSecRecord(){
   const amt=M($('sr-amt').value)||0;const dt=$('sr-dt').value;
   if(!dt||!isValidAmount(amt)){toast('Fecha y monto requeridos (mayor a 0)',false);return}
   const accId=$('sr-acc').value;
-  const obj={dt,member:$('sr-member').value,cat:$('sr-cat').value,amt,desc:$('sr-desc').value,note:$('sr-note').value,accountId:accId};
+  const catVal=$('sr-cat').value;
+  const memberVal=$('sr-member').value;
+  const descVal=$('sr-desc').value;
   const eid=$('sr-eid').value;
-  const isNew=!eid;
+  const oldRec=eid?(sec.records||[]).find(r=>r.id===eid):null;
+  const desc=(descVal||sec.name)+(memberVal?' — '+memberVal:'');
+  let txId=oldRec?.txId||null;
   if(eid){
     const ok=await confirm_('¿Guardar cambios?','Se actualizará este registro.','Guardar');
     if(!ok)return;
-    Store.updateSectionRecord(currentSecId,eid,obj);toast('Actualizado');
-  }
-  else{Store.addSectionRecord(currentSecId,obj);toast('Registro guardado')}
-  // Discount from account and create linked transaction if account selected
-  // (solo al crear, no al editar — igual que el comportamiento original)
-  if(isNew&&accId){
-    const desc=($('sr-desc').value||sec.name)+($('sr-member').value?' — '+$('sr-member').value:'');
-    Store.addTransaction({type:'expense',amount:amt,date:dt,time:tnow_(),description:desc,category:$('sr-cat').value||sec.name,accountId:accId,notes:'Gasto de sección: '+sec.name});
+    // Mantener la transacción vinculada sincronizada con el registro —
+    // antes esto NUNCA pasaba al editar, así que un registro editado se
+    // desincronizaba silenciosamente de su transacción original.
+    if(txId&&accId){
+      Store.updateTransaction(txId,{type:'expense',amount:amt,date:dt,description:desc,category:catVal,accountId:accId,notes:'Gasto de sección: '+sec.name});
+    } else if(txId&&!accId){
+      // Se quitó la cuenta al editar: ya no debe existir una transacción.
+      Store.deleteTransaction(txId);txId=null;
+    } else if(!txId&&accId){
+      // No tenía cuenta antes y ahora sí: se crea la transacción por
+      // primera vez para este registro.
+      const tx=Store.addTransaction({type:'expense',amount:amt,date:dt,time:tnow_(),description:desc,category:catVal,accountId:accId,notes:'Gasto de sección: '+sec.name});
+      txId=tx.id;
+    }
+    Store.updateSectionRecord(currentSecId,eid,{dt,member:memberVal,cat:catVal,amt,desc:descVal,note:$('sr-note').value,accountId:accId,txId});
+    toast('Actualizado');
+  } else {
+    if(accId){
+      const tx=Store.addTransaction({type:'expense',amount:amt,date:dt,time:tnow_(),description:desc,category:catVal,accountId:accId,notes:'Gasto de sección: '+sec.name});
+      txId=tx.id;
+    }
+    Store.addSectionRecord(currentSecId,{dt,member:memberVal,cat:catVal,amt,desc:descVal,note:$('sr-note').value,accountId:accId,txId});
+    toast('Registro guardado');
   }
   cM('mo-sec-rec');renderSecPage();renderDash();updateNW();
 }
 
 async function delSecRec(id){
   const ok=await confirm_('¿Eliminar registro?','');if(!ok)return;
+  const sec=Store.getCustomSectionById(currentSecId);
+  const rec=sec?.records?.find(r=>r.id===id);
+  // Antes de borrar el registro, borrar también su transacción vinculada
+  // (si tenía una) — antes esto no pasaba, así que el balance se quedaba
+  // afectado para siempre aunque borraras el registro.
+  if(rec?.txId)Store.deleteTransaction(rec.txId);
   Store.deleteSectionRecord(currentSecId,id);renderSecPage();toast('Eliminado');
 }
 
