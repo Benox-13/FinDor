@@ -1466,6 +1466,7 @@ async function pullFromSupabase(){
       id:a.id,name:a.name,type:accountTypeFromCloud(a.type),balance:centsToAmt(a.balance_cents),
       limit:a.limit_cents?centsToAmt(a.limit_cents):0,color:a.color||null,
       cutDay:a.cut_day||null,payDay:a.pay_day||null,
+      locked:!!a.locked,balanceHidden:!!a.balance_hidden,archived:!!a.archived,
     }));
 
     // --- transactions (category_id/subcategory_id -> nombre, igual que
@@ -1620,7 +1621,8 @@ async function cloudWrite(promise,label){
 // ---- Conversores local -> nube (inverso exacto de pullFromSupabase) ----
 function accountToCloud(a){
   return{id:a.id,user_id:currentUserId,name:a.name,type:accountTypeToCloud(a.type),balance_cents:amtToCents(a.balance),
-    limit_cents:a.limit?amtToCents(a.limit):null,color:a.color||null,cut_day:a.cutDay||null,pay_day:a.payDay||null};
+    limit_cents:a.limit?amtToCents(a.limit):null,color:a.color||null,cut_day:a.cutDay||null,pay_day:a.payDay||null,
+    locked:!!a.locked,balance_hidden:!!a.balanceHidden,archived:!!a.archived};
 }
 function categoryToCloud(c){
   return{id:c.id,user_id:currentUserId,name:c.name,icon:c.icon||null,type:c.type};
@@ -2750,6 +2752,7 @@ function renderBilling(){
 let _bpayType='total';
 function openBillingPay(accId,prefillAmt=null){
   const a=S.accounts.find(x=>x.id===accId);if(!a)return;
+  if(a.locked){toast('Esta cuenta está bloqueada — no se pueden registrar movimientos en ella.',false);return}
   $('bpay-accid').value=accId;
   $('bpay-title').textContent='Pagar — '+a.name;
   // Calculate invoice
@@ -2766,7 +2769,7 @@ function openBillingPay(accId,prefillAmt=null){
   $('bpay-period-lbl').textContent=a.cutDay?`Ciclo cerrado antes del corte (día ${a.cutDay})`:'Configure día de corte para cálculo automático';
   // Fill source accounts (non-credit)
   const srcSel=$('bpay-src');
-  srcSel.innerHTML=S.accounts.filter(x=>x.id!==accId).map(x=>`<option value="${x.id}">${esc(x.name)} (${fmt(x.balance)})</option>`).join('');
+  srcSel.innerHTML=selectableAccounts(accId).map(x=>`<option value="${x.id}">${esc(x.name)} (${accBalanceLabel(x)})</option>`).join('');
   // Default date
   const today=toLocal(now);$('bpay-date').value=today;
   // Payment amount
@@ -2852,7 +2855,8 @@ function renderDash(){
       rightParts.push(`<div class="card"><div class="slbl">Gastos por categoría</div>${srt.length?srt.map(([c,v])=>`<div style="margin-bottom:9px"><div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:3px"><span>${getCatIcon(c)} ${c}</span><span style="color:var(--t2);font-family:'DM Mono',monospace">${fmt(v)}</span></div><div class="pw"><div class="pb" style="width:${(v/mx*100).toFixed(0)}%;background:var(--red)"></div></div></div>`).join(''):'<div style="color:var(--t3);font-size:13px;text-align:center;padding:8px">Sin gastos</div>'}</div>`);
     }
     if(dw.accs){
-      rightParts.push(`<div class="card"><div class="slbl">Cuentas</div>${S.accounts.length?S.accounts.map(a=>`<div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid var(--bdr)"><div style="display:flex;align-items:center;gap:7px"><div style="width:8px;height:8px;border-radius:50%;background:${a.color||'var(--ac)'}"></div><span style="font-size:13px">${esc(a.name)}</span></div><span style="font-family:'DM Mono',monospace;font-size:13px;color:${M(a.balance)>=0?'var(--inc)':'var(--exp)'}">${fmt(a.balance)}</span></div>`).join(''):'<div style="color:var(--t3);font-size:13px">Sin cuentas</div>'}</div>`);
+      const dashAccs=S.accounts.filter(a=>!a.archived);
+      rightParts.push(`<div class="card"><div class="slbl">Cuentas</div>${dashAccs.length?dashAccs.map(a=>`<div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid var(--bdr)"><div style="display:flex;align-items:center;gap:7px"><div style="width:8px;height:8px;border-radius:50%;background:${a.color||'var(--ac)'}"></div><span style="font-size:13px">${esc(a.name)}${a.locked?' 🔒':''}</span></div><span style="font-family:'DM Mono',monospace;font-size:13px;color:${a.balanceHidden?'var(--t3)':M(a.balance)>=0?'var(--inc)':'var(--exp)'}">${accBalanceLabel(a)}</span></div>`).join(''):'<div style="color:var(--t3);font-size:13px">Sin cuentas</div>'}</div>`);
     }
     right=rightParts.join('<div style="height:13px"></div>');
     if(left&&right)parts.push(`<div class="g2">${left}<div>${right}</div></div>`);
@@ -2896,6 +2900,34 @@ function renderDash(){
 function emptyState(icon,title,msg,ctaLabel,ctaOnclick){
   return`<div class="empty-state"><div class="es-icon">${icon}</div><div class="es-title">${esc(title)}</div><div class="es-msg">${esc(msg)}</div>${ctaLabel?`<button class="btn bp sm" onclick="${ctaOnclick}">${esc(ctaLabel)}</button>`:''}</div>`;
 }
+// Cuentas elegibles para un movimiento NUEVO — excluye las bloqueadas (🔒)
+// y las archivadas. Se usa en TODOS los selectores de cuenta donde se crea
+// un movimiento; los selectores de FILTRO (ver/buscar transacciones
+// pasadas) siguen mostrando todas las cuentas, incluidas bloqueadas y
+// archivadas, porque ahí solo se está consultando, no moviendo dinero.
+function selectableAccounts(excludeId){
+  return S.accounts.filter(a=>!a.locked&&!a.archived&&a.id!==excludeId);
+}
+// Texto de saldo respetando "ocultar saldo" (el ícono de ojo). No oculta
+// los montos de transacciones individuales — solo el saldo/total de la
+// cuenta en sí, que es lo que se pidió.
+function accBalanceLabel(a){return a.balanceHidden?'••••••':fmt(a.balance)}
+// Si una transacción/registro ya existente pertenece a una cuenta que
+// ahora está archivada, esa cuenta ya no aparece en el selector (por
+// selectableAccounts). Sin esto, el <select> simplemente perdería el
+// valor en silencio al abrir el formulario de edición. La reinsertamos
+// marcada como "(archivada)" para que el usuario entienda por qué
+// aparece ahí si ya no está en la lista normal.
+function ensureAccountOption(selectId,accId){
+  if(!accId)return;
+  const sel=$(selectId);if(!sel)return;
+  if([...sel.options].some(o=>o.value===accId))return;
+  const acc=Store.getAccountById(accId);if(!acc)return;
+  const opt=document.createElement('option');
+  opt.value=acc.id;opt.textContent=esc(acc.name)+' (archivada)';
+  sel.insertBefore(opt,sel.options[1]||null);
+}
+
 function getCatIcon(catName){const c=S.categories.find(c=>c.name===catName||c.subs?.includes(catName));return c?c.icon:'💸'}
 function getCatParent(sub){const c=S.categories.find(c=>c.subs?.includes(sub));return c?c.name:null}
 function getCatType(catName){const c=S.categories.find(c=>c.name===catName||c.subs?.includes(catName));return c?c.type:null}
@@ -2908,6 +2940,8 @@ function openTxM(editId=null){
   editingTxId=editId;
   if(editId){
     const tx=S.transactions.find(t=>t.id===editId);if(!tx)return;
+    const lockedAcc=[tx.accountId,tx.accountId2].filter(Boolean).map(id=>Store.getAccountById(id)).find(a=>a?.locked);
+    if(lockedAcc){toast(`"${lockedAcc.name}" está bloqueada — no se pueden editar movimientos de esta cuenta.`,false);return}
     $('tx-modal-title').textContent='Editar transacción';
     $('tx-save-btn').textContent='Actualizar';
     setTxT(tx.type);
@@ -2917,6 +2951,11 @@ function openTxM(editId=null){
     $('tx-cat').value=tx.category||'';
     fillTxSubcatSel();
     $('tx-subcat').value=tx.subcategory||'';
+    // Si la cuenta de esta transacción está archivada (no bloqueada), el
+    // selector ya no la incluye por default — la reinsertamos para no
+    // perder el valor en silencio, marcada como archivada.
+    ensureAccountOption('tx-acc',tx.accountId);
+    ensureAccountOption('tx-acc2',tx.accountId2);
     $('tx-acc').value=tx.accountId||'';
     if(tx.accountId2)$('tx-acc2').value=tx.accountId2;
     onAccChange();
@@ -2949,7 +2988,7 @@ function setTxT(t){
 }
 
 function fillTxSelects(){
-  const opts=S.accounts.map(a=>`<option value="${a.id}">${esc(a.name)} (${fmt(a.balance)})</option>`).join('');
+  const opts=selectableAccounts().map(a=>`<option value="${a.id}">${esc(a.name)} (${accBalanceLabel(a)})</option>`).join('');
   // Opción vacía primero y a propósito: al crear una transacción nueva no
   // debe quedar ninguna cuenta pre-seleccionada por default del navegador
   // (antes elegía la primera de la lista sin que el usuario decidiera).
@@ -3036,7 +3075,7 @@ function renderImportMapping(){
     const guess=guessImportField(h);
     return`<div class="fg" style="display:flex;align-items:center;gap:10px;margin-bottom:6px"><div style="flex:1;font-size:13px;color:var(--t2)">${esc(h)}</div><select class="fc" id="imp-map-${i}" style="max-width:220px" onchange="updateImportPreview()">${Object.entries(IMPORT_FIELD_LABELS).map(([k,l])=>`<option value="${k}" ${k===guess?'selected':''}>${esc(l)}</option>`).join('')}</select></div>`;
   }).join('');
-  $('imp-default-acc').innerHTML='<option value="">Sin cuenta por default</option>'+S.accounts.map(a=>`<option value="${a.id}">${esc(a.name)}</option>`).join('');
+  $('imp-default-acc').innerHTML='<option value="">Sin cuenta por default</option>'+selectableAccounts().map(a=>`<option value="${a.id}">${esc(a.name)}</option>`).join('');
   updateImportPreview();
 }
 function getImportMapping(){
@@ -3138,7 +3177,7 @@ function buildImportRows(){
         // no usar la cuenta por default en su lugar. Si no coincide con
         // ninguna cuenta real, es un error (no se adivina a cuál cuenta
         // pertenece de verdad).
-        const found=S.accounts.find(a=>a.name.toLowerCase()===rawAcc.toLowerCase());
+        const found=selectableAccounts().find(a=>a.name.toLowerCase()===rawAcc.toLowerCase());
         if(found)accountId=found.id;
         else accountErr=`cuenta "${rawAcc}" no encontrada`;
       }
@@ -3233,7 +3272,7 @@ async function saveTx(){
 function populateTxAccFilter(){
   const sel=$('txacc');if(!sel)return;
   const cur=sel.value;
-  sel.innerHTML='<option value="">Todas las cuentas</option>'+S.accounts.map(a=>`<option value="${a.id}">${esc(a.name)}${a.type==='credit'?' 💳':''}</option>`).join('');
+  sel.innerHTML='<option value="">Todas las cuentas</option>'+S.accounts.map(a=>`<option value="${a.id}">${esc(a.name)}${a.type==='credit'?' 💳':''}${a.archived?' (archivada)':a.locked?' 🔒':''}</option>`).join('');
   if(cur)sel.value=cur;
 }
 
@@ -3393,9 +3432,11 @@ function txGroupLabel(dateStr){
 }
 
 async function delTx(id){
+  const tx=Store.getTransactionById(id);if(!tx)return;
+  const lockedAcc=[tx.accountId,tx.accountId2].filter(Boolean).map(a=>Store.getAccountById(a)).find(a=>a?.locked);
+  if(lockedAcc){toast(`"${lockedAcc.name}" está bloqueada — no se pueden eliminar movimientos de esta cuenta.`,false);return}
   const ok=await confirm_('¿Eliminar transacción?','Se revertirá el movimiento en la cuenta correspondiente.');
   if(!ok)return;
-  const tx=Store.getTransactionById(id);if(!tx)return;
   Store.deleteTransaction(id);
   renderTxP();renderDash();toast('Transacción eliminada');
 }
@@ -3453,18 +3494,27 @@ function renderAccounts(){
     ls.innerHTML=`<div class="m_ m_-inc" style="cursor:pointer" onclick="go('loans')"><div class="ml">Me deben (pendiente)</div><div class="mv">${fmt(owedTotal)}</div><div class="ms">${S.debts_owed.length} préstamo(s) activo(s)</div></div><div class="m_ m_-exp" style="cursor:pointer" onclick="go('loans')"><div class="ml">Debo (pendiente)</div><div class="mv">${fmt(ioweTotal)}</div><div class="ms">${S.debts_iowe.length} préstamo(s) activo(s)</div></div>`;
   }
   const g=$('acc-grid');
-  if(!S.accounts.length){g.innerHTML=emptyState('▣','Sin cuentas todavía','Agrega tu primera cuenta (efectivo, débito o tarjeta de crédito) para empezar a registrar tus movimientos.','+ Nueva cuenta',"openAccM()");renderMSI();return}
+  const activeAccounts=S.accounts.filter(a=>!a.archived);
+  const archivedAccounts=S.accounts.filter(a=>a.archived);
+  if(!activeAccounts.length&&!archivedAccounts.length){g.innerHTML=emptyState('▣','Sin cuentas todavía','Agrega tu primera cuenta (efectivo, débito o tarjeta de crédito) para empezar a registrar tus movimientos.','+ Nueva cuenta',"openAccM()");renderMSI();return}
   // Agrupadas visualmente por tipo (Efectivo / Débito / Tarjetas de
   // crédito) — solo se muestra el encabezado del grupo si tiene al menos
   // una cuenta. No se agregaron tipos nuevos ni se tocó el modelo de
   // datos: son los mismos 3 tipos que ya existían.
   const groupOrder=['cash','debit','credit'];
-  const html=groupOrder.map(type=>{
-    const accsOfType=S.accounts.filter(a=>a.type===type);
+  let html=groupOrder.map(type=>{
+    const accsOfType=activeAccounts.filter(a=>a.type===type);
     if(!accsOfType.length)return '';
     const cards=accsOfType.map(a=>accountCardHTML(a)).join('');
     return`<div class="slbl" style="margin:${type==='cash'?'0':'20px'} 0 10px">${ACC_TYPE_GROUP_LABEL[type]}</div><div class="g3">${cards}</div>`;
   }).join('');
+  if(!activeAccounts.length)html=emptyState('▣','Todas tus cuentas están archivadas','Desarchiva una cuenta para volver a verla aquí, o crea una nueva.','+ Nueva cuenta',"openAccM()");
+  // Cuentas archivadas: plegado por default, no aparecen en los grupos de
+  // arriba ni son elegibles para movimientos nuevos, pero sus
+  // transacciones pasadas se quedan intactas en el historial.
+  if(archivedAccounts.length){
+    html+=`<div class="slbl" style="margin:20px 0 10px;cursor:pointer" onclick="const e=document.getElementById('acc-archived-list');e.style.display=e.style.display==='none'?'grid':'none'">📥 Cuentas archivadas (${archivedAccounts.length}) — clic para mostrar/ocultar</div><div id="acc-archived-list" class="g3" style="display:none">${archivedAccounts.map(a=>accountCardHTML(a)).join('')}</div>`;
+  }
   g.innerHTML=html;
   renderMSI();updateNW();
 }
@@ -3504,7 +3554,7 @@ function accountCardHTML(a){
         const todayStr=toLocal(now);
         periodSpend=S.transactions.filter(t=>t.type==='expense'&&t.accountId===a.id&&t.date>lastCutStr&&t.date<=todayStr).reduce((s,t)=>s+M(t.amount),0);
       }
-      const periodHtml=a.cutDay?`<div style="margin-top:8px;padding:8px 10px;background:rgba(255,95,109,0.06);border-radius:var(--r2);border:1px solid rgba(255,95,109,0.12)"><div style="font-size:11px;color:var(--t3);margin-bottom:2px">Gastado este periodo</div><div style="font-family:'DM Mono',monospace;font-size:15px;color:var(--red)">${fmt(periodSpend)}</div></div>`:'';
+      const periodHtml=a.cutDay?`<div style="margin-top:8px;padding:8px 10px;background:rgba(255,95,109,0.06);border-radius:var(--r2);border:1px solid rgba(255,95,109,0.12)"><div style="font-size:11px;color:var(--t3);margin-bottom:2px">Gastado este periodo</div><div style="font-family:'DM Mono',monospace;font-size:15px;color:var(--red)">${a.balanceHidden?'••••••':fmt(periodSpend)}</div></div>`:'';
       // Invoice card (shown after cut date until pay date)
       let invoiceHtml='';
       if(a.cutDay&&a.payDay){
@@ -3520,17 +3570,46 @@ function accountCardHTML(a){
           let payDt=new Date(now.getFullYear(),now.getMonth(),a.payDay);
           if(payDt<=cutDate)payDt=new Date(now.getFullYear(),now.getMonth()+1,a.payDay);
           const daysLeft=Math.ceil((payDt-now)/864e5);
-          invoiceHtml=`<div style="margin-top:10px;padding:10px 12px;background:linear-gradient(135deg,rgba(255,179,64,0.08),rgba(255,179,64,0.04));border:1px solid rgba(255,179,64,0.2);border-radius:var(--r2)"><div style="display:flex;justify-content:space-between;align-items:center"><div><div style="font-size:11px;color:var(--yel);font-weight:600;text-transform:uppercase;letter-spacing:.6px;margin-bottom:3px">📄 Factura pendiente</div><div style="font-family:'DM Mono',monospace;font-size:17px;color:var(--yel)">${fmt(invoiceSpend)}</div></div><div style="text-align:right"><div style="font-size:11px;color:var(--t3)">Pago límite</div><div style="font-size:13px;color:var(--txt);font-weight:500">día ${a.payDay}</div><div style="font-size:11px;color:${daysLeft<=3?'var(--red)':'var(--t3)'}">${daysLeft}d restantes</div></div></div></div>`;
+          invoiceHtml=`<div style="margin-top:10px;padding:10px 12px;background:linear-gradient(135deg,rgba(255,179,64,0.08),rgba(255,179,64,0.04));border:1px solid rgba(255,179,64,0.2);border-radius:var(--r2)"><div style="display:flex;justify-content:space-between;align-items:center"><div><div style="font-size:11px;color:var(--yel);font-weight:600;text-transform:uppercase;letter-spacing:.6px;margin-bottom:3px">📄 Factura pendiente</div><div style="font-family:'DM Mono',monospace;font-size:17px;color:var(--yel)">${a.balanceHidden?'••••••':fmt(invoiceSpend)}</div></div><div style="text-align:right"><div style="font-size:11px;color:var(--t3)">Pago límite</div><div style="font-size:13px;color:var(--txt);font-weight:500">día ${a.payDay}</div><div style="font-size:11px;color:${daysLeft<=3?'var(--red)':'var(--t3)'}">${daysLeft}d restantes</div></div></div></div>`;
         }
       }
-      extra=`<div style="margin-top:10px"><div style="display:flex;justify-content:space-between;font-size:11px;color:var(--t3);margin-bottom:3px"><span>Usado: ${fmt(used)}</span><span>Límite: ${fmt(a.limit)}</span></div><div class="pw"><div class="pb" style="width:${p}%;background:${p>80?'var(--redg)':p>50?'var(--yelg)':'var(--acg)'}"></div></div></div>${datesHtml}${periodHtml}${invoiceHtml}`;
+      extra=`<div style="margin-top:10px"><div style="display:flex;justify-content:space-between;font-size:11px;color:var(--t3);margin-bottom:3px"><span>Usado: ${a.balanceHidden?'••••••':fmt(used)}</span><span>Límite: ${a.balanceHidden?'••••••':fmt(a.limit)}</span></div><div class="pw"><div class="pb" style="width:${p}%;background:${p>80?'var(--redg)':p>50?'var(--yelg)':'var(--acg)'}"></div></div></div>${datesHtml}${periodHtml}${invoiceHtml}`;
     }
     // Últimos movimientos — vista previa de las 2 transacciones más
     // recientes de esta cuenta, para no tener que entrar a Transacciones
     // solo para ver "¿qué pasó aquí últimamente?".
     const recent=Store.queryTransactions({accountId:a.id,sortBy:'date',sortDir:'desc'}).slice(0,2);
     const recentHtml=recent.length?`<div style="margin-top:10px;padding-top:9px;border-top:1px solid var(--bdr)">${recent.map(t=>`<div style="display:flex;justify-content:space-between;gap:8px;font-size:11px;color:var(--t3);padding:2px 0"><span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(t.description)}</span><span style="font-family:'DM Mono',monospace;color:${t.type==='expense'?'var(--exp)':t.type==='income'?'var(--inc)':'var(--t2)'};flex-shrink:0">${t.type==='expense'?'-':t.type==='income'?'+':''}${fmt(t.amount)}</span></div>`).join('')}</div>`:'';
-    return`<div style="background:var(--bg3);border:1px solid var(--bdr);border-radius:var(--r);padding:15px;position:relative;border-left:3px solid ${a.color||'var(--ac)'}"><div style="position:absolute;top:12px;right:12px;display:flex;align-items:center;gap:6px"><span class="bdg ${tc[a.type]||'bdg-n'}">${tl[a.type]||a.type}</span><button class="btn bg_ ico sm" title="Más opciones" onclick="showRowMenu(this,[{label:'Editar',icon:'✎',onClick:()=>openAccM('${a.id}')},{label:'Eliminar',icon:'✕',danger:true,onClick:()=>delAcc('${a.id}')}])">⋮</button></div><div style="font-size:15px;font-weight:500;margin-bottom:4px">${esc(a.name)}</div><div style="font-family:'DM Mono',monospace;font-size:19px;color:${M(a.balance)>=0?'var(--inc)':'var(--exp)'}">${fmt(a.balance)}</div>${extra}${recentHtml}</div>`;
+    return`<div style="background:var(--bg3);border:1px solid var(--bdr);border-radius:var(--r);padding:15px;position:relative;border-left:3px solid ${a.color||'var(--ac)'}${a.locked?';opacity:.85':''}">
+      <div style="position:absolute;top:12px;right:12px;display:flex;align-items:center;gap:4px">
+        <span class="bdg ${tc[a.type]||'bdg-n'}">${tl[a.type]||a.type}</span>
+        <button class="btn bg_ ico sm" title="${a.locked?'Desbloquear cuenta':'Bloquear cuenta (no permite crear/editar movimientos)'}" onclick="toggleAccLocked('${a.id}')">${a.locked?'🔒':'🔓'}</button>
+        <button class="btn bg_ ico sm" title="${a.balanceHidden?'Mostrar saldo':'Ocultar saldo'}" onclick="toggleAccBalanceHidden('${a.id}')">${a.balanceHidden?'🙈':'👁'}</button>
+        <button class="btn bg_ ico sm" title="Más opciones" onclick="showRowMenu(this,[{label:'Editar',icon:'✎',onClick:()=>openAccM('${a.id}')},{label:'${a.archived?'Desarchivar':'Archivar'}',icon:'${a.archived?'📤':'📥'}',onClick:()=>toggleAccArchived('${a.id}')},{label:'Eliminar',icon:'✕',danger:true,onClick:()=>delAcc('${a.id}')}])">⋮</button>
+      </div>
+      <div style="font-size:15px;font-weight:500;margin-bottom:4px">${esc(a.name)}${a.locked?' 🔒':''}</div>
+      <div style="font-family:'DM Mono',monospace;font-size:19px;color:${a.balanceHidden?'var(--t3)':M(a.balance)>=0?'var(--inc)':'var(--exp)'}">${accBalanceLabel(a)}</div>
+      ${extra}${recentHtml}
+    </div>`;
+}
+async function toggleAccLocked(id){
+  const a=Store.getAccountById(id);if(!a)return;
+  Store.updateAccount(id,{locked:!a.locked});
+  renderAccounts();toast(a.locked?'Cuenta desbloqueada':'Cuenta bloqueada — no se podrán crear ni editar movimientos en ella');
+}
+function toggleAccBalanceHidden(id){
+  const a=Store.getAccountById(id);if(!a)return;
+  Store.updateAccount(id,{balanceHidden:!a.balanceHidden});
+  renderAccounts();
+}
+async function toggleAccArchived(id){
+  const a=Store.getAccountById(id);if(!a)return;
+  if(!a.archived){
+    const ok=await confirm_('¿Archivar cuenta?',`"${a.name}" dejará de aparecer en Cuentas y no se podrá elegir para movimientos nuevos. Sus transacciones pasadas se quedan tal cual en el historial. Puedes desarchivarla cuando quieras.`,'Archivar');
+    if(!ok)return;
+  }
+  Store.updateAccount(id,{archived:!a.archived});
+  renderAccounts();renderDash();toast(a.archived?'Cuenta desarchivada':'Cuenta archivada');
 }
 
 async function delAcc(id){
@@ -3553,11 +3632,13 @@ function renderMSI(){
 
 function openMsiPayM(txId){
   const tx=S.transactions.find(t=>t.id===txId);if(!tx)return;
+  const tdc=Store.getAccountById(tx.accountId);
+  if(tdc?.locked){toast('Esta cuenta está bloqueada — no se pueden registrar movimientos en ella.',false);return}
   $('msi-pay-txid').value=txId;
   $('msi-pay-info').innerHTML=`<strong>${esc(tx.description)}</strong><br>Pago ${(tx.msi.paid||0)+1} de ${tx.msi.months} · monto sugerido: <strong>${fmt(tx.msi.monthly)}</strong>`;
   $('msi-pay-amt').value=tx.msi.monthly.toFixed(2);
   // Fill account selector excluding the TDC that has the MSI
-  const opts=S.accounts.filter(a=>a.id!==tx.accountId).map(a=>`<option value="${a.id}">${esc(a.name)} (${fmt(a.balance)})</option>`).join('');
+  const opts=selectableAccounts(tx.accountId).map(a=>`<option value="${a.id}">${esc(a.name)} (${accBalanceLabel(a)})</option>`).join('');
   $('msi-pay-acc').innerHTML=opts||'<option value="">Sin otras cuentas</option>';
   oM('mo-msi-pay');
 }
@@ -3907,8 +3988,8 @@ function openSubM(editId=null){
     $('sub-freq').value='monthly';$('sub-ndt').value=td_();$('sub-since').value=td_();
   }
   // fill acc selector
-  const opts=S.accounts.map(a=>`<option value="${a.id}">${esc(a.name)}</option>`).join('');
-  $('sub-acc').innerHTML=opts||'<option value="">Sin cuentas</option>';
+  const opts=selectableAccounts().map(a=>`<option value="${a.id}">${esc(a.name)}</option>`).join('');
+  $('sub-acc').innerHTML=opts||'<option value="">Sin cuentas disponibles</option>';
   // fill cat selector (expense)
   const sc=$('sub-cat');sc.innerHTML='<option value="">Sin categoría</option>';
   S.categories.filter(c=>c.type==='expense').forEach(c=>{const o=document.createElement('option');o.value=c.name;o.textContent=c.icon+' '+c.name;sc.appendChild(o)});
@@ -4018,7 +4099,7 @@ function openDebtTypePicker(){oM('mo-debt-type')}
 function openDebtM(k,editId=null){
   $('debt-k').value=k;$('debt-eid').value=editId||'';
   $('debt-ttl').textContent=editId?'Editar deuda':k==='owed'?'Alguien me debe':'Yo debo';
-  $('d-acc').innerHTML='<option value="">Sin cuenta</option>'+S.accounts.map(a=>`<option value="${a.id}">${esc(a.name)} (${fmt(a.balance)})</option>`).join('');
+  $('d-acc').innerHTML='<option value="">Sin cuenta</option>'+selectableAccounts().map(a=>`<option value="${a.id}">${esc(a.name)} (${accBalanceLabel(a)})</option>`).join('');
   $('d-autotx').checked=false;
   if(editId){
     const d=Store.getDebtById(k,editId);if(!d)return;
@@ -4143,7 +4224,7 @@ function renderGoals(){
     return`<div class="card"><div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px"><div style="font-size:26px">${esc(g.icon)}</div><div style="display:flex;align-items:center;gap:6px">${dl!==null?`<span class="bdg ${dl<0?'bdg-r':dl<30?'bdg-y':'bdg-b'}">${dl<0?'Vencido':dl+'d'}</span>`:''}<button class="btn bg_ ico sm" title="Más opciones" onclick="showRowMenu(this,[{label:'Editar',icon:'✎',onClick:()=>openGoalM('${g.id}')},{label:'Eliminar',icon:'✕',danger:true,onClick:()=>delG('${g.id}')}])">⋮</button></div></div><div style="font-size:14px;font-weight:500;margin-bottom:2px">${esc(g.name)}</div><div style="font-size:11px;color:var(--t3);margin-bottom:10px">${g.due?'Límite: '+fmtDate(g.due):'Sin fecha límite'}</div><div style="display:flex;justify-content:space-between;font-size:13px;margin-bottom:4px"><span style="font-family:'DM Mono',monospace;color:var(--inc)">${fmt(g.saved||0)}</span><span style="font-family:'DM Mono',monospace;color:var(--t2)">${fmt(g.target)}</span></div><div class="pw" style="margin-bottom:6px"><div class="pb" style="width:${p}%;background:var(--ac)"></div></div><div style="font-size:11px;color:var(--t3);margin-bottom:10px">${p}% · faltan ${fmt(rem)}</div><button class="btn bg_ sm" style="width:100%" onclick="openGabM('${g.id}')">+ Abonar</button></div>`;
   }).join('');
 }
-function abonar(id){const g=Store.getGoalById(id);if(!g)return;$('gab-id').value=id;$('gab-info').textContent=g.icon+' '+g.name+' — Falta: '+fmt(Math.max(0,g.target-(g.saved||0)));$('gab-acc').innerHTML='<option value="">Sin descontar de cuenta</option>'+S.accounts.map(a=>`<option value="${a.id}">${esc(a.name)} (${fmt(a.balance)})</option>`).join('');$('gab-amt').value='';oM('mo-gab')}
+function abonar(id){const g=Store.getGoalById(id);if(!g)return;$('gab-id').value=id;$('gab-info').textContent=g.icon+' '+g.name+' — Falta: '+fmt(Math.max(0,g.target-(g.saved||0)));$('gab-acc').innerHTML='<option value="">Sin descontar de cuenta</option>'+selectableAccounts().map(a=>`<option value="${a.id}">${esc(a.name)} (${accBalanceLabel(a)})</option>`).join('');$('gab-amt').value='';oM('mo-gab')}
 async function delG(id){const ok=await confirm_('¿Eliminar objetivo?','');if(!ok)return;Store.deleteGoal(id);renderGoals();toast('Eliminado')}
 
 // EV legacy removed — tracking unificado en Vehículos
@@ -4485,7 +4566,7 @@ function openVRec(vid,editId=null){
   $('vr-qty-label').textContent=ft.energyLabel;
   // Fill type select
   $('vr-type').innerHTML=V_REC_TYPES.map(t=>`<option value="${t}">${V_TYPE_LABELS[t]}</option>`).join('');
-  $('vr-acc').innerHTML='<option value="">Selecciona una cuenta</option>'+S.accounts.map(a=>`<option value="${a.id}">${esc(a.name)} (${fmt(a.balance)})</option>`).join('');
+  $('vr-acc').innerHTML='<option value="">Selecciona una cuenta</option>'+selectableAccounts().map(a=>`<option value="${a.id}">${esc(a.name)} (${accBalanceLabel(a)})</option>`).join('');
   $('vr-cat').innerHTML='<option value="">Selecciona una categoría</option>'+S.categories.filter(c=>c.type==='expense').map(c=>`<option value="${esc(c.name)}">${c.icon} ${esc(c.name)}</option>`).join('');
   if(editId){
     const r=v.records?.find(x=>x.id===editId);if(!r)return;
@@ -4739,7 +4820,7 @@ function openSecRecordM(editId=null){
   // aislada por sección — la misma categoría "Comida" en dos secciones
   // distintas terminaba duplicada y sin relación entre sí).
   $('sr-cat').innerHTML='<option value="">Sin categoría</option>'+S.categories.filter(c=>c.type==='expense').map(c=>`<option value="${esc(c.name)}">${c.icon} ${esc(c.name)}</option>`).join('');
-  $('sr-acc').innerHTML='<option value="">No descontar de cuenta</option>'+S.accounts.map(a=>`<option value="${a.id}">${esc(a.name)} (${fmt(a.balance)})</option>`).join('');
+  $('sr-acc').innerHTML='<option value="">No descontar de cuenta</option>'+selectableAccounts().map(a=>`<option value="${a.id}">${esc(a.name)} (${accBalanceLabel(a)})</option>`).join('');
   if(editId){
     const r=(sec.records||[]).find(x=>x.id===editId);if(!r)return;
     $('sr-dt').value=r.dt;$('sr-member').value=r.member;$('sr-cat').value=r.cat;
@@ -4832,7 +4913,7 @@ function openDPayM(k,id){
   const d=Store.getDebtById(k,id);if(!d)return;
   $('dpay-k').value=k;$('dpay-id').value=id;
   $('dpay-info').textContent=d.person+' — Restante: '+fmt(Math.max(0,d.amount-(d.paid||0)));
-  $('dpay-acc').innerHTML='<option value="">No descontar de cuenta</option>'+S.accounts.map(a=>`<option value="${a.id}">${esc(a.name)} (${fmt(a.balance)})</option>`).join('');
+  $('dpay-acc').innerHTML='<option value="">No descontar de cuenta</option>'+selectableAccounts().map(a=>`<option value="${a.id}">${esc(a.name)} (${accBalanceLabel(a)})</option>`).join('');
   $('dpay-dt').value=td_();$('dpay-amt').value='';oM('mo-dpay');
 }
 function execDP(){
@@ -4869,7 +4950,7 @@ function openGabM(id){
   const g=S.goals.find(x=>x.id===id);if(!g)return;
   $('gab-id').value=id;
   $('gab-info').textContent=g.icon+' '+g.name+' — Falta: '+fmt(Math.max(0,g.target-(g.saved||0)));
-  $('gab-acc').innerHTML='<option value="">Sin descontar de cuenta</option>'+S.accounts.map(a=>`<option value="${a.id}">${esc(a.name)} (${fmt(a.balance)})</option>`).join('');
+  $('gab-acc').innerHTML='<option value="">Sin descontar de cuenta</option>'+selectableAccounts().map(a=>`<option value="${a.id}">${esc(a.name)} (${accBalanceLabel(a)})</option>`).join('');
   $('gab-dt').value=td_();$('gab-amt').value='';oM('mo-gab');
 }
 function execGab(){
