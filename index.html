@@ -488,6 +488,7 @@ input:checked+.sl:before{transform:translateX(18px);background:#fff}
     <div class="card"><div class="slbl">Gastos por categoría</div><div class="cht"><canvas id="ch-cat"></canvas></div></div>
   </div>
   <div class="card"><div class="slbl">Tendencia de balance</div><div class="cht" style="height:180px"><canvas id="ch-trend"></canvas></div></div>
+  <div class="card" style="margin-top:14px"><div class="slbl">Evolución del patrimonio</div><div class="cht" style="height:180px"><canvas id="ch-nw-report"></canvas></div></div>
 </div>
 
 <!-- BUDGET -->
@@ -3670,7 +3671,7 @@ function execMsiPay(){
 }
 
 // ==================== ANALYSIS ====================
-let anPeriod='month';let ch1,ch2,ch3;
+let anPeriod='month';let ch1,ch2,ch3,ch4;
 
 function setPeriod(p,el){anPeriod=p;document.querySelectorAll('.p2b').forEach(b=>b.classList.remove('on'));el.classList.add('on');renderAnalysis()}
 
@@ -3728,6 +3729,21 @@ function renderAnalysis(){
   if(ch3)ch3.destroy();
   const balM=months.map((_,i)=>incM[i]-expM[i]);
   ch3=new Chart($('ch-trend'),{type:'line',data:{labels,datasets:[{label:'Balance',data:balM,borderColor:'#6ee7b7',backgroundColor:'rgba(110,231,183,0.07)',fill:true,tension:0.4,pointRadius:4,pointBackgroundColor:'#6ee7b7'},{label:'Gastos',data:expM,borderColor:'#f87171',backgroundColor:'rgba(248,113,113,0.05)',fill:false,tension:0.4,pointRadius:3}]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{labels:{font:{size:11}}}},scales:{x:{grid:{color:gridC}},y:{grid:{color:gridC},ticks:{callback:v=>fmt(v)}}}}});
+
+  // Evolución del patrimonio — responde una pregunta distinta a
+  // "Tendencia de balance" (que es flujo mensual): aquí se ve el
+  // PATRIMONIO ACUMULADO mes a mes, usando el mismo historial que ya se
+  // guarda automáticamente cada mes (S.nwHistory) y que también alimenta
+  // la comparación del hero del Dashboard.
+  if(ch4)ch4.destroy();
+  const nwHist=[...(S.nwHistory||[])].sort((a,b)=>a.k.localeCompare(b.k));
+  if(nwHist.length>=2){
+    const nwLabels=nwHist.map(h=>{const d=new Date(h.k+'-01');return d.toLocaleDateString('es-MX',{month:'short',year:'2-digit'})});
+    const nwVals=nwHist.map(h=>h.nw);
+    ch4=new Chart($('ch-nw-report'),{type:'line',data:{labels:nwLabels,datasets:[{label:'Patrimonio neto',data:nwVals,borderColor:'#60a5fa',backgroundColor:'rgba(96,165,250,0.08)',fill:true,tension:0.35,pointRadius:4,pointBackgroundColor:'#60a5fa'}]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false}},scales:{x:{grid:{color:gridC}},y:{grid:{color:gridC},ticks:{callback:v=>fmt(v)}}}}});
+  } else {
+    const ctx=$('ch-nw-report').getContext('2d');ctx.clearRect(0,0,$('ch-nw-report').width,$('ch-nw-report').height);ctx.fillStyle=textC;ctx.textAlign='center';ctx.font='13px Sora';ctx.fillText('Necesitas al menos 2 meses de historial — se guarda automáticamente',150,90);
+  }
 }
 
 function getLast6Months(){const r=[];const d=new Date();for(let i=5;i>=0;i--){const x=new Date(d.getFullYear(),d.getMonth()-i,1);r.push(x.getFullYear()+'-'+String(x.getMonth()+1).padStart(2,'0'))}return r}
