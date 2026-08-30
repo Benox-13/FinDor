@@ -292,16 +292,17 @@ input:checked+.sl:before{transform:translateX(18px);background:#fff}
 #mob-menu-btn{display:none;position:fixed;top:12px;left:12px;z-index:200;width:40px;height:40px;border-radius:10px;background:var(--bg2);border:1px solid var(--bdr2);color:var(--txt);font-size:18px;cursor:pointer;align-items:center;justify-content:center;box-shadow:var(--sha2)}
 #mob-overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:150}
 #mob-overlay.open{display:block}
+#bottom-nav{display:none}
 
 @media (max-width:680px){
-  #mob-menu-btn{display:flex}
+  #mob-menu-btn{display:none}
   /* El menú pasa de ocupar espacio fijo en el layout a flotar por encima,
      oculto fuera de la pantalla hasta que se abre. */
   #sb{position:fixed;top:0;left:0;transform:translateX(-100%);transition:transform .25s ease;z-index:180;box-shadow:0 0 40px rgba(0,0,0,.5)}
   #sb.open{transform:translateX(0)}
-  /* Espacio arriba para que el contenido no quede tapado por el botón de
-     hamburguesa flotante. */
-  .page{padding:64px 14px 28px}
+  /* Espacio arriba y abajo para que el contenido no quede tapado por la
+     barra inferior fija. */
+  .page{padding:16px 14px calc(78px + env(safe-area-inset-bottom)) 14px}
   .ph{flex-direction:column;align-items:flex-start;gap:8px}
   .pt{font-size:22px}
   /* Todas las cuadrículas de 2/3/4 columnas colapsan a 1 sola columna —
@@ -310,6 +311,14 @@ input:checked+.sl:before{transform:translateX(18px);background:#fff}
   /* Los modales ya usaban width:100% con max-width, así que se adaptan
      solos — solo reducimos un poco el padding exterior para ganar espacio. */
   .mo{padding:10px}
+
+  /* ---- Barra de navegación inferior ---- */
+  #bottom-nav{display:flex;position:fixed;bottom:0;left:0;right:0;z-index:190;background:var(--bg2);border-top:1px solid var(--bdr);padding:6px 4px calc(6px + env(safe-area-inset-bottom));align-items:flex-start;justify-content:space-around}
+  .bn-item{display:flex;flex-direction:column;align-items:center;gap:2px;color:var(--t3);font-size:9px;padding:4px 2px;border-radius:8px;flex:1;min-width:0;cursor:pointer;user-select:none;transition:color .15s}
+  .bn-item .bn-ic{font-size:19px;line-height:1}
+  .bn-item .bn-lbl{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:100%}
+  .bn-item.on{color:var(--ac)}
+  .bn-fab{flex-shrink:0;width:46px;height:46px;border-radius:50%;background:var(--acg);color:#0a1a12;font-size:26px;font-weight:600;display:flex;align-items:center;justify-content:center;margin-top:-18px;box-shadow:0 4px 16px rgba(48,214,147,.4);cursor:pointer;line-height:1}
 }
 </style>
 </head>
@@ -340,9 +349,24 @@ input:checked+.sl:before{transform:translateX(18px);background:#fff}
 <!-- OFFLINE / SYNC BADGE — Fase 4, incremento 4 -->
 <div id="offline-badge" style="display:none;position:fixed;top:12px;left:50%;transform:translateX(-50%);z-index:99998;background:var(--bg3);border:1px solid var(--bdr);border-radius:20px;padding:7px 16px;font-size:12px;color:var(--t2);box-shadow:0 4px 16px rgba(0,0,0,.3)"></div>
 
-<!-- Botón de menú y overlay para móvil — ocultos en escritorio (ver @media en el CSS) -->
-<button id="mob-menu-btn" onclick="toggleSidebar()" aria-label="Menú">☰</button>
+<!-- Botón de menú y overlay para móvil — el botón ya no se usa como
+     disparador visible (su función la toma el ícono "⋯" de la barra
+     inferior), pero se deja en el DOM por si algo más lo referencia. -->
+<button id="mob-menu-btn" onclick="toggleSidebar()" aria-label="Menú" style="display:none !important"></button>
 <div id="mob-overlay" onclick="toggleSidebar()"></div>
+
+<!-- BARRA DE NAVEGACIÓN INFERIOR — solo visible en móvil (ver @media).
+     Accesos directos a las secciones de más uso diario + botón central
+     de "nueva transacción" + acceso al menú completo con los tres puntos. -->
+<nav id="bottom-nav">
+  <div class="bn-item on" data-page="dashboard" onclick="go('dashboard')"><span class="bn-ic">◈</span><span class="bn-lbl">Inicio</span></div>
+  <div class="bn-item" data-page="transactions" onclick="go('transactions')"><span class="bn-ic">⇄</span><span class="bn-lbl">Movimientos</span></div>
+  <div class="bn-item" data-page="accounts" onclick="go('accounts')"><span class="bn-ic">▣</span><span class="bn-lbl">Cuentas</span></div>
+  <div class="bn-fab" onclick="openTxM()" aria-label="Nueva transacción">+</div>
+  <div class="bn-item" data-page="budget" onclick="go('budget')"><span class="bn-ic">◧</span><span class="bn-lbl">Presupuesto</span></div>
+  <div class="bn-item" data-page="loans" onclick="go('loans')"><span class="bn-ic">⇅</span><span class="bn-lbl">Préstamos</span></div>
+  <div class="bn-item" onclick="toggleSidebar()"><span class="bn-ic">⋯</span><span class="bn-lbl">Menú</span></div>
+</nav>
 
 <!-- SIDEBAR -->
 <nav id="sb">
@@ -2655,8 +2679,10 @@ function toast(msg,ok=true){const t=$('toast');$('t-ic').textContent=ok?'✓':'�
 function go(page){
   document.querySelectorAll('.page').forEach(p=>p.classList.remove('on'));
   document.querySelectorAll('.ni').forEach(n=>n.classList.remove('on'));
+  document.querySelectorAll('.bn-item').forEach(n=>n.classList.remove('on'));
   $('page-'+page)?.classList.add('on');
   document.querySelectorAll('.ni').forEach(n=>{if(n.getAttribute('onclick')?.includes("'"+page+"'"))n.classList.add('on')});
+  document.querySelectorAll('.bn-item[data-page]').forEach(n=>{if(n.dataset.page===page)n.classList.add('on')});
   const renders={dashboard:renderDash,transactions:renderTxP,accounts:renderAccounts,analysis:renderAnalysis,budget:renderBudget,subscriptions:renderSubs,loans:renderLoans,goals:renderGoals,settings:renderSettings,billing:renderBilling};
   renders[page]?.();
   updateNW();
