@@ -2928,6 +2928,16 @@ function ensureAccountOption(selectId,accId){
   sel.insertBefore(opt,sel.options[1]||null);
 }
 
+// Garantiza que exista una categoría con este nombre — si no existe, la
+// crea. Se usa para secciones que necesitan una categoría fija (como
+// "Préstamos"): antes, si el usuario nunca había creado esa categoría a
+// mano, el vínculo fallaba en silencio (category_id quedaba null al
+// sincronizar). Ahora la categoría queda garantizada de verdad.
+function ensureCategory(name,type){
+  let c=S.categories.find(c=>c.name===name);
+  if(!c)c=Store.addCategory({name,icon:'💰',type});
+  return c;
+}
 function getCatIcon(catName){const c=S.categories.find(c=>c.name===catName||c.subs?.includes(catName));return c?c.icon:'💸'}
 function getCatParent(sub){const c=S.categories.find(c=>c.subs?.includes(sub));return c?c.name:null}
 function getCatType(catName){const c=S.categories.find(c=>c.name===catName||c.subs?.includes(catName));return c?c.type:null}
@@ -4162,6 +4172,7 @@ async function saveDebt(){
         Store._syncAccountBalance(accId); // antes esto nunca llegaba a Supabase
       }
     }
+    ensureCategory('Préstamos','expense');
     const loanTx={id:uid(),type:startType,amount:amt,date:obj.start||td_(),time:tnow_(),description:startLabel+person,category:'Préstamos',subcategory:k==='iowe'?'Debo':'Me deben',accountId:accId||'',notes:`${k==='iowe'?'Me prestaron':'Presté'} — vence: ${obj.due||'sin fecha'}`+(accId&&$('d-autotx').checked?'':', sin efecto en cuenta')};
     S.transactions.push(loanTx);
     save();
@@ -4234,18 +4245,38 @@ function openCatM(){$('ct-name').value='';$('ct-icon').value='';$('ct-type').val
 function saveCat(){const n=$('ct-name').value.trim();if(!n){toast('Nombre requerido',false);return}Store.addCategory({name:n,icon:$('ct-icon').value||'📌',type:$('ct-type').value});cM('mo-cat');renderCats();populateTxCatFilter();toast('Categoría creada')}
 function openSCatM(cid){$('sc-pid').value=cid;$('sc-name').value='';oM('mo-scat')}
 function saveSCat(){const cid=$('sc-pid').value;const n=$('sc-name').value.trim();if(!n){toast('Nombre requerido',false);return}const c=Store.addSubcategory(cid,n);if(c){cM('mo-scat');renderCats();toast('Subcategoría agregada')}}
-async function delCat(id){const ok=await confirm_('¿Eliminar categoría?','Las transacciones con esta categoría perderán su clasificación.');if(!ok)return;Store.deleteCategory(id);renderCats();populateTxCatFilter();toast('Eliminada')}
+async function delCat(id){
+  const c=S.categories.find(x=>x.id===id);if(!c)return;
+  const n=S.transactions.filter(t=>t.category===c.name).length;
+  const msg=n?`${n} transacción${n!==1?'es':''} con esta categoría perderán su clasificación.`:'No hay transacciones usando esta categoría.';
+  const ok=await confirm_('¿Eliminar categoría?',msg);if(!ok)return;
+  Store.deleteCategory(id);renderCats();populateTxCatFilter();toast('Eliminada');
+}
 async function delSCat(cid,s){const ok=await confirm_('¿Eliminar subcategoría?',`Se quitará "${s}" — las transacciones que la usan perderán esa clasificación.`);if(!ok)return;Store.deleteSubcategory(cid,s);renderCats()}
 function togCB(id){$('cb-'+id)?.classList.toggle('op')}
 function renderCats(){
   const rSec=(type,eid)=>{
     const el=$(eid);if(!el)return;
     const cats=S.categories.filter(c=>c.type===type);
-    el.innerHTML=cats.map(c=>`<div class="cs"><div class="ch" onclick="togCB('${c.id}')"><div style="display:flex;align-items:center;gap:7px"><span style="font-size:15px">${esc(c.icon)}</span><span style="font-size:13px;font-weight:500">${esc(c.name)}</span><span style="font-size:11px;color:var(--t3)">(${c.subs?.length||0})</span></div><div onclick="event.stopPropagation()"><button class="btn bg_ ico sm" title="Más opciones" onclick="showRowMenu(this,[{label:'Agregar subcategoría',icon:'+',onClick:()=>openSCatM('${c.id}')},{label:'Eliminar categoría',icon:'✕',danger:true,onClick:()=>delCat('${c.id}')}])">⋮</button></div></div><div class="cb" id="cb-${c.id}"><div style="display:flex;flex-wrap:wrap;gap:4px;margin-bottom:7px">${(c.subs||[]).map(s=>`<span class="cpill">${esc(s)}<span class="dx" data-cid="${c.id}" data-sub="${esc(s)}">×</span></span>`).join('')||'<span style="color:var(--t3);font-size:12px">Sin subcategorías</span>'}</div></div></div>`).join('')||`<div style="color:var(--t3);font-size:13px;padding:8px">Sin categorías</div>`;
-    // Auditoría #2: antes se pasaba el nombre de la subcategoría directo dentro
-    // de un onclick="delSCat('id','${s}')" — si el nombre traía una comilla
-    // simple, rompía el atributo (inyección). Ahora se lee de dataset, que
-    // preserva el string tal cual sin poder escapar del atributo.
+    el.innerHTML=cats.map(c=>{
+      // Estadística de uso — cuántas transacciones y cuánto dinero hay
+      // registrado bajo esta categoría, para que no sea solo una lista de
+      // nombres sino que ayude a entender cómo se usa de verdad.
+      const catTxs=S.transactions.filter(t=>t.category===c.name);
+      const total=catTxs.reduce((a,t)=>a+M(t.amount),0);
+      const usageLabel=catTxs.length?`${catTxs.length} movimiento${catTxs.length!==1?'s':''} · ${fmt(total)}`:'Sin movimientos todavía';
+      // Vínculo Sección→Categoría: por ahora el único caso donde se puede
+      // afirmar con certeza que una categoría pertenece a una sección fija
+      // es "Préstamos" (las demás secciones dejan elegir cualquier
+      // categoría libremente, así que no hay un vínculo fijo que mostrar).
+      const sectionBadge=c.name==='Préstamos'?'<span class="bdg bdg-b" style="margin-left:6px">🔗 Sección Préstamos</span>':'';
+      return`<div class="cs"><div class="ch" onclick="togCB('${c.id}')"><div style="display:flex;align-items:center;gap:10px"><div class="ic-badge ic-badge-n" style="width:30px;height:30px;font-size:14px">${esc(c.icon)}</div><div><div style="font-size:13px;font-weight:500">${esc(c.name)}<span style="font-size:11px;color:var(--t3);font-weight:400"> · ${c.subs?.length||0} subcategoría${c.subs?.length!==1?'s':''}</span>${sectionBadge}</div><div style="font-size:11px;color:var(--t3)">${usageLabel}</div></div></div><div onclick="event.stopPropagation()"><button class="btn bg_ ico sm" title="Más opciones" onclick="showRowMenu(this,[{label:'Agregar subcategoría',icon:'+',onClick:()=>openSCatM('${c.id}')},{label:'Eliminar categoría',icon:'✕',danger:true,onClick:()=>delCat('${c.id}')}])">⋮</button></div></div><div class="cb" id="cb-${c.id}"><div style="display:flex;flex-wrap:wrap;gap:4px;margin-bottom:7px">${(c.subs||[]).map(s=>`<span class="cpill">${esc(s)}<span class="dx" data-cid="${c.id}" data-sub="${esc(s)}">×</span></span>`).join('')||'<span style="color:var(--t3);font-size:12px">Sin subcategorías</span>'}</div></div></div>`;
+    }).join('')||`<div style="color:var(--t3);font-size:13px;padding:8px">Sin categorías</div>`;
+    // Auditoría #2: antes se pasaba el nombre de la subcategoría directo
+    // dentro de un onclick="delSCat('id','${s}')" — si el nombre traía una
+    // comilla simple, rompía el atributo (inyección). Ahora se lee de
+    // dataset, que preserva el string tal cual sin poder escapar del
+    // atributo.
     el.querySelectorAll('.dx[data-sub]').forEach(x=>{
       x.addEventListener('click',()=>delSCat(x.dataset.cid,x.dataset.sub));
     });
@@ -4934,6 +4965,7 @@ function execDP(){
   // subcategoría — mismo patrón que ya usa saveDebt() para el registro
   // inicial del préstamo.
   const accId=$('dpay-acc').value;const dt=$('dpay-dt').value||td_();
+  ensureCategory('Préstamos','expense');
   Store.addTransaction({type:k==='iowe'?'expense':'income',amount:v,date:dt,time:tnow_(),description:(k==='iowe'?'Pago a ':'Cobro de ')+d.person,category:'Préstamos',subcategory:k==='iowe'?'Debo':'Me deben',accountId:accId||'',notes:'Pago de préstamo'});
   // Si el préstamo usa mensualidades fijas, cada pago avanza el contador —
   // igual que el patrón ya usado para MSI (un pago = una mensualidad,
