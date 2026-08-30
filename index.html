@@ -450,7 +450,7 @@ input:checked+.sl:before{transform:translateX(18px);background:#fff}
   <div class="ph"><div><div class="pt">Cuentas</div><div class="ps">Gestión de dinero por cuenta</div></div><button class="btn bp" onclick="openAccM()">+ Nueva cuenta</button></div>
   <!-- Loan totals summary -->
   <div class="g2" style="margin-bottom:18px" id="acc-loan-summary"></div>
-  <div id="acc-grid" class="g3" style="margin-bottom:22px"></div>
+  <div id="acc-grid" style="margin-bottom:22px"></div>
   <div class="slbl">MESES SIN INTERESES ACTIVOS</div>
   <div id="msi-list"></div>
 </div>
@@ -3443,6 +3443,7 @@ async function saveAcc(){
   cM('mo-acc');renderAccounts();renderDash();populateTxAccFilter();
 }
 
+const ACC_TYPE_GROUP_LABEL={cash:'Efectivo',debit:'Débito',credit:'Tarjetas de crédito'};
 function renderAccounts(){
   // Loan summary cards
   const ls=$('acc-loan-summary');
@@ -3453,7 +3454,21 @@ function renderAccounts(){
   }
   const g=$('acc-grid');
   if(!S.accounts.length){g.innerHTML=emptyState('▣','Sin cuentas todavía','Agrega tu primera cuenta (efectivo, débito o tarjeta de crédito) para empezar a registrar tus movimientos.','+ Nueva cuenta',"openAccM()");renderMSI();return}
-  g.innerHTML=S.accounts.map(a=>{
+  // Agrupadas visualmente por tipo (Efectivo / Débito / Tarjetas de
+  // crédito) — solo se muestra el encabezado del grupo si tiene al menos
+  // una cuenta. No se agregaron tipos nuevos ni se tocó el modelo de
+  // datos: son los mismos 3 tipos que ya existían.
+  const groupOrder=['cash','debit','credit'];
+  const html=groupOrder.map(type=>{
+    const accsOfType=S.accounts.filter(a=>a.type===type);
+    if(!accsOfType.length)return '';
+    const cards=accsOfType.map(a=>accountCardHTML(a)).join('');
+    return`<div class="slbl" style="margin:${type==='cash'?'0':'20px'} 0 10px">${ACC_TYPE_GROUP_LABEL[type]}</div><div class="g3">${cards}</div>`;
+  }).join('');
+  g.innerHTML=html;
+  renderMSI();updateNW();
+}
+function accountCardHTML(a){
     const tl={cash:'Efectivo',debit:'Débito',credit:'TDC'};const tc={cash:'bdg-g',debit:'bdg-b',credit:'bdg-p'};
     let extra='';
     if(a.type==='credit'&&a.limit){
@@ -3510,9 +3525,12 @@ function renderAccounts(){
       }
       extra=`<div style="margin-top:10px"><div style="display:flex;justify-content:space-between;font-size:11px;color:var(--t3);margin-bottom:3px"><span>Usado: ${fmt(used)}</span><span>Límite: ${fmt(a.limit)}</span></div><div class="pw"><div class="pb" style="width:${p}%;background:${p>80?'var(--redg)':p>50?'var(--yelg)':'var(--acg)'}"></div></div></div>${datesHtml}${periodHtml}${invoiceHtml}`;
     }
-    return`<div style="background:var(--bg3);border:1px solid var(--bdr);border-radius:var(--r);padding:15px;position:relative;border-left:3px solid ${a.color||'var(--ac)'}"><div style="position:absolute;top:12px;right:12px;display:flex;align-items:center;gap:6px"><span class="bdg ${tc[a.type]||'bdg-n'}">${tl[a.type]||a.type}</span><button class="btn bg_ ico sm" title="Más opciones" onclick="showRowMenu(this,[{label:'Editar',icon:'✎',onClick:()=>openAccM('${a.id}')},{label:'Eliminar',icon:'✕',danger:true,onClick:()=>delAcc('${a.id}')}])">⋮</button></div><div style="font-size:11px;color:var(--t3);margin-bottom:7px;text-transform:uppercase;letter-spacing:.6px">${tl[a.type]}</div><div style="font-size:15px;font-weight:500;margin-bottom:4px">${esc(a.name)}</div><div style="font-family:'DM Mono',monospace;font-size:19px;color:${M(a.balance)>=0?'var(--inc)':'var(--exp)'}">${fmt(a.balance)}</div>${extra}</div>`;
-  }).join('');
-  renderMSI();updateNW();
+    // Últimos movimientos — vista previa de las 2 transacciones más
+    // recientes de esta cuenta, para no tener que entrar a Transacciones
+    // solo para ver "¿qué pasó aquí últimamente?".
+    const recent=Store.queryTransactions({accountId:a.id,sortBy:'date',sortDir:'desc'}).slice(0,2);
+    const recentHtml=recent.length?`<div style="margin-top:10px;padding-top:9px;border-top:1px solid var(--bdr)">${recent.map(t=>`<div style="display:flex;justify-content:space-between;gap:8px;font-size:11px;color:var(--t3);padding:2px 0"><span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(t.description)}</span><span style="font-family:'DM Mono',monospace;color:${t.type==='expense'?'var(--exp)':t.type==='income'?'var(--inc)':'var(--t2)'};flex-shrink:0">${t.type==='expense'?'-':t.type==='income'?'+':''}${fmt(t.amount)}</span></div>`).join('')}</div>`:'';
+    return`<div style="background:var(--bg3);border:1px solid var(--bdr);border-radius:var(--r);padding:15px;position:relative;border-left:3px solid ${a.color||'var(--ac)'}"><div style="position:absolute;top:12px;right:12px;display:flex;align-items:center;gap:6px"><span class="bdg ${tc[a.type]||'bdg-n'}">${tl[a.type]||a.type}</span><button class="btn bg_ ico sm" title="Más opciones" onclick="showRowMenu(this,[{label:'Editar',icon:'✎',onClick:()=>openAccM('${a.id}')},{label:'Eliminar',icon:'✕',danger:true,onClick:()=>delAcc('${a.id}')}])">⋮</button></div><div style="font-size:15px;font-weight:500;margin-bottom:4px">${esc(a.name)}</div><div style="font-family:'DM Mono',monospace;font-size:19px;color:${M(a.balance)>=0?'var(--inc)':'var(--exp)'}">${fmt(a.balance)}</div>${extra}${recentHtml}</div>`;
 }
 
 async function delAcc(id){
