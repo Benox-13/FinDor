@@ -83,6 +83,9 @@ body{background:var(--bg);color:var(--txt);font-family:'Sora',sans-serif;font-si
 
 /* ============ BUTTONS ============ */
 .btn{display:inline-flex;align-items:center;gap:6px;padding:8px 16px;border-radius:var(--r2);border:none;cursor:pointer;font-family:'Sora',sans-serif;font-size:13px;font-weight:600;transition:all .15s;letter-spacing:.01em}
+.btn:disabled{opacity:.5;cursor:not-allowed;filter:none !important;transform:none !important}
+.row-menu{animation:rowMenuIn .12s ease}
+@keyframes rowMenuIn{from{opacity:0;transform:scale(.95) translateY(-4px)}to{opacity:1;transform:none}}
 .bp{background:var(--acg);color:#0a1a12;box-shadow:0 4px 14px rgba(48,214,147,.3)}.bp:hover{filter:brightness(1.07);box-shadow:0 6px 18px rgba(48,214,147,.4)}
 .bg_{background:var(--bg4);color:var(--txt);border:1px solid var(--bdr2)}.bg_:hover{background:var(--bg5)}
 .bd{background:rgba(255,95,109,.08);color:var(--red);border:1px solid rgba(255,95,109,.2)}.bd:hover{background:rgba(255,95,109,.16)}
@@ -130,8 +133,10 @@ tr:hover td{background:var(--bg3);transition:background .12s}
 .bdg-p{background:rgba(168,85,247,.12);color:var(--pur)}.bdg-n{background:rgba(139,147,168,.1);color:var(--t2)}
 
 /* ============ MODAL ============ */
-.mo{position:fixed;inset:0;background:rgba(0,0,0,.8);z-index:100;display:none;align-items:center;justify-content:center;padding:16px;backdrop-filter:blur(4px)}
-.mo.op{display:flex}
+.mo{position:fixed;inset:0;background:rgba(0,0,0,.8);z-index:100;display:flex;align-items:center;justify-content:center;padding:16px;backdrop-filter:blur(4px);opacity:0;pointer-events:none;transition:opacity .18s ease}
+.mo.op{opacity:1;pointer-events:auto}
+.mo .md{transform:scale(.96) translateY(6px);transition:transform .18s cubic-bezier(.34,1.56,.64,1)}
+.mo.op .md{transform:scale(1) translateY(0)}
 .md{background:var(--bg2);border:1px solid var(--bdr2);border-radius:var(--r3);width:100%;max-width:510px;max-height:92vh;overflow-y:auto;box-shadow:0 20px 60px rgba(0,0,0,.6)}
 .mh{padding:20px 24px 16px;border-bottom:1px solid var(--bdr);display:flex;align-items:center;justify-content:space-between}
 .mttl{font-family:'DM Serif Display',serif;font-size:20px}
@@ -165,8 +170,8 @@ select.fc option{background:var(--bg3)}
 .cs{margin-bottom:8px}
 .ch{display:flex;align-items:center;justify-content:space-between;padding:11px 14px;background:var(--bg3);border-radius:var(--r2);cursor:pointer;border:1px solid var(--bdr);user-select:none;transition:border .15s}
 .ch:hover{border-color:var(--bdr2)}
-.cb{padding:12px 14px;display:none;border:1px solid var(--bdr);border-top:none;border-radius:0 0 var(--r2) var(--r2);background:var(--bg2)}
-.cb.op{display:block}
+.cb{padding:0 14px;max-height:0;overflow:hidden;border:1px solid var(--bdr);border-top:none;border-radius:0 0 var(--r2) var(--r2);background:var(--bg2);opacity:0;transition:max-height .2s ease,padding .2s ease,opacity .15s ease}
+.cb.op{max-height:300px;padding:12px 14px;opacity:1}
 .cpill{display:inline-flex;align-items:center;gap:4px;padding:4px 10px;background:var(--bg3);border:1px solid var(--bdr);border-radius:20px;font-size:12px;color:var(--t2);margin:3px}
 .cpill .dx{cursor:pointer;color:var(--t3);font-size:13px;line-height:1}.cpill .dx:hover{color:var(--red)}
 
@@ -214,8 +219,10 @@ input:checked+.sl:before{transform:translateX(18px);background:#fff}
 .toast #t-ic{width:22px;height:22px;border-radius:50%;background:var(--acg);color:#0a1a12;display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700;flex-shrink:0}
 
 /* ============ CONFIRM DIALOG ============ */
-.confirm-overlay{position:fixed;inset:0;background:rgba(0,0,0,.8);z-index:200;display:none;align-items:center;justify-content:center;backdrop-filter:blur(4px)}
-.confirm-overlay.op{display:flex}
+.confirm-overlay{position:fixed;inset:0;background:rgba(0,0,0,.8);z-index:200;display:flex;align-items:center;justify-content:center;backdrop-filter:blur(4px);opacity:0;pointer-events:none;transition:opacity .18s ease}
+.confirm-overlay.op{opacity:1;pointer-events:auto}
+.confirm-overlay .confirm-box{transform:scale(.96) translateY(6px);transition:transform .18s cubic-bezier(.34,1.56,.64,1)}
+.confirm-overlay.op .confirm-box{transform:scale(1) translateY(0)}
 .confirm-box{background:var(--bg2);border:1px solid var(--bdr2);border-radius:var(--r3);padding:28px;max-width:360px;width:100%;margin:16px;box-shadow:0 24px 60px rgba(0,0,0,.6)}
 .confirm-box .ct{font-size:17px;font-weight:600;margin-bottom:8px}
 .confirm-box .cs_{font-size:13px;color:var(--t2);margin-bottom:22px;line-height:1.5}
@@ -3277,6 +3284,8 @@ async function execImport(){
 }
 
 async function saveTx(){
+  const saveBtn=$('tx-save-btn');
+  if(saveBtn.disabled)return; // ya se está procesando un clic anterior — ignora este
   const amt=M($('tx-amt').value);const dt=$('tx-dt').value;
   if(!isValidAmount(amt)||!dt){toast('Monto y fecha son requeridos (el monto debe ser mayor a 0)',false);return}
   const cat=$('tx-cat').value;
@@ -3295,15 +3304,17 @@ async function saveTx(){
   if(editingTxId){
     const ok=await confirm_('¿Guardar cambios?','Se actualizará esta transacción y se ajustará el balance de la cuenta.','Guardar');
     if(!ok)return;
+    saveBtn.disabled=true;
     // EDIT: Store.updateTransaction revierte el balance viejo y aplica el nuevo internamente
     const patch={type:txType,amount:amt,date:dt,time,description:desc,category:cat,subcategory:subcat||undefined,accountId:accId,accountId2:$('tx-acc2').value,notes:$('tx-notes').value};
     Store.updateTransaction(editingTxId,patch);
-    cM('mo-tx');renderTxP();renderDash();toast('Transacción actualizada');return;
+    cM('mo-tx');renderTxP();renderDash();toast('Transacción actualizada');saveBtn.disabled=false;return;
   }
+  saveBtn.disabled=true;
   const tx={type:txType,amount:amt,date:dt,time,description:desc,category:cat,subcategory:subcat||undefined,accountId:accId,accountId2:$('tx-acc2').value,notes:$('tx-notes').value,
     msi:msiOn?{months:msiMo,paid:0,monthly:amt/msiMo,paidAmt:0}:null};
   Store.addTransaction(tx);
-  cM('mo-tx');renderDash();renderTxP();toast('Transacción guardada');
+  cM('mo-tx');renderDash();renderTxP();toast('Transacción guardada');saveBtn.disabled=false;
 }
 
 function populateTxAccFilter(){
