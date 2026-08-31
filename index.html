@@ -568,10 +568,10 @@ input:checked+.sl:before{transform:translateX(18px);background:#fff}
     <button class="tab" onclick="loansTab('iowe',this)">↗ Debo</button>
   </div>
   <div id="loans-owed-panel">
-    <div id="owed-list" class="g2"></div>
+    <div id="owed-list"></div>
   </div>
   <div id="loans-iowe-panel" style="display:none">
-    <div id="iowe-list" class="g2"></div>
+    <div id="iowe-list"></div>
   </div>
   <div class="ss" style="margin-top:20px">
     <h3>Historial de préstamos</h3>
@@ -582,7 +582,7 @@ input:checked+.sl:before{transform:translateX(18px);background:#fff}
 <!-- GOALS -->
 <div id="page-goals" class="page">
   <div class="ph"><div><div class="pt">Objetivos</div><div class="ps">Metas con fecha límite</div></div><button class="btn bp" onclick="openGoalM()">+ Nuevo</button></div>
-  <div id="goals-g" class="g3"></div>
+  <div id="goals-g"></div>
 </div>
 
 <!-- EV page removed — unified into Vehículos -->
@@ -1055,6 +1055,30 @@ input:checked+.sl:before{transform:translateX(18px);background:#fff}
   </div>
 </div>
 
+<!-- HISTORIAL DE UN PRÉSTAMO ESPECÍFICO -->
+<div class="mo" id="mo-debt-hist">
+  <div class="md">
+    <div class="mh"><span class="mttl" id="debt-hist-ttl">Historial</span><button class="btn bg_ ico sm" onclick="cM('mo-debt-hist')">✕</button></div>
+    <div class="mbody">
+      <div id="debt-hist-summary" style="display:flex;gap:10px;margin-bottom:14px"></div>
+      <table class="tb"><thead><tr><th>Fecha</th><th>Descripción</th><th>Monto</th><th>Cuenta</th></tr></thead><tbody id="debt-hist-tb"></tbody></table>
+    </div>
+    <div class="mfoot"><button class="btn bg_ sm" onclick="cM('mo-debt-hist')">Cerrar</button></div>
+  </div>
+</div>
+
+<!-- HISTORIAL DE UNA META ESPECÍFICA -->
+<div class="mo" id="mo-goal-hist">
+  <div class="md">
+    <div class="mh"><span class="mttl" id="goal-hist-ttl">Historial</span><button class="btn bg_ ico sm" onclick="cM('mo-goal-hist')">✕</button></div>
+    <div class="mbody">
+      <div id="goal-hist-summary" style="display:flex;gap:10px;margin-bottom:14px"></div>
+      <table class="tb"><thead><tr><th>Fecha</th><th>Monto</th><th>Cuenta</th></tr></thead><tbody id="goal-hist-tb"></tbody></table>
+    </div>
+    <div class="mfoot"><button class="btn bg_ sm" onclick="cM('mo-goal-hist')">Cerrar</button></div>
+  </div>
+</div>
+
 <!-- VEHICLE MODAL -->
 <div class="mo" id="mo-vehicle">
   <div class="md">
@@ -1512,6 +1536,7 @@ async function pullFromSupabase(){
         description:t.description||'',category:cat?cat.name:'',subcategory:subcat?subcat.name:undefined,
         accountId:t.account_id||'',accountId2:t.related_account_id||'',
         notes:t.notes||'',msi:t.msi||null,subscriptionId:t.subscription_id||undefined,
+        debtId:t.debt_id||undefined,goalId:t.goal_id||undefined,
       };
     });
 
@@ -1534,7 +1559,7 @@ async function pullFromSupabase(){
     // --- goals ---
     const newGoals=results.goals.map(g=>({
       id:g.id,name:g.name,target:centsToAmt(g.target_cents),saved:centsToAmt(g.saved_cents),
-      due:g.due_date||'',icon:g.icon||'🎯',
+      due:g.due_date||'',icon:g.icon||'🎯',finalized:!!g.finalized,
     }));
 
     // --- subscriptions ---
@@ -1543,6 +1568,7 @@ async function pullFromSupabase(){
       return{
         id:s.id,name:s.name,cost:centsToAmt(s.cost_cents),freq:s.freq,nextDate:s.next_date,
         accountId:s.account_id||'',icon:s.icon||'📦',category:cat?cat.name:'',since:(s.created_at||'').slice(0,10)||'',
+        status:s.status||'active',
       };
     });
 
@@ -1666,7 +1692,8 @@ function transactionToCloud(t,catId,subcatId){
   return{id:t.id,user_id:currentUserId,type:t.type,amount_cents:amtToCents(t.amount),date:t.date,
     description:t.description||'',category_id:catId||null,subcategory_id:subcatId||null,
     account_id:t.accountId||null,related_account_id:t.accountId2||null,notes:t.notes||null,
-    msi:t.msi||null,updated_at:timeNorm?`${t.date}T${timeNorm}`:new Date().toISOString()};
+    msi:t.msi||null,updated_at:timeNorm?`${t.date}T${timeNorm}`:new Date().toISOString(),
+    debt_id:t.debtId||null,goal_id:t.goalId||null,subscription_id:t.subscriptionId||null};
 }
 function debtToCloud(d,direction){
   // extra: columna jsonb nueva para el desglose opcional de capital+intereses
@@ -1684,11 +1711,11 @@ function debtToCloud(d,direction){
 }
 function goalToCloud(g){
   return{id:g.id,user_id:currentUserId,name:g.name,icon:g.icon||null,target_cents:amtToCents(g.target),
-    saved_cents:amtToCents(g.saved||0),due_date:g.due||null};
+    saved_cents:amtToCents(g.saved||0),due_date:g.due||null,finalized:!!g.finalized};
 }
 function subscriptionToCloud(s,catId){
   return{id:s.id,user_id:currentUserId,name:s.name,icon:s.icon||null,cost_cents:amtToCents(s.cost),
-    freq:s.freq,next_date:s.nextDate,account_id:s.accountId||null,category_id:catId||null};
+    freq:s.freq,next_date:s.nextDate,account_id:s.accountId||null,category_id:catId||null,status:s.status||'active'};
 }
 function vehicleToCloud(v){
   const hasExtra=v.financed||v.monthlyPayment!=null||v.totalMonths!=null;
@@ -2427,6 +2454,15 @@ const Store = {
     return S.transactions.filter(t=>t.subscriptionId===id).sort((a,b)=>new Date(b.date)-new Date(a.date));
   },
   getSubscriptionById(id){ return S.subscriptions.find(s=>s.id===id); },
+  // Historial de UN préstamo/meta específico — mismo patrón que
+  // getSubscriptionHistory: filtra por el id que se le pone a cada
+  // transacción relacionada, así no se mezcla con otros préstamos/metas.
+  getDebtHistory(debtId){
+    return S.transactions.filter(t=>t.debtId===debtId).sort((a,b)=>new Date(b.date)-new Date(a.date));
+  },
+  getGoalHistory(goalId){
+    return S.transactions.filter(t=>t.goalId===goalId).sort((a,b)=>new Date(b.date)-new Date(a.date));
+  },
   addSubscription(data){
     const s={id:uid(),...data};
     S.subscriptions.push(s);
@@ -2911,7 +2947,7 @@ function renderDash(){
     const today=new Date();today.setHours(0,0,0,0);
     const up=[];
     S.subscriptions.forEach(s=>{
-      if(!s.nextDate)return;
+      if(!s.nextDate||(s.status&&s.status!=='active'))return;
       const days=Math.round((new Date(s.nextDate+'T00:00:00')-today)/86400000);
       if(days>=0&&days<=30)up.push({date:s.nextDate,days,label:s.name,amount:s.cost,icon:'↻',kind:'Suscripción'});
     });
@@ -4074,22 +4110,52 @@ async function saveSub(){
 }
 function renderSubs(){
   const fl={monthly:'Mensual',annual:'Anual',weekly:'Semanal'};
-  const subs=Store.getSubscriptions();
-  const monthly=subs.reduce((a,s)=>a+(s.freq==='monthly'?s.cost:s.freq==='annual'?s.cost/12:s.cost*4.33),0);
-  $('sub-mon').textContent=fmt(monthly);$('sub-yr').textContent=fmt(monthly*12);$('sub-cnt').textContent=subs.length;
-  const sorted=[...subs].sort((a,b)=>new Date(a.nextDate)-new Date(b.nextDate));
-  $('sub-nxt').textContent=sorted[0]?.nextDate||'—';
+  const allSubs=Store.getSubscriptions();
+  const activeSubs=allSubs.filter(s=>(s.status||'active')==='active');
+  const inactiveSubs=allSubs.filter(s=>(s.status||'active')!=='active');
+  // Los totales y el "próximo cobro" SOLO consideran suscripciones
+  // activas — una pausada o cancelada no debería sumar a "cuánto gasto al
+  // mes en suscripciones" ni aparecer como próxima a cobrarse.
+  const monthly=activeSubs.reduce((a,s)=>a+(s.freq==='monthly'?s.cost:s.freq==='annual'?s.cost/12:s.cost*4.33),0);
+  $('sub-mon').textContent=fmt(monthly);$('sub-yr').textContent=fmt(monthly*12);$('sub-cnt').textContent=activeSubs.length;
+  const sorted=[...activeSubs].sort((a,b)=>new Date(a.nextDate)-new Date(b.nextDate));
+  $('sub-nxt').textContent=sorted[0]?fmtDate(sorted[0].nextDate):'—';
   const el=$('sub-list');
-  if(!subs.length){el.innerHTML=emptyState('↻','Sin suscripciones registradas','Agrega tus suscripciones recurrentes (streaming, software, membresías) para no perder de vista cuánto gastas en ellas al mes.','+ Nueva suscripción',"openSubM()");return}
-  el.innerHTML=`<div class="g3">${sorted.map(s=>{
+  if(!allSubs.length){el.innerHTML=emptyState('↻','Sin suscripciones registradas','Agrega tus suscripciones recurrentes (streaming, software, membresías) para no perder de vista cuánto gastas en ellas al mes.','+ Nueva suscripción',"openSubM()");return}
+  const cardHTML=(s)=>{
+    const status=s.status||'active';
     const dl=Math.ceil((new Date(s.nextDate)-new Date())/864e5);
     const monthlyCost=s.freq==='monthly'?s.cost:s.freq==='annual'?s.cost/12:s.cost*4.33;
     const annualCost=monthlyCost*12;
     const hist=Store.getSubscriptionHistory(s.id);
     const totalPaid=hist.reduce((a,t)=>a+M(t.amount),0);
     const sinceLbl=s.since?new Date(s.since+'T00:00:00').toLocaleDateString('es-MX',{month:'short',year:'numeric'}):'—';
-    return`<div class="card"><div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:11px"><div style="font-size:26px">${esc(s.icon)}</div><div style="display:flex;align-items:center;gap:6px"><span class="bdg ${dl<=3?'bdg-r':dl<=7?'bdg-y':'bdg-n'}">${dl<0?'Vencido':dl===0?'Hoy':dl+'d'}</span><button class="btn bg_ ico sm" title="Más opciones" onclick="showRowMenu(this,[{label:'Editar',icon:'✎',onClick:()=>openSubM('${s.id}')},{label:'Ver historial',icon:'🕘',onClick:()=>openSubHistory('${s.id}')},{label:'Eliminar',icon:'✕',danger:true,onClick:()=>delSub('${s.id}')}])">⋮</button></div></div><div style="font-size:15px;font-weight:500;margin-bottom:2px">${esc(s.name)}</div><div style="font-size:12px;color:var(--t3);margin-bottom:9px">${fl[s.freq]} · próx: ${fmtDate(s.nextDate)} · desde: ${sinceLbl}</div><div style="display:flex;align-items:baseline;gap:8px;margin-bottom:5px"><div style="font-family:'DM Mono',monospace;font-size:17px;color:var(--red)">${fmt(monthlyCost)}<span style="font-size:11px;color:var(--t3);margin-left:2px">/mes</span></div></div><div style="font-size:12px;color:var(--t3);margin-bottom:6px">Anual: <span style="font-family:'DM Mono',monospace;color:var(--t2)">${fmt(annualCost)}</span></div><div style="font-size:12px;color:var(--t3);margin-bottom:11px;display:flex;justify-content:space-between"><span>${hist.length} pago${hist.length!==1?'s':''} registrado${hist.length!==1?'s':''}</span><span style="font-family:'DM Mono',monospace;color:var(--t2)">Total: ${fmt(totalPaid)}</span></div><button class="btn bg_ sm" style="width:100%" onclick="renewSub('${s.id}')">Renovar</button></div>`;
-  }).join('')}</div>`;
+    const statusBadge=status==='paused'?'<span class="bdg bdg-y">⏸ Pausada</span>':status==='cancelled'?'<span class="bdg bdg-r">✕ Cancelada</span>':`<span class="bdg ${dl<=3?'bdg-r':dl<=7?'bdg-y':'bdg-n'}">${dl<0?'Vencido':dl===0?'Hoy':dl+'d'}</span>`;
+    const menuParts=[`{label:'Ver historial',icon:'🕘',onClick:()=>openSubHistory('${s.id}')}`];
+    if(status==='active')menuParts.push(`{label:'Pausar',icon:'⏸',onClick:()=>toggleSubStatus('${s.id}','paused')}`,`{label:'Cancelar',icon:'✕',onClick:()=>toggleSubStatus('${s.id}','cancelled')}`);
+    else if(status==='paused')menuParts.push(`{label:'Reanudar',icon:'▶',onClick:()=>toggleSubStatus('${s.id}','active')}`,`{label:'Cancelar',icon:'✕',onClick:()=>toggleSubStatus('${s.id}','cancelled')}`);
+    else menuParts.push(`{label:'Reactivar',icon:'↺',onClick:()=>toggleSubStatus('${s.id}','active')}`);
+    menuParts.push(`{label:'Editar',icon:'✎',onClick:()=>openSubM('${s.id}')}`,`{label:'Eliminar',icon:'✕',danger:true,onClick:()=>delSub('${s.id}')}`);
+    const menuJson='['+menuParts.join(',')+']';
+    // Toda la tarjeta abre el historial al hacer clic — el menú y el
+    // botón "Renovar" cortan la propagación.
+    return`<div class="card card-click" style="${status!=='active'?'opacity:.8':''}" onclick="openSubHistory('${s.id}')"><div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:11px"><div style="font-size:26px">${esc(s.icon)}</div><div style="display:flex;align-items:center;gap:6px" onclick="event.stopPropagation()">${statusBadge}<button class="btn bg_ ico sm" title="Más opciones" onclick="showRowMenu(this,${menuJson})">⋮</button></div></div><div style="font-size:15px;font-weight:500;margin-bottom:2px">${esc(s.name)}</div><div style="font-size:12px;color:var(--t3);margin-bottom:9px">${fl[s.freq]} · próx: ${fmtDate(s.nextDate)} · desde: ${sinceLbl}</div><div style="display:flex;align-items:baseline;gap:8px;margin-bottom:5px"><div style="font-family:'DM Mono',monospace;font-size:17px;color:var(--red)">${fmt(monthlyCost)}<span style="font-size:11px;color:var(--t3);margin-left:2px">/mes</span></div></div><div style="font-size:12px;color:var(--t3);margin-bottom:6px">Anual: <span style="font-family:'DM Mono',monospace;color:var(--t2)">${fmt(annualCost)}</span></div><div style="font-size:12px;color:var(--t3);margin-bottom:11px;display:flex;justify-content:space-between"><span>${hist.length} pago${hist.length!==1?'s':''} registrado${hist.length!==1?'s':''}</span><span style="font-family:'DM Mono',monospace;color:var(--t2)">Total: ${fmt(totalPaid)}</span></div>${status==='active'?`<button class="btn bg_ sm" style="width:100%" onclick="event.stopPropagation();renewSub('${s.id}')">Renovar</button>`:''}</div>`;
+  };
+  let html=activeSubs.length?`<div class="g3">${activeSubs.map(cardHTML).join('')}</div>`:emptyState('↻','Sin suscripciones activas','Reactiva una desde abajo, o agrega una nueva.','+ Nueva suscripción',"openSubM()");
+  if(inactiveSubs.length){
+    html+=`<div class="slbl" style="margin:20px 0 10px;cursor:pointer" onclick="const e=document.getElementById('subs-inactive');e.style.display=e.style.display==='none'?'grid':'none'">⏸ Pausadas / Canceladas (${inactiveSubs.length}) — clic para mostrar/ocultar</div><div id="subs-inactive" class="g3" style="display:none">${inactiveSubs.map(cardHTML).join('')}</div>`;
+  }
+  el.innerHTML=html;
+}
+async function toggleSubStatus(id,newStatus){
+  const s=Store.getSubscriptionById(id);if(!s)return;
+  if(newStatus==='cancelled'){
+    const ok=await confirm_('¿Cancelar suscripción?','Dejará de contar en tus totales y de sugerirte renovarla. Puedes reactivarla cuando quieras.','Cancelar suscripción');
+    if(!ok)return;
+  }
+  Store.updateSubscription(id,{status:newStatus});
+  renderSubs();
+  toast(newStatus==='paused'?'Suscripción pausada':newStatus==='cancelled'?'Suscripción cancelada':'Suscripción reactivada');
 }
 
 function openSubHistory(id){
@@ -4098,12 +4164,12 @@ function openSubHistory(id){
   const total=hist.reduce((a,t)=>a+M(t.amount),0);
   $('sub-hist-ttl').textContent=(s.icon||'📦')+' Historial — '+s.name;
   $('sub-hist-summary').innerHTML=`
-    <div class="m_ m_-exp" style="flex:1"><div class="ml">Pagando desde</div><div class="mv" style="font-size:14px">${s.since||'—'}</div></div>
+    <div class="m_ m_-exp" style="flex:1"><div class="ml">Pagando desde</div><div class="mv" style="font-size:14px">${s.since?fmtDate(s.since):'—'}</div></div>
     <div class="m_ m_-bal" style="flex:1"><div class="ml">Total pagado</div><div class="mv" style="font-size:14px">${fmt(total)}</div></div>
     <div class="m_ m_-sav" style="flex:1"><div class="ml">Pagos</div><div class="mv" style="font-size:14px">${hist.length}</div></div>`;
   $('sub-hist-tb').innerHTML=hist.length?hist.map(t=>{
     const a=Store.getAccountById(t.accountId);
-    return`<tr><td style="color:var(--t2)">${t.date}</td><td style="font-family:'DM Mono',monospace;color:var(--red)">${fmt(t.amount)}</td><td style="color:var(--t2)">${a?esc(a.name):'—'}</td></tr>`;
+    return`<tr><td style="color:var(--t2)">${fmtDate(t.date)}</td><td style="font-family:'DM Mono',monospace;color:var(--red)">${fmt(t.amount)}</td><td style="color:var(--t2)">${a?esc(a.name):'—'}</td></tr>`;
   }).join(''):'<tr><td colspan="3" style="text-align:center;color:var(--t3);padding:18px">Sin renovaciones registradas todavía — dale "Renovar" cuando se cobre.</td></tr>';
   oM('mo-sub-hist');
 }
@@ -4199,12 +4265,13 @@ async function saveDebt(){
     installments:hasInstallments?{months:parseInt($('d-inst-months').value)||0,paid:prevInstallments?.paid||0}:undefined,
   };
   const isNew=!eid;
+  let newDebtId=eid;
   if(eid){
     const ok=await confirm_('¿Guardar cambios?','Se actualizará esta deuda.','Guardar');
     if(!ok)return;
     Store.updateDebt(k,eid,obj);toast('Deuda actualizada');
   }
-  else{Store.addDebt(k,obj);toast('Deuda registrada')}
+  else{const created=Store.addDebt(k,obj);newDebtId=created.id;toast('Deuda registrada')}
   if(isNew){
     // owed = me deben = yo presté = dinero salió (expense) en fecha inicio
     // iowe = yo debo = me prestaron = dinero entró (income) en fecha inicio
@@ -4226,7 +4293,7 @@ async function saveDebt(){
       }
     }
     ensureCategory('Préstamos','expense');
-    const loanTx={id:uid(),type:startType,amount:amt,date:obj.start||td_(),time:tnow_(),description:startLabel+person,category:'Préstamos',subcategory:k==='iowe'?'Debo':'Me deben',accountId:accId||'',notes:`${k==='iowe'?'Me prestaron':'Presté'} — vence: ${obj.due||'sin fecha'}`+(accId&&$('d-autotx').checked?'':', sin efecto en cuenta')};
+    const loanTx={id:uid(),type:startType,amount:amt,date:obj.start||td_(),time:tnow_(),description:startLabel+person,category:'Préstamos',subcategory:k==='iowe'?'Debo':'Me deben',accountId:accId||'',debtId:newDebtId,notes:`${k==='iowe'?'Me prestaron':'Presté'} — vence: ${obj.due||'sin fecha'}`+(accId&&$('d-autotx').checked?'':', sin efecto en cuenta')};
     S.transactions.push(loanTx);
     save();
     // Antes la transacción se quedaba solo en localStorage — nunca se subía
@@ -4244,12 +4311,45 @@ function renderDebts(k){
       :emptyState('⇅','No debes dinero por ahora','Cuando pidas prestado, regístralo aquí para llevar el control de cuánto debes y cuándo vence.','+ Registrar préstamo',"openDebtM('iowe')");
     return;
   }
-  el.innerHTML=list.map(d=>{
-    const rem=d.amount-(d.paid||0);const pct=Math.min(100,((d.paid||0)/d.amount)*100).toFixed(0);
+  const active=list.filter(d=>d.amount-(d.paid||0)>0);
+  const completed=list.filter(d=>d.amount-(d.paid||0)<=0);
+  const cardHTML=(d)=>{
+    const rem=Math.max(0,d.amount-(d.paid||0));const pct=Math.min(100,((d.paid||0)/d.amount)*100).toFixed(0);
+    const done=rem<=0;
     const dl=d.due?Math.ceil((new Date(d.due)-new Date())/864e5):null;const ov=d.due&&new Date(d.due)<new Date()&&rem>0;
     const extraLine=(d.capital!=null||d.installments)?`<div style="font-size:11px;color:var(--t3);margin-top:2px">${d.capital!=null?`Capital: ${fmt(d.capital)} · Intereses: ${fmt(d.interest||0)}`:''}${d.capital!=null&&d.installments?' · ':''}${d.installments?`Mensualidad ${d.installments.paid||0}/${d.installments.months} (${fmt(d.amount/d.installments.months)}/mes)`:''}</div>`:'';
-    return`<div class="card"><div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:10px"><div><div style="font-size:15px;font-weight:500">${esc(d.person)}</div><div style="font-size:12px;color:var(--t3)">${esc(d.desc)||''}</div></div><div style="display:flex;align-items:center;gap:6px">${ov?'<span class="bdg bdg-r">Vencida</span>':dl!==null?`<span class="bdg ${dl<7?'bdg-y':'bdg-b'}">${dl<0?'Vencida':dl+'d'}</span>`:''}<button class="btn bg_ ico sm" title="Más opciones" onclick="showRowMenu(this,[{label:'Editar',icon:'✎',onClick:()=>openDebtM('${k}','${d.id}')},{label:'Eliminar',icon:'✕',danger:true,onClick:()=>delD('${k}','${d.id}')}])">⋮</button></div></div><div style="display:flex;justify-content:space-between;font-size:13px;margin-bottom:6px"><span style="color:var(--t2)">Total: <span style="font-family:'DM Mono',monospace">${fmt(d.amount)}</span></span><span style="color:${k==='owed'?'var(--inc)':'var(--exp)'}">Restante: <span style="font-family:'DM Mono',monospace">${fmt(rem)}</span></span></div><div class="pw" style="margin-bottom:6px"><div class="pb" style="width:${pct}%;background:${k==='owed'?'var(--inc)':'var(--exp)'}"></div></div><div style="font-size:11px;color:var(--t3);margin-bottom:2px">${pct}% · ${d.due?'Límite: '+fmtDate(d.due):'Sin fecha límite'}</div>${extraLine}<button class="btn bg_ sm" style="width:100%;margin-top:8px" onclick="openDPayM('${k}','${d.id}')">+ Pago</button></div>`;
-  }).join('');
+    // "Liquidada" reemplaza cualquier otro badge una vez saldada — ya no
+    // tiene caso mostrar días restantes de algo que ya se terminó de pagar.
+    const statusBadge=done?'<span class="bdg bdg-g">✓ Liquidada</span>':(ov?'<span class="bdg bdg-r">Vencida</span>':dl!==null?`<span class="bdg ${dl<7?'bdg-y':'bdg-b'}">${dl<0?'Vencida':dl+'d'}</span>`:'');
+    // Toda la tarjeta es clicable y abre el historial de ESTE préstamo
+    // (filtrado por debtId) — el menú ⋮ y el botón de pago cortan la
+    // propagación para no disparar el historial sin querer.
+    return`<div class="card card-click" style="${done?'border-color:rgba(48,214,147,.3)':''}" onclick="openDebtHistory('${k}','${d.id}')"><div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:10px"><div><div style="font-size:15px;font-weight:500">${esc(d.person)}</div><div style="font-size:12px;color:var(--t3)">${esc(d.desc)||''}</div></div><div style="display:flex;align-items:center;gap:6px" onclick="event.stopPropagation()">${statusBadge}<button class="btn bg_ ico sm" title="Más opciones" onclick="showRowMenu(this,[{label:'Ver historial',icon:'🕘',onClick:()=>openDebtHistory('${k}','${d.id}')},{label:'Editar',icon:'✎',onClick:()=>openDebtM('${k}','${d.id}')},{label:'Eliminar',icon:'✕',danger:true,onClick:()=>delD('${k}','${d.id}')}])">⋮</button></div></div><div style="display:flex;justify-content:space-between;font-size:13px;margin-bottom:6px"><span style="color:var(--t2)">Total: <span style="font-family:'DM Mono',monospace">${fmt(d.amount)}</span></span><span style="color:${k==='owed'?'var(--inc)':'var(--exp)'}">Restante: <span style="font-family:'DM Mono',monospace">${fmt(rem)}</span></span></div><div class="pw" style="margin-bottom:6px"><div class="pb" style="width:${pct}%;background:${done?'var(--acg)':k==='owed'?'var(--inc)':'var(--exp)'}"></div></div><div style="font-size:11px;color:var(--t3);margin-bottom:2px">${pct}% · ${d.due?'Límite: '+fmtDate(d.due):'Sin fecha límite'}</div>${extraLine}${done?'':`<button class="btn bg_ sm" style="width:100%;margin-top:8px" onclick="event.stopPropagation();openDPayM('${k}','${d.id}')">+ Pago</button>`}</div>`;
+  };
+  let html=active.length?`<div class="g2">${active.map(cardHTML).join('')}</div>`:emptyState('⇅','Todo liquidado por aquí','Registra un nuevo préstamo cuando lo necesites.','+ Registrar préstamo',`openDebtM('${k}')`);
+  // Liquidadas: plegadas por default, no estorban la vista de lo activo,
+  // pero siguen siendo consultables (incluyendo su historial).
+  if(completed.length){
+    html+=`<div class="slbl" style="margin:20px 0 10px;cursor:pointer" onclick="const e=document.getElementById('${eid}-done');e.style.display=e.style.display==='none'?'grid':'none'">✓ Liquidadas (${completed.length}) — clic para mostrar/ocultar</div><div id="${eid}-done" class="g2" style="display:none">${completed.map(cardHTML).join('')}</div>`;
+  }
+  el.innerHTML=html;
+}
+// Historial completo de UN préstamo específico (no de todos, como el de
+// la página general) — filtra por debtId.
+function openDebtHistory(k,id){
+  const d=Store.getDebtById(k,id);if(!d)return;
+  const hist=Store.getDebtHistory(id);
+  const rem=Math.max(0,d.amount-(d.paid||0));
+  $('debt-hist-ttl').textContent='🕘 Historial — '+d.person;
+  $('debt-hist-summary').innerHTML=`
+    <div class="m_ m_-inc" style="flex:1"><div class="ml">Total</div><div class="mv" style="font-size:14px">${fmt(d.amount)}</div></div>
+    <div class="m_ m_-exp" style="flex:1"><div class="ml">Restante</div><div class="mv" style="font-size:14px">${fmt(rem)}</div></div>
+    <div class="m_ m_-sav" style="flex:1"><div class="ml">Movimientos</div><div class="mv" style="font-size:14px">${hist.length}</div></div>`;
+  $('debt-hist-tb').innerHTML=hist.length?hist.map(t=>{
+    const a=Store.getAccountById(t.accountId);
+    return`<tr><td style="color:var(--t2)">${fmtDate(t.date)}</td><td>${esc(t.description)}</td><td style="font-family:'DM Mono',monospace;color:${t.type==='expense'?'var(--exp)':'var(--inc)'}">${t.type==='expense'?'-':'+'}${fmt(t.amount)}</td><td style="color:var(--t2)">${a?esc(a.name):'Sin cuenta'}</td></tr>`;
+  }).join(''):'<tr><td colspan="4" style="text-align:center;color:var(--t3);padding:18px">Sin movimientos todavía</td></tr>';
+  oM('mo-debt-hist');
 }
 function addDP(k,id){const d=Store.getDebtById(k,id);if(!d)return;$('dpay-k').value=k;$('dpay-id').value=id;$('dpay-info').textContent=d.person+' — Restante: '+fmt(Math.max(0,d.amount-(d.paid||0)));$('dpay-amt').value='';oM('mo-dpay')}
 async function delD(k,id){const ok=await confirm_('¿Eliminar deuda?','');if(!ok)return;Store.deleteDebt(k,id);renderDebts(k);toast('Eliminado')}
@@ -4282,21 +4382,57 @@ async function saveGoal(){
 }
 function renderGoals(){
   const el=$('goals-g');
-  const goals=[...Store.getGoals()].sort((a,b)=>{
-    const doneA=(a.saved||0)>=a.target,doneB=(b.saved||0)>=b.target;
-    if(doneA!==doneB)return doneA?1:-1; // completadas al final
-    return 0;
-  });
-  if(!goals.length){el.innerHTML=emptyState('◎','Sin objetivos todavía','Crea tu primera meta de ahorro — un viaje, un fondo de emergencia, lo que quieras — y ve tu progreso reflejado aquí.','+ Nuevo objetivo',"openGoalM()");return}
-  el.innerHTML=goals.map(g=>{
-    const done=(g.saved||0)>=g.target;
+  const allGoals=Store.getGoals();
+  if(!allGoals.length){el.innerHTML=emptyState('◎','Sin objetivos todavía','Crea tu primera meta de ahorro — un viaje, un fondo de emergencia, lo que quieras — y ve tu progreso reflejado aquí.','+ Nuevo objetivo',"openGoalM()");return}
+  const active=allGoals.filter(g=>!g.finalized);
+  const finalized=allGoals.filter(g=>g.finalized);
+  const cardHTML=(g)=>{
+    const reached=(g.saved||0)>=g.target;
     const p=Math.min(100,(g.saved||0)/g.target*100).toFixed(0);const rem=Math.max(0,g.target-(g.saved||0));const dl=g.due?Math.ceil((new Date(g.due)-new Date())/864e5):null;
-    // Estado "completada" — discreto (un badge y un borde sutil, sin
-    // confeti ni animaciones exageradas) para que se sienta como un logro
-    // sin volverse una interfaz infantil.
-    const statusBadge=done?'<span class="bdg bdg-g">✓ Completada</span>':(dl!==null?`<span class="bdg ${dl<0?'bdg-r':dl<30?'bdg-y':'bdg-b'}">${dl<0?'Vencido':dl+'d'}</span>`:'');
-    return`<div class="card" style="${done?'border-color:rgba(48,214,147,.3)':''}"><div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px"><div style="font-size:26px">${esc(g.icon)}</div><div style="display:flex;align-items:center;gap:6px">${statusBadge}<button class="btn bg_ ico sm" title="Más opciones" onclick="showRowMenu(this,[{label:'Editar',icon:'✎',onClick:()=>openGoalM('${g.id}')},{label:'Eliminar',icon:'✕',danger:true,onClick:()=>delG('${g.id}')}])">⋮</button></div></div><div style="font-size:14px;font-weight:500;margin-bottom:2px">${esc(g.name)}</div><div style="font-size:11px;color:var(--t3);margin-bottom:10px">${g.due?'Límite: '+fmtDate(g.due):'Sin fecha límite'}</div><div style="display:flex;justify-content:space-between;font-size:13px;margin-bottom:4px"><span style="font-family:'DM Mono',monospace;color:var(--inc)">${fmt(g.saved||0)}</span><span style="font-family:'DM Mono',monospace;color:var(--t2)">${fmt(g.target)}</span></div><div class="pw" style="margin-bottom:6px"><div class="pb" style="width:${p}%;background:${done?'var(--acg)':'var(--ac)'}"></div></div><div style="font-size:11px;color:var(--t3);margin-bottom:10px">${p}% · faltan ${fmt(rem)}</div><button class="btn bg_ sm" style="width:100%" onclick="openGabM('${g.id}')">+ Abonar</button></div>`;
-  }).join('');
+    const statusBadge=g.finalized?'<span class="bdg bdg-g">✓ Finalizada</span>':reached?'<span class="bdg bdg-g">🎯 Alcanzada</span>':(dl!==null?`<span class="bdg ${dl<0?'bdg-r':dl<30?'bdg-y':'bdg-b'}">${dl<0?'Vencido':dl+'d'}</span>`:'');
+    const menuItems=g.finalized
+      ?`[{label:'Reabrir',icon:'↺',onClick:()=>toggleGoalFinalized('${g.id}')},{label:'Editar',icon:'✎',onClick:()=>openGoalM('${g.id}')},{label:'Eliminar',icon:'✕',danger:true,onClick:()=>delG('${g.id}')}]`
+      :`[{label:'Ver historial',icon:'🕘',onClick:()=>openGoalHistory('${g.id}')},{label:'Editar',icon:'✎',onClick:()=>openGoalM('${g.id}')},{label:'Eliminar',icon:'✕',danger:true,onClick:()=>delG('${g.id}')}]`;
+    // Sin abonar una vez alcanzada — en su lugar aparece "Finalizar", una
+    // acción manual (no se archiva sola al llegar al monto) para que
+    // decidas tú cuándo darla por cerrada.
+    let actionBtn;
+    if(g.finalized)actionBtn='';
+    else if(reached)actionBtn=`<button class="btn bp sm" style="width:100%" onclick="event.stopPropagation();finalizeGoal('${g.id}')">✓ Finalizar</button>`;
+    else actionBtn=`<button class="btn bg_ sm" style="width:100%" onclick="event.stopPropagation();openGabM('${g.id}')">+ Abonar</button>`;
+    // Toda la tarjeta abre el historial de ESTA meta (filtrado por goalId)
+    // al hacer clic — el menú y el botón de acción cortan la propagación.
+    return`<div class="card card-click" style="${g.finalized?'border-color:rgba(48,214,147,.3)':''}" onclick="openGoalHistory('${g.id}')"><div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px"><div style="font-size:26px">${esc(g.icon)}</div><div style="display:flex;align-items:center;gap:6px" onclick="event.stopPropagation()">${statusBadge}<button class="btn bg_ ico sm" title="Más opciones" onclick="showRowMenu(this,${menuItems})">⋮</button></div></div><div style="font-size:14px;font-weight:500;margin-bottom:2px">${esc(g.name)}</div><div style="font-size:11px;color:var(--t3);margin-bottom:10px">${g.due?'Límite: '+fmtDate(g.due):'Sin fecha límite'}</div><div style="display:flex;justify-content:space-between;font-size:13px;margin-bottom:4px"><span style="font-family:'DM Mono',monospace;color:var(--inc)">${fmt(g.saved||0)}</span><span style="font-family:'DM Mono',monospace;color:var(--t2)">${fmt(g.target)}</span></div><div class="pw" style="margin-bottom:6px"><div class="pb" style="width:${p}%;background:${reached?'var(--acg)':'var(--ac)'}"></div></div><div style="font-size:11px;color:var(--t3);margin-bottom:10px">${reached?'¡Meta alcanzada! 🎯':p+'% · faltan '+fmt(rem)}</div>${actionBtn}</div>`;
+  };
+  let html=active.length?`<div class="g3">${active.map(cardHTML).join('')}</div>`:emptyState('◎','Sin objetivos activos','Crea una meta nueva o revisa tus objetivos ya finalizados abajo.','+ Nuevo objetivo',"openGoalM()");
+  if(finalized.length){
+    html+=`<div class="slbl" style="margin:20px 0 10px;cursor:pointer" onclick="const e=document.getElementById('goals-done');e.style.display=e.style.display==='none'?'grid':'none'">✓ Finalizadas (${finalized.length}) — clic para mostrar/ocultar</div><div id="goals-done" class="g3" style="display:none">${finalized.map(cardHTML).join('')}</div>`;
+  }
+  el.innerHTML=html;
+}
+function openGoalHistory(id){
+  const g=Store.getGoalById(id);if(!g)return;
+  const hist=Store.getGoalHistory(id);
+  $('goal-hist-ttl').textContent=(g.icon||'🎯')+' Historial — '+g.name;
+  $('goal-hist-summary').innerHTML=`
+    <div class="m_ m_-inc" style="flex:1"><div class="ml">Ahorrado</div><div class="mv" style="font-size:14px">${fmt(g.saved||0)}</div></div>
+    <div class="m_ m_-bal" style="flex:1"><div class="ml">Objetivo</div><div class="mv" style="font-size:14px">${fmt(g.target)}</div></div>
+    <div class="m_ m_-sav" style="flex:1"><div class="ml">Abonos</div><div class="mv" style="font-size:14px">${hist.length}</div></div>`;
+  $('goal-hist-tb').innerHTML=hist.length?hist.map(t=>{
+    const a=Store.getAccountById(t.accountId);
+    return`<tr><td style="color:var(--t2)">${fmtDate(t.date)}</td><td style="font-family:'DM Mono',monospace;color:var(--inc)">${fmt(t.amount)}</td><td style="color:var(--t2)">${a?esc(a.name):'Sin cuenta'}</td></tr>`;
+  }).join(''):'<tr><td colspan="3" style="text-align:center;color:var(--t3);padding:18px">Sin abonos registrados todavía (los abonos sin cuenta ligada también cuentan aquí)</td></tr>';
+  oM('mo-goal-hist');
+}
+async function finalizeGoal(id){
+  const ok=await confirm_('¿Finalizar objetivo?','Se moverá a tu lista de objetivos finalizados. Puedes reabrirlo cuando quieras desde el menú.','Finalizar');
+  if(!ok)return;
+  Store.updateGoal(id,{finalized:true});
+  renderGoals();toast('¡Objetivo finalizado! 🎉');
+}
+async function toggleGoalFinalized(id){
+  Store.updateGoal(id,{finalized:false});
+  renderGoals();toast('Objetivo reabierto');
 }
 function abonar(id){const g=Store.getGoalById(id);if(!g)return;$('gab-id').value=id;$('gab-info').textContent=g.icon+' '+g.name+' — Falta: '+fmt(Math.max(0,g.target-(g.saved||0)));$('gab-acc').innerHTML='<option value="">Sin descontar de cuenta</option>'+selectableAccounts().map(a=>`<option value="${a.id}">${esc(a.name)} (${accBalanceLabel(a)})</option>`).join('');$('gab-amt').value='';oM('mo-gab')}
 async function delG(id){const ok=await confirm_('¿Eliminar objetivo?','');if(!ok)return;Store.deleteGoal(id);renderGoals();toast('Eliminado')}
@@ -5029,7 +5165,7 @@ function execDP(){
   // inicial del préstamo.
   const accId=$('dpay-acc').value;const dt=$('dpay-dt').value||td_();
   ensureCategory('Préstamos','expense');
-  Store.addTransaction({type:k==='iowe'?'expense':'income',amount:v,date:dt,time:tnow_(),description:(k==='iowe'?'Pago a ':'Cobro de ')+d.person,category:'Préstamos',subcategory:k==='iowe'?'Debo':'Me deben',accountId:accId||'',notes:'Pago de préstamo'});
+  Store.addTransaction({type:k==='iowe'?'expense':'income',amount:v,date:dt,time:tnow_(),description:(k==='iowe'?'Pago a ':'Cobro de ')+d.person,category:'Préstamos',subcategory:k==='iowe'?'Debo':'Me deben',accountId:accId||'',debtId:id,notes:'Pago de préstamo'});
   // Si el préstamo usa mensualidades fijas, cada pago avanza el contador —
   // igual que el patrón ya usado para MSI (un pago = una mensualidad,
   // independientemente del monto exacto capturado).
@@ -5056,7 +5192,7 @@ function execGab(){
   Store.updateGoal(id,{saved:newSaved});
   const accId=$('gab-acc').value;const dt=$('gab-dt').value||td_();
   if(accId){
-    Store.addTransaction({type:'expense',amount:v,date:dt,time:tnow_(),description:'Abono: '+g.name,category:'',accountId:accId,notes:'Abono a objetivo'});
+    Store.addTransaction({type:'expense',amount:v,date:dt,time:tnow_(),description:'Abono: '+g.name,category:'',accountId:accId,goalId:id,notes:'Abono a objetivo'});
   }
   cM('mo-gab');renderGoals();renderDash();updateNW();
   if(newSaved>=g.target)toast('¡Meta alcanzada! 🎉');else toast('Abono registrado');
@@ -5119,6 +5255,7 @@ function checkNotifications(){
   // Subs due in 3 days
   if(S.notif.sub!==false){
     S.subscriptions.forEach(s=>{
+      if(s.status&&s.status!=='active')return;
       const dl=Math.ceil((new Date(s.nextDate)-now)/864e5);
       if(dl>=0&&dl<=3)alerts.push({type:'warn',msg:'🔔 '+s.name+' vence en '+dl+'d ('+fmt(s.cost)+')',action:"go('subscriptions')"});
     });
