@@ -574,8 +574,8 @@ input:checked+.sl:before{transform:translateX(18px);background:#fff}
     <div id="iowe-list"></div>
   </div>
   <div class="ss" style="margin-top:20px">
-    <h3>Historial de préstamos</h3>
-    <div id="loans-history"></div>
+    <h3 style="cursor:pointer;user-select:none" onclick="const e=document.getElementById('loans-history');const a=document.getElementById('loans-history-arrow');const open=e.style.display!=='none';e.style.display=open?'none':'block';a.textContent=open?'▸':'▾'">Historial de préstamos <span id="loans-history-arrow" style="font-size:13px;color:var(--t3)">▸</span></h3>
+    <div id="loans-history" style="display:none"></div>
   </div>
 </div>
 
@@ -1295,8 +1295,11 @@ input:checked+.sl:before{transform:translateX(18px);background:#fff}
       <input type="hidden" id="gab-id">
       <div id="gab-info" style="background:var(--bg3);border-radius:var(--r2);padding:11px 13px;font-size:13px;color:var(--t2);margin-bottom:14px;border:1px solid var(--bdr)"></div>
       <div class="fg"><label class="fl">Monto a abonar ($)</label><input class="fc" type="number" id="gab-amt" placeholder="0.00" step="0.01"></div>
-      <div class="fg"><label class="fl">Descontar de cuenta</label>
-        <select class="fc" id="gab-acc"><option value="">Sin descontar de cuenta</option></select>
+      <div class="fg"><label class="fl">Descontar de cuenta <span style="color:var(--t3);font-weight:400">(opcional)</span></label>
+        <select class="fc" id="gab-acc" onchange="onGabAccChange()"><option value="">Sin descontar de cuenta</option></select>
+      </div>
+      <div class="fg" id="gab-acc2-g" style="display:none"><label class="fl">Depositar en cuenta <span style="color:var(--t3);font-weight:400">(opcional — si tu meta vive en otra cuenta)</span></label>
+        <select class="fc" id="gab-acc2"><option value="">No depositar en otra cuenta</option></select>
       </div>
       <div class="fg"><label class="fl">Fecha</label><input class="fc" type="date" id="gab-dt"></div>
     </div>
@@ -1899,6 +1902,21 @@ async function safeSyncPull(){
   const pendingTx=S.transactions.filter(t=>!isUUID(t.id));
   for(const t of pendingTx)await Store._pushTransaction(t,false);
   if(pendingTx.length)toast(`Se recuperaron ${pendingTx.length} transacción(es) pendiente(s) de sincronizar`);
+
+  // GUARDA CRÍTICA: si después de reintentar la cola SIGUE teniendo algo
+  // pendiente, es que ese push está fallando de verdad (no fue un
+  // tropiezo de red pasajero) — por ejemplo, falta una columna en
+  // Supabase, o cualquier otro error persistente. Antes de este cambio,
+  // el código seguía adelante y traía de la nube de todos modos, lo cual
+  // sobreescribía datos locales que la nube todavía no conocía — esa era
+  // la causa raíz de "se borran mis datos al sincronizar", repetida varias
+  // veces. Ahora: si sigue habiendo algo sin subir, NO se trae nada de la
+  // nube — se avisa en vez de arriesgar perder datos en silencio.
+  if(syncQueue.length){
+    console.warn('Supabase: hay cambios sin sincronizar, no se actualizó desde la nube para no perder datos:',syncQueue);
+    toast(`${syncQueue.length} cambio(s) no se pudieron subir a la nube todavía — no se actualizó desde la nube para no perder datos. Revisa la consola o tu conexión.`,false);
+    return;
+  }
 
   // Ahora sí, traemos lo más reciente de la nube (incluye lo recién
   // subido arriba, más cualquier cambio hecho desde otro dispositivo).
@@ -5182,7 +5200,16 @@ function openGabM(id){
   $('gab-id').value=id;
   $('gab-info').textContent=g.icon+' '+g.name+' — Falta: '+fmt(Math.max(0,g.target-(g.saved||0)));
   $('gab-acc').innerHTML='<option value="">Sin descontar de cuenta</option>'+selectableAccounts().map(a=>`<option value="${a.id}">${esc(a.name)} (${accBalanceLabel(a)})</option>`).join('');
+  $('gab-acc2').innerHTML='<option value="">No depositar en otra cuenta</option>'+selectableAccounts().map(a=>`<option value="${a.id}">${esc(a.name)} (${accBalanceLabel(a)})</option>`).join('');
+  $('gab-acc2-g').style.display='none';
   $('gab-dt').value=td_();$('gab-amt').value='';oM('mo-gab');
+}
+// La cuenta destino solo tiene sentido si ya elegiste una cuenta de
+// origen — abonar "de la nada" hacia una cuenta específica no es una
+// transferencia real, sería un ingreso normal (fuera de alcance aquí).
+function onGabAccChange(){
+  $('gab-acc2-g').style.display=$('gab-acc').value?'block':'none';
+  if(!$('gab-acc').value)$('gab-acc2').value='';
 }
 function execGab(){
   const id=$('gab-id').value;const v=M($('gab-amt').value)||0;
@@ -5190,9 +5217,18 @@ function execGab(){
   const g=Store.getGoalById(id);if(!g)return;
   const newSaved=Math.min(g.target,(g.saved||0)+v);
   Store.updateGoal(id,{saved:newSaved});
-  const accId=$('gab-acc').value;const dt=$('gab-dt').value||td_();
-  if(accId){
-    Store.addTransaction({type:'expense',amount:v,date:dt,time:tnow_(),description:'Abono: '+g.name,category:'',accountId:accId,goalId:id,notes:'Abono a objetivo'});
+  const accId=$('gab-acc').value;const accId2=$('gab-acc2').value;const dt=$('gab-dt').value||td_();
+  // Antes esto SOLO registraba una transacción si elegías una cuenta de
+  // origen — un abono sin cuenta simplemente no dejaba ningún rastro más
+  // que el total acumulado en la meta. Ahora siempre se registra en el
+  // historial (accountId vacío no afecta ningún balance, es seguro).
+  // Si además eliges una cuenta destino, se registra como transferencia
+  // real: sale de una cuenta y entra a otra (por ejemplo, si tu meta
+  // "vive" en una cuenta de ahorro aparte).
+  if(accId&&accId2){
+    Store.addTransaction({type:'transfer',amount:v,date:dt,time:tnow_(),description:'Abono: '+g.name,category:'',accountId:accId,accountId2:accId2,goalId:id,notes:'Abono a objetivo (transferencia)'});
+  } else {
+    Store.addTransaction({type:'expense',amount:v,date:dt,time:tnow_(),description:'Abono: '+g.name,category:'',accountId:accId||'',goalId:id,notes:'Abono a objetivo'});
   }
   cM('mo-gab');renderGoals();renderDash();updateNW();
   if(newSaved>=g.target)toast('¡Meta alcanzada! 🎉');else toast('Abono registrado');
