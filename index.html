@@ -73,7 +73,7 @@ body{background:var(--bg);color:var(--txt);font-family:'Sora',sans-serif;font-si
 .nw .amt{font-family:'DM Mono',monospace;font-size:20px;color:#fff;font-weight:500}
 
 /* ============ MAIN ============ */
-#main{flex:1;height:100vh;overflow-y:auto;background:var(--bg)}
+#main{flex:1;height:100vh;overflow-y:auto;overflow-x:hidden;background:var(--bg);max-width:100vw}
 .page{display:none;padding:28px 32px;animation:fi .2s ease}
 .page.on{display:block}
 @keyframes fi{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
@@ -309,23 +309,36 @@ input:checked+.sl:before{transform:translateX(18px);background:#fff}
   #sb.open{transform:translateX(0)}
   /* Espacio arriba y abajo para que el contenido no quede tapado por la
      barra inferior fija. */
-  .page{padding:16px 14px calc(78px + env(safe-area-inset-bottom)) 14px}
+  .page{padding:16px 14px calc(92px + env(safe-area-inset-bottom)) 14px;max-width:100vw;overflow-x:hidden;box-sizing:border-box}
   .ph{flex-direction:column;align-items:flex-start;gap:8px}
   .pt{font-size:22px}
   /* Todas las cuadrículas de 2/3/4 columnas colapsan a 1 sola columna —
      en 300-350px de ancho útil, 2+ columnas quedan ilegibles. */
   .g2,.g3,.g4{grid-template-columns:1fr}
+  /* Excepción: las 4 métricas del dashboard (Ingreso/Gasto/Balance/Tasa)
+     se ven mejor en 2x2 que en una sola columna larga — son las tarjetas
+     más chicas y se leen bien más compactas. */
+  #d-metrics{grid-template-columns:1fr 1fr !important;gap:8px}
+  #d-metrics .m_{padding:11px 12px}
+  #d-metrics .ml{font-size:9.5px;margin-bottom:5px}
+  #d-metrics .mv{font-size:16px}
+  #d-metrics .ms{font-size:9.5px;margin-top:3px}
   /* Los modales ya usaban width:100% con max-width, así que se adaptan
-     solos — solo reducimos un poco el padding exterior para ganar espacio. */
+     solos — solo reducimos un poco el padding exterior para ganar espacio.
+     max-width:calc(100vw - 20px) es un refuerzo extra: si algo dentro del
+     formulario llegara a pedir más ancho del que cabe, el modal ya no se
+     estira más allá de la pantalla (causa típica de tener que hacer zoom
+     out para ver un formulario completo). */
   .mo{padding:10px}
+  .mo .md{max-width:calc(100vw - 20px) !important;box-sizing:border-box}
 
   /* ---- Barra de navegación inferior ---- */
-  #bottom-nav{display:flex;position:fixed;bottom:0;left:0;right:0;z-index:190;background:var(--bg2);border-top:1px solid var(--bdr);padding:6px 4px calc(6px + env(safe-area-inset-bottom));align-items:flex-start;justify-content:space-around}
-  .bn-item{display:flex;flex-direction:column;align-items:center;gap:2px;color:var(--t3);font-size:9px;padding:4px 2px;border-radius:8px;flex:1;min-width:0;cursor:pointer;user-select:none;transition:color .15s}
-  .bn-item .bn-ic{font-size:19px;line-height:1}
+  #bottom-nav{display:flex;position:fixed;bottom:0;left:0;right:0;z-index:190;background:var(--bg2);border-top:1px solid var(--bdr);padding:10px 4px calc(10px + env(safe-area-inset-bottom));align-items:flex-start;justify-content:space-around}
+  .bn-item{display:flex;flex-direction:column;align-items:center;gap:3px;color:var(--t3);font-size:10.5px;padding:6px 2px;border-radius:8px;flex:1;min-width:0;cursor:pointer;user-select:none;transition:color .15s}
+  .bn-item .bn-ic{font-size:24px;line-height:1}
   .bn-item .bn-lbl{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:100%}
   .bn-item.on{color:var(--ac)}
-  .bn-fab{flex-shrink:0;width:46px;height:46px;border-radius:50%;background:var(--acg);color:#0a1a12;font-size:26px;font-weight:600;display:flex;align-items:center;justify-content:center;margin-top:-18px;box-shadow:0 4px 16px rgba(48,214,147,.4);cursor:pointer;line-height:1}
+  .bn-fab{flex-shrink:0;width:56px;height:56px;border-radius:50%;background:var(--acg);color:#0a1a12;font-size:32px;font-weight:600;display:flex;align-items:center;justify-content:center;margin-top:-22px;box-shadow:0 4px 16px rgba(48,214,147,.4);cursor:pointer;line-height:1}
 }
 </style>
 </head>
@@ -461,7 +474,7 @@ input:checked+.sl:before{transform:translateX(18px);background:#fff}
       </div>
       <!-- TDC billing period selector (hidden by default) -->
       <div id="tx-billing-wrap" style="display:none;align-items:center;gap:8px">
-        <select class="fc" id="tx-billing-period" onchange="renderTxP()" style="width:240px"></select>
+        <select class="fc" id="tx-billing-period" onchange="renderTxP()" style="width:100%;max-width:240px"></select>
         <span style="font-size:11px;color:var(--t3)">Periodo de facturación</span>
       </div>
     </div>
@@ -692,15 +705,16 @@ input:checked+.sl:before{transform:translateX(18px);background:#fff}
   </div>
   <div id="cfg-dashboard" style="display:none">
     <div class="ss"><h3>Widgets del dashboard</h3>
-      <div class="sr"><div><div class="si-l">Métricas del mes</div></div><label class="sw"><input type="checkbox" id="w-metrics" checked onchange="saveDW()"><span class="sl"></span></label></div>
+      <div class="sr"><div><div class="si-l">Métricas del mes</div><div class="si-s">Ingreso, gasto, balance y tasa de ahorro — siempre visibles</div></div></div>
       <div class="sr"><div><div class="si-l">Últimas transacciones</div></div><label class="sw"><input type="checkbox" id="w-txs" checked onchange="saveDW()"><span class="sl"></span></label></div>
       <div class="sr"><div><div class="si-l">Próximos pagos</div></div><label class="sw"><input type="checkbox" id="w-upcoming" checked onchange="saveDW()"><span class="sl"></span></label></div>
-      <div class="sr"><div><div class="si-l">Suscripciones</div></div><label class="sw"><input type="checkbox" id="w-subs" checked onchange="saveDW()"><span class="sl"></span></label></div>
-      <div class="sr"><div><div class="si-l">Préstamos</div></div><label class="sw"><input type="checkbox" id="w-debts" checked onchange="saveDW()"><span class="sl"></span></label></div>
-      <div class="sr"><div><div class="si-l">Gastos por categoría</div></div><label class="sw"><input type="checkbox" id="w-cats" checked onchange="saveDW()"><span class="sl"></span></label></div>
-      <div class="sr"><div><div class="si-l">Resumen de cuentas</div></div><label class="sw"><input type="checkbox" id="w-accs" checked onchange="saveDW()"><span class="sl"></span></label></div>
       <div class="sr"><div><div class="si-l">Objetivos activos</div></div><label class="sw"><input type="checkbox" id="w-goals" onchange="saveDW()"><span class="sl"></span></label></div>
       <div class="sr"><div><div class="si-l">Estado de presupuesto</div></div><label class="sw"><input type="checkbox" id="w-budget" onchange="saveDW()"><span class="sl"></span></label></div>
+    </div>
+    <div class="ss" style="margin-top:16px">
+      <h3>Orden de las siguientes tarjetas</h3>
+      <div style="font-size:12px;color:var(--t3);margin-bottom:10px">Usa las flechas para moverlas — el orden se refleja tal cual en el Dashboard.</div>
+      <div id="dash-order-list"></div>
     </div>
   </div>
   <div id="cfg-categorias" style="display:none">
@@ -1393,6 +1407,23 @@ function dequeueTxSync(txId){
   saveSyncQueue();
   updateOfflineBadge();
 }
+// Reintentos genéricos para escrituras que NO son transacciones (cuentas,
+// deudas, metas, suscripciones). Las transacciones ya tienen su propia
+// cola persistente; el resto de las entidades solo tenía un intento único
+// — si fallaba (por ejemplo, por una columna de Supabase que aún no
+// existiera), se quedaba "atascado" sin ningún aviso ni reintento. Con
+// esto, cada escritura que falla se registra aquí y se reintenta en el
+// siguiente pushPendingIfAny()/autoSyncTick() con los datos MÁS
+// RECIENTES en memoria (no una copia vieja del momento del fallo).
+let retryableWrites={};
+async function retryFailedWrites(){
+  const keys=Object.keys(retryableWrites);
+  for(const k of keys){
+    const fn=retryableWrites[k];
+    if(fn)await fn();
+  }
+}
+
 async function processSyncQueue(){
   if(!sb||!currentUserId||!navigator.onLine||!syncQueue.length)return;
   const items=[...syncQueue];
@@ -1914,6 +1945,7 @@ async function pushAllToSupabase(){
 async function safeSyncPull(){
   if(!sb||!currentUserId)return;
   await processSyncQueue();
+  await retryFailedWrites();
   const pendingTx=S.transactions.filter(t=>!isUUID(t.id));
   for(const t of pendingTx)await Store._pushTransaction(t,false);
   if(pendingTx.length)toast(`Se recuperaron ${pendingTx.length} transacción(es) pendiente(s) de sincronizar`);
@@ -1927,9 +1959,10 @@ async function safeSyncPull(){
   // la causa raíz de "se borran mis datos al sincronizar", repetida varias
   // veces. Ahora: si sigue habiendo algo sin subir, NO se trae nada de la
   // nube — se avisa en vez de arriesgar perder datos en silencio.
-  if(syncQueue.length){
-    console.warn('Supabase: hay cambios sin sincronizar, no se actualizó desde la nube para no perder datos:',syncQueue);
-    toast(`${syncQueue.length} cambio(s) no se pudieron subir a la nube todavía — no se actualizó desde la nube para no perder datos. Revisa la consola o tu conexión.`,false);
+  if(syncQueue.length||Object.keys(retryableWrites).length){
+    console.warn('Supabase: hay cambios sin sincronizar, no se actualizó desde la nube para no perder datos:',syncQueue,retryableWrites);
+    const n=syncQueue.length+Object.keys(retryableWrites).length;
+    toast(`${n} cambio(s) no se pudieron subir a la nube todavía — no se actualizó desde la nube para no perder datos. Revisa la consola o tu conexión.`,false);
     return;
   }
 
@@ -2173,7 +2206,15 @@ const Store = {
     // sobre una fila que no existe no hace nada y NO avisa error — la app
     // pensaría que sincronizó sin haber creado nada. upsert crea si falta,
     // actualiza si ya existía — seguro en ambos casos.
-    if(sb&&currentUserId&&isUUID(id))cloudWrite(sb.from('accounts').upsert(accountToCloud(acc),{onConflict:'id'}),`actualizar cuenta ${acc.name}`);
+    if(sb&&currentUserId&&isUUID(id)){
+      const key='account:'+id;
+      const doWrite=async()=>{
+        const a=this.getAccountById(id);if(!a)return;
+        const ok=await cloudWrite(sb.from('accounts').upsert(accountToCloud(a),{onConflict:'id'}),`actualizar cuenta ${a.name}`);
+        if(ok)delete retryableWrites[key];else retryableWrites[key]=doWrite;
+      };
+      doWrite();
+    }
     return acc;
   },
   deleteAccount(id){
@@ -2447,7 +2488,15 @@ const Store = {
     if(!d)return null;
     Object.assign(d,patch);
     save();
-    if(sb&&currentUserId&&isUUID(id))cloudWrite(sb.from('debts').upsert(debtToCloud(d,k==='owed'?'owed_to_me':'i_owe'),{onConflict:'id'}),`actualizar deuda ${d.person}`);
+    if(sb&&currentUserId&&isUUID(id)){
+      const key='debt:'+id;
+      const doWrite=async()=>{
+        const dd=this.getDebtById(k,id);if(!dd)return;
+        const ok=await cloudWrite(sb.from('debts').upsert(debtToCloud(dd,k==='owed'?'owed_to_me':'i_owe'),{onConflict:'id'}),`actualizar deuda ${dd.person}`);
+        if(ok)delete retryableWrites[key];else retryableWrites[key]=doWrite;
+      };
+      doWrite();
+    }
     return d;
   },
   deleteDebt(k,id){
@@ -2483,7 +2532,15 @@ const Store = {
     if(!g)return null;
     Object.assign(g,patch);
     save();
-    if(sb&&currentUserId&&isUUID(id))cloudWrite(sb.from('goals').upsert(goalToCloud(g),{onConflict:'id'}),`actualizar meta ${g.name}`);
+    if(sb&&currentUserId&&isUUID(id)){
+      const key='goal:'+id;
+      const doWrite=async()=>{
+        const gg=this.getGoalById(id);if(!gg)return;
+        const ok=await cloudWrite(sb.from('goals').upsert(goalToCloud(gg),{onConflict:'id'}),`actualizar meta ${gg.name}`);
+        if(ok)delete retryableWrites[key];else retryableWrites[key]=doWrite;
+      };
+      doWrite();
+    }
     return g;
   },
   deleteGoal(id){
@@ -2526,8 +2583,14 @@ const Store = {
     Object.assign(s,patch);
     save();
     if(sb&&currentUserId&&isUUID(id)){
-      const cat=S.categories.find(c=>c.name===s.category);
-      cloudWrite(sb.from('subscriptions').upsert(subscriptionToCloud(s,cat&&isUUID(cat.id)?cat.id:null),{onConflict:'id'}),`actualizar suscripción ${s.name}`);
+      const key='subscription:'+id;
+      const doWrite=async()=>{
+        const ss=this.getSubscriptionById(id);if(!ss)return;
+        const cat=S.categories.find(c=>c.name===ss.category);
+        const ok=await cloudWrite(sb.from('subscriptions').upsert(subscriptionToCloud(ss,cat&&isUUID(cat.id)?cat.id:null),{onConflict:'id'}),`actualizar suscripción ${ss.name}`);
+        if(ok)delete retryableWrites[key];else retryableWrites[key]=doWrite;
+      };
+      doWrite();
     }
     return s;
   },
@@ -2785,6 +2848,7 @@ function go(page){
 async function pushPendingIfAny(){
   if(!sb||!currentUserId||!navigator.onLine)return;
   if(syncQueue.length)await processSyncQueue();
+  if(Object.keys(retryableWrites).length)await retryFailedWrites();
 }
 function updateNW(){
   const assets=S.accounts.reduce((a,x)=>a+(x.type==='credit'?0:M(x.balance||0)),0);
@@ -2960,8 +3024,11 @@ function renderDash(){
     deltaHTML=`<div class="nw-hero-delta" style="color:${delta>=0?'var(--inc)':'var(--exp)'}">${delta>=0?'↑':'↓'} ${fmt(Math.abs(delta))} (${pct>=0?'+':''}${pct}%) vs. mes pasado</div>`;
   }
   $('d-nw-hero').innerHTML=`<div class="nw-hero"><div><div class="nw-hero-label">Patrimonio neto</div><div class="nw-hero-val">${fmt(nw)}</div>${deltaHTML}</div></div>`;
-  $('d-metrics').style.display=dw.metrics?'':'none';
-  if(dw.metrics){
+  // Las 4 métricas del mes son fijas — siempre visibles, ya no se pueden
+  // ocultar desde Ajustes (antes sí se podía, pero se pidió que fueran
+  // permanentes).
+  $('d-metrics').style.display='';
+  {
     $('d-inc').textContent=fmt(inc);$('d-exp').textContent=fmt(exp);
     const be=$('d-bal');be.textContent=fmt(bal);be.style.color=bal>=0?'var(--inc)':'var(--exp)';
     const se=$('d-sav');se.textContent=sav+'%';se.style.color=sav>=20?'var(--inc)':sav>=10?'var(--yel)':'var(--exp)';
@@ -2975,35 +3042,42 @@ function renderDash(){
       left=`<div class="card"><div class="slbl">Últimas transacciones</div>${r.length?r.map(t=>`<div style="display:flex;align-items:center;justify-content:space-between;padding:7px 0;border-bottom:1px solid var(--bdr)"><div style="display:flex;align-items:center;gap:9px"><div style="width:28px;height:28px;border-radius:50%;background:var(--bg4);display:flex;align-items:center;justify-content:center;font-size:12px">${getCatIcon(t.category)}</div><div><div style="font-size:13px">${esc(t.description)}</div><div style="font-size:11px;color:var(--t3)">${fmtDate(t.date)} · ${esc(t.category)||'—'}</div></div></div><div style="font-family:'DM Mono',monospace;font-size:13px;color:${t.type==='income'?'var(--inc)':t.type==='expense'?'var(--exp)':'var(--blu)'};">${t.type==='expense'?'-':''}${fmt(t.amount)}</div></div>`).join(''):emptyState('💸','Aún no hay movimientos','Tu actividad reciente va a aparecer aquí en cuanto registres tu primera transacción.','+ Nueva transacción',"openTxM()")}</div>`;
     }
     const rightParts=[];
-    if(dw.cats){
+    // Cada widget se arma en su propia función para poder ensamblarlos en
+    // el orden que el usuario configuró en Ajustes → Dashboard, en vez de
+    // un orden fijo en el código.
+    const buildCats=()=>{
       const ce={};mtxs.filter(t=>t.type==='expense').forEach(t=>{ce[t.category]=(ce[t.category]||0)+M(t.amount)});
       const srt=Object.entries(ce).sort((a,b)=>b[1]-a[1]).slice(0,5);const mx=srt[0]?.[1]||1;
-      rightParts.push(`<div class="card"><div class="slbl">Gastos por categoría</div>${srt.length?srt.map(([c,v])=>`<div style="margin-bottom:9px"><div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:3px"><span>${getCatIcon(c)} ${c}</span><span style="color:var(--t2);font-family:'DM Mono',monospace">${fmt(v)}</span></div><div class="pw"><div class="pb" style="width:${(v/mx*100).toFixed(0)}%;background:var(--red)"></div></div></div>`).join(''):'<div style="color:var(--t3);font-size:13px;text-align:center;padding:8px">Sin gastos</div>'}</div>`);
-    }
-    if(dw.accs){
+      return[`<div class="card"><div class="slbl">Gastos por categoría</div>${srt.length?srt.map(([c,v])=>`<div style="margin-bottom:9px"><div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:3px"><span>${getCatIcon(c)} ${c}</span><span style="color:var(--t2);font-family:'DM Mono',monospace">${fmt(v)}</span></div><div class="pw"><div class="pb" style="width:${(v/mx*100).toFixed(0)}%;background:var(--red)"></div></div></div>`).join(''):'<div style="color:var(--t3);font-size:13px;text-align:center;padding:8px">Sin gastos</div>'}</div>`];
+    };
+    const buildAccs=()=>{
+      const out=[];
       const cashDebit=S.accounts.filter(a=>!a.archived&&(a.type==='cash'||a.type==='debit'));
       const creditAccs=S.accounts.filter(a=>!a.archived&&a.type==='credit');
       const cashDebitTotal=cashDebit.reduce((s,a)=>s+(a.balanceHidden?0:M(a.balance)),0);
       const anyHidden=cashDebit.some(a=>a.balanceHidden);
-      rightParts.push(`<div class="card card-click" onclick="go('accounts')"><div class="slbl">Cuentas</div>${cashDebit.length?cashDebit.map(a=>`<div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid var(--bdr)"><div style="display:flex;align-items:center;gap:7px"><div style="width:8px;height:8px;border-radius:50%;background:${a.color||'var(--ac)'}"></div><span style="font-size:13px">${esc(a.name)}${a.locked?' 🔒':''}</span></div><span style="font-family:'DM Mono',monospace;font-size:13px;color:${a.balanceHidden?'var(--t3)':M(a.balance)>=0?'var(--inc)':'var(--exp)'}">${accBalanceLabel(a)}</span></div>`).join(''):'<div style="color:var(--t3);font-size:13px">Sin cuentas de efectivo/débito</div>'}${cashDebit.length?`<div style="display:flex;justify-content:space-between;padding-top:8px;margin-top:2px;font-weight:600"><span style="font-size:13px">Total</span><span style="font-family:'DM Mono',monospace;font-size:13px;color:${cashDebitTotal>=0?'var(--inc)':'var(--exp)'}">${anyHidden?'••••••':fmt(cashDebitTotal)}</span></div>`:''}</div>`);
+      out.push(`<div class="card card-click" onclick="go('accounts')"><div class="slbl">Cuentas</div>${cashDebit.length?cashDebit.map(a=>`<div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid var(--bdr)"><div style="display:flex;align-items:center;gap:7px"><div style="width:8px;height:8px;border-radius:50%;background:${a.color||'var(--ac)'}"></div><span style="font-size:13px">${esc(a.name)}${a.locked?' 🔒':''}</span></div><span style="font-family:'DM Mono',monospace;font-size:13px;color:${a.balanceHidden?'var(--t3)':M(a.balance)>=0?'var(--inc)':'var(--exp)'}">${accBalanceLabel(a)}</span></div>`).join(''):'<div style="color:var(--t3);font-size:13px">Sin cuentas de efectivo/débito</div>'}${cashDebit.length?`<div style="display:flex;justify-content:space-between;padding-top:8px;margin-top:2px;font-weight:600"><span style="font-size:13px">Total</span><span style="font-family:'DM Mono',monospace;font-size:13px;color:${cashDebitTotal>=0?'var(--inc)':'var(--exp)'}">${anyHidden?'••••••':fmt(cashDebitTotal)}</span></div>`:''}</div>`);
       // Tarjetas de crédito en su propia tarjeta — mezclarlas con
       // efectivo/débito en el mismo total no tiene sentido (es deuda
       // disponible, no dinero tuyo).
       if(creditAccs.length){
-        rightParts.push(`<div class="card card-click" onclick="go('accounts')"><div class="slbl">Tarjetas de crédito</div>${creditAccs.map(a=>{const used=a.limit?a.limit-M(a.balance):0;return`<div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid var(--bdr)"><div style="display:flex;align-items:center;gap:7px"><div style="width:8px;height:8px;border-radius:50%;background:${a.color||'var(--pur)'}"></div><span style="font-size:13px">${esc(a.name)}${a.locked?' 🔒':''}</span></div><span style="font-family:'DM Mono',monospace;font-size:13px;color:var(--t2)">${a.balanceHidden?'••••••':fmt(used)}${a.limit?' / '+fmt(a.limit):''}</span></div>`}).join('')}</div>`);
+        out.push(`<div class="card card-click" onclick="go('accounts')"><div class="slbl">Tarjetas de crédito</div>${creditAccs.map(a=>{const used=a.limit?a.limit-M(a.balance):0;return`<div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid var(--bdr)"><div style="display:flex;align-items:center;gap:7px"><div style="width:8px;height:8px;border-radius:50%;background:${a.color||'var(--pur)'}"></div><span style="font-size:13px">${esc(a.name)}${a.locked?' 🔒':''}</span></div><span style="font-family:'DM Mono',monospace;font-size:13px;color:var(--t2)">${a.balanceHidden?'••••••':fmt(used)}${a.limit?' / '+fmt(a.limit):''}</span></div>`}).join('')}</div>`);
       }
-    }
-    if(dw.subs){
+      return out;
+    };
+    const buildSubs=()=>{
       const activeSubs=S.subscriptions.filter(s=>(s.status||'active')==='active');
       const monthlyTotal=activeSubs.reduce((a,s)=>a+(s.freq==='monthly'?s.cost:s.freq==='annual'?s.cost/12:s.cost*4.33),0);
       const nextFew=[...activeSubs].sort((a,b)=>new Date(a.nextDate)-new Date(b.nextDate)).slice(0,3);
-      rightParts.push(`<div class="card card-click" onclick="go('subscriptions')"><div class="slbl">Suscripciones</div>${nextFew.length?nextFew.map(s=>`<div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid var(--bdr)"><span style="font-size:13px">${esc(s.icon)} ${esc(s.name)}</span><span style="font-family:'DM Mono',monospace;font-size:13px;color:var(--t2)">${fmt(s.cost)}</span></div>`).join(''):'<div style="color:var(--t3);font-size:13px">Sin suscripciones activas</div>'}${activeSubs.length?`<div style="display:flex;justify-content:space-between;padding-top:8px;margin-top:2px;font-weight:600"><span style="font-size:13px">Total/mes</span><span style="font-family:'DM Mono',monospace;font-size:13px">${fmt(monthlyTotal)}</span></div>`:''}</div>`);
-    }
-    if(dw.debts){
+      return[`<div class="card card-click" onclick="go('subscriptions')"><div class="slbl">Suscripciones</div>${nextFew.length?nextFew.map(s=>`<div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid var(--bdr)"><span style="font-size:13px">${esc(s.icon)} ${esc(s.name)}</span><span style="font-family:'DM Mono',monospace;font-size:13px;color:var(--t2)">${fmt(s.cost)}</span></div>`).join(''):'<div style="color:var(--t3);font-size:13px">Sin suscripciones activas</div>'}${activeSubs.length?`<div style="display:flex;justify-content:space-between;padding-top:8px;margin-top:2px;font-weight:600"><span style="font-size:13px">Total/mes</span><span style="font-family:'DM Mono',monospace;font-size:13px">${fmt(monthlyTotal)}</span></div>`:''}</div>`];
+    };
+    const buildDebts=()=>{
       const owedTotal=S.debts_owed.reduce((a,d)=>a+Math.max(0,d.amount-(d.paid||0)),0);
       const ioweTotal=S.debts_iowe.reduce((a,d)=>a+Math.max(0,d.amount-(d.paid||0)),0);
-      rightParts.push(`<div class="card card-click" onclick="go('loans')"><div class="slbl">Préstamos</div><div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid var(--bdr)"><span style="font-size:13px">Me deben</span><span style="font-family:'DM Mono',monospace;font-size:13px;color:var(--inc)">${fmt(owedTotal)}</span></div><div style="display:flex;justify-content:space-between;padding:6px 0"><span style="font-size:13px">Debo</span><span style="font-family:'DM Mono',monospace;font-size:13px;color:var(--exp)">${fmt(ioweTotal)}</span></div></div>`);
-    }
+      return[`<div class="card card-click" onclick="go('loans')"><div class="slbl">Préstamos</div><div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid var(--bdr)"><span style="font-size:13px">Me deben</span><span style="font-family:'DM Mono',monospace;font-size:13px;color:var(--inc)">${fmt(owedTotal)}</span></div><div style="display:flex;justify-content:space-between;padding:6px 0"><span style="font-size:13px">Debo</span><span style="font-family:'DM Mono',monospace;font-size:13px;color:var(--exp)">${fmt(ioweTotal)}</span></div></div>`];
+    };
+    const widgetBuilders={cats:buildCats,accs:buildAccs,subs:buildSubs,debts:buildDebts};
+    getDashOrder().forEach(k=>{if(dw[k])rightParts.push(...widgetBuilders[k]())});
     right=rightParts.join('<div style="height:13px"></div>');
     if(left&&right)parts.push(`<div class="g2">${left}<div>${right}</div></div>`);
     else if(left)parts.push(left);else if(right)parts.push(right);
@@ -4565,6 +4639,7 @@ function cfgTab(t,el){
   $('cfg-'+t).style.display='block';
   document.querySelectorAll('#cfg-tabs .tab').forEach(b=>b.classList.remove('on'));el.classList.add('on');
   if(t==='categorias')renderCats();
+  if(t==='dashboard')renderDashOrderList();
   if(t==='historial')renderNWHistory();
 }
 function renderSettings(){
@@ -4577,7 +4652,7 @@ function renderSettings(){
   $('cfg-dark').checked=!S.settings.theme||S.settings.theme==='dark';
   $('cfg-name').value=S.settings.name||'';$('cfg-cur').value=S.settings.currency||'MXN';
   $('cfg-datefmt').value=S.settings.dateFormat||'dmy';$('cfg-timefmt').value=S.settings.timeFormat||'24h';
-  const dw=S.dw;['metrics','txs','cats','accs','goals','budget','upcoming','subs','debts'].forEach(k=>{const el=$('w-'+k);if(el)el.checked=!!dw[k]});
+  const dw=S.dw;['txs','cats','accs','goals','budget','upcoming','subs','debts'].forEach(k=>{const el=$('w-'+k);if(el)el.checked=!!dw[k]});
   const nt=S.notif||{};['bgt','dbt','sub','gol'].forEach(k=>{const el=$('n-'+k);if(el)el.checked=nt[k]!==false});
   document.querySelectorAll('.swatch[data-a]').forEach(s=>{s.classList.toggle('sel',s.dataset.a===(S.settings.accent||'green'))});
 }
@@ -4651,7 +4726,31 @@ function renderLoansHistory(){
 }
 function applyTheme(){const d=$('cfg-dark').checked;document.documentElement.setAttribute('data-theme',d?'dark':'light');S.settings.theme=d?'dark':'light';save();pushSettings();}
 function setAccent(a,el){document.documentElement.setAttribute('data-accent',a==='green'?'':a);document.querySelectorAll('.swatch[data-a]').forEach(s=>s.classList.remove('sel'));el.classList.add('sel');S.settings.accent=a;save();pushSettings();}
-function saveDW(){['metrics','txs','cats','accs','goals','budget','upcoming','subs','debts'].forEach(k=>{const el=$('w-'+k);if(el)S.dw[k]=el.checked});save();pushSettings();renderDash();toast('Dashboard actualizado')}
+const DASH_ORDER_LABELS={cats:'Gastos por categoría',accs:'Resumen de cuentas',subs:'Suscripciones',debts:'Préstamos'};
+const DASH_ORDER_DEFAULT=['cats','accs','subs','debts'];
+function getDashOrder(){
+  const o=S.dw.order;
+  if(!o||!o.length)return[...DASH_ORDER_DEFAULT];
+  // por si algún día se agrega una card nueva a este grupo — que no
+  // desaparezca del orden guardado solo porque es más viejo que la card
+  const merged=[...o.filter(k=>DASH_ORDER_DEFAULT.includes(k))];
+  DASH_ORDER_DEFAULT.forEach(k=>{if(!merged.includes(k))merged.push(k)});
+  return merged;
+}
+function renderDashOrderList(){
+  const el=$('dash-order-list');if(!el)return;
+  const order=getDashOrder();
+  el.innerHTML=order.map((k,i)=>`<div class="sr"><div style="display:flex;align-items:center;gap:8px"><span style="color:var(--t3);font-size:12px;width:14px">${i+1}</span><div class="si-l">${DASH_ORDER_LABELS[k]}</div></div><div style="display:flex;align-items:center;gap:4px"><button class="btn bg_ ico sm" ${i===0?'disabled':''} onclick="moveDashWidget('${k}',-1)" title="Subir">↑</button><button class="btn bg_ ico sm" ${i===order.length-1?'disabled':''} onclick="moveDashWidget('${k}',1)" title="Bajar">↓</button><label class="sw"><input type="checkbox" id="w-${k}" ${S.dw[k]?'checked':''} onchange="saveDW()"><span class="sl"></span></label></div></div>`).join('');
+}
+function moveDashWidget(key,dir){
+  const order=getDashOrder();
+  const idx=order.indexOf(key);if(idx<0)return;
+  const newIdx=idx+dir;if(newIdx<0||newIdx>=order.length)return;
+  [order[idx],order[newIdx]]=[order[newIdx],order[idx]];
+  S.dw.order=order;save();pushSettings();
+  renderDashOrderList();renderDash();
+}
+function saveDW(){['txs','cats','accs','goals','budget','upcoming','subs','debts'].forEach(k=>{const el=$('w-'+k);if(el)S.dw[k]=el.checked});save();pushSettings();renderDash();toast('Dashboard actualizado')}
 function saveNotif(){if(!S.notif)S.notif={};['bgt','dbt','sub','gol'].forEach(k=>{const el=$('n-'+k);if(el)S.notif[k]=el.checked});save();toast('Preferencias guardadas')}
 function exportData(){const a=document.createElement('a');a.href='data:application/json,'+encodeURIComponent(JSON.stringify(S,null,2));a.download='finance-backup.json';a.click();toast('Datos exportados')}
 function importData(e){const f=e.target.files[0];if(!f)return;const r=new FileReader();r.onload=ev=>{try{S=JSON.parse(ev.target.result);save();renderDash();toast('Datos importados')}catch{toast('Archivo inválido',false)}};r.readAsText(f)}
