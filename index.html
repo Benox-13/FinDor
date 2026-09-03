@@ -1586,6 +1586,7 @@ async function pullFromSupabase(){
         accountId:t.account_id||'',accountId2:t.related_account_id||'',
         notes:t.notes||'',msi:t.msi||null,subscriptionId:t.subscription_id||undefined,
         debtId:t.debt_id||undefined,goalId:t.goal_id||undefined,
+        transferDirection:t.transfer_direction||undefined,linkedTxId:t.linked_tx_id||undefined,
       };
     });
 
@@ -1714,13 +1715,20 @@ function refreshAllUI(){
 
 function amtToCents(n){return Math.round(M(n||0)*100)}
 
+let lastSyncErrors={}; // label -> mensaje de error, para poder mostrarlo en pantalla
 async function cloudWrite(promise,label){
   try{
     const {error}=await promise;
-    if(error){console.warn(`Supabase: no se pudo sincronizar "${label}":`,error.message);return false}
+    if(error){
+      console.warn(`Supabase: no se pudo sincronizar "${label}":`,error.message);
+      lastSyncErrors[label]=error.message;
+      return false;
+    }
+    delete lastSyncErrors[label];
     return true;
   }catch(err){
     console.warn(`Supabase: error de red sincronizando "${label}":`,err);
+    lastSyncErrors[label]=String(err?.message||err);
     return false;
   }
 }
@@ -1742,7 +1750,8 @@ function transactionToCloud(t,catId,subcatId){
     description:t.description||'',category_id:catId||null,subcategory_id:subcatId||null,
     account_id:t.accountId||null,related_account_id:t.accountId2||null,notes:t.notes||null,
     msi:t.msi||null,updated_at:timeNorm?`${t.date}T${timeNorm}`:new Date().toISOString(),
-    debt_id:t.debtId||null,goal_id:t.goalId||null,subscription_id:t.subscriptionId||null};
+    debt_id:t.debtId||null,goal_id:t.goalId||null,subscription_id:t.subscriptionId||null,
+    transfer_direction:t.transferDirection||null,linked_tx_id:t.linkedTxId||null};
 }
 function debtToCloud(d,direction){
   // extra: columna jsonb nueva para el desglose opcional de capital+intereses
@@ -1962,7 +1971,8 @@ async function safeSyncPull(){
   if(syncQueue.length||Object.keys(retryableWrites).length){
     console.warn('Supabase: hay cambios sin sincronizar, no se actualizó desde la nube para no perder datos:',syncQueue,retryableWrites);
     const n=syncQueue.length+Object.keys(retryableWrites).length;
-    toast(`${n} cambio(s) no se pudieron subir a la nube todavía — no se actualizó desde la nube para no perder datos. Revisa la consola o tu conexión.`,false);
+    const details=Object.entries(lastSyncErrors).slice(0,2).map(([k,v])=>`${k}: ${v}`).join(' · ');
+    toast(`${n} cambio(s) sin subir todavía — no se actualizó desde la nube para no perder datos.${details?' Detalle: '+details:''}`,false);
     return;
   }
 
@@ -2276,6 +2286,14 @@ const Store = {
       cloudWrite(sb.from('transactions').update({deleted_at:new Date().toISOString()}).eq('id',id),'borrar transacción')
         .then(ok=>{if(ok)dequeueTxSync(id);}); // si falla, se queda en la cola tal cual para el próximo reintento
     }
+    // Si esta transacción es una mitad de una transferencia (formato
+    // nuevo, dos transacciones vinculadas), se borra también la otra
+    // mitad — de lo contrario quedaría un movimiento huérfano de un solo
+    // lado, sin su contraparte.
+    if(tx.linkedTxId){
+      const linked=this.getTransactionById(tx.linkedTxId);
+      if(linked)this.deleteTransaction(tx.linkedTxId);
+    }
   },
   // Sube una transacción a Supabase, resolviendo category_id/subcategory_id
   // por nombre (localmente tx.category/tx.subcategory son texto).
@@ -2354,9 +2372,18 @@ const Store = {
     if(tx.type==='income')acc.balance=M(acc.balance)+M(tx.amount);
     else if(tx.type==='expense')acc.balance=M(acc.balance)-M(tx.amount);
     else if(tx.type==='transfer'){
-      acc.balance=M(acc.balance)-M(tx.amount);
-      const a2=this.getAccountById(tx.accountId2);
-      if(a2)a2.balance=M(a2.balance)+M(tx.amount);
+      if(tx.accountId2){
+        // Formato viejo: una sola transacción con las dos cuentas — se
+        // mantiene funcionando igual que siempre para no romper datos ya
+        // guardados así.
+        acc.balance=M(acc.balance)-M(tx.amount);
+        const a2=this.getAccountById(tx.accountId2);
+        if(a2)a2.balance=M(a2.balance)+M(tx.amount);
+      } else if(tx.transferDirection==='in'){
+        acc.balance=M(acc.balance)+M(tx.amount);
+      } else {
+        acc.balance=M(acc.balance)-M(tx.amount);
+      }
     }
     this._syncAccountBalance(tx.accountId);
     if(tx.accountId2)this._syncAccountBalance(tx.accountId2);
@@ -2368,9 +2395,15 @@ const Store = {
     if(tx.type==='income')acc.balance=M(acc.balance)-M(tx.amount);
     else if(tx.type==='expense')acc.balance=M(acc.balance)+M(tx.amount);
     else if(tx.type==='transfer'){
-      acc.balance=M(acc.balance)+M(tx.amount);
-      const a2=this.getAccountById(tx.accountId2);
-      if(a2)a2.balance=M(a2.balance)-M(tx.amount);
+      if(tx.accountId2){
+        acc.balance=M(acc.balance)+M(tx.amount);
+        const a2=this.getAccountById(tx.accountId2);
+        if(a2)a2.balance=M(a2.balance)-M(tx.amount);
+      } else if(tx.transferDirection==='in'){
+        acc.balance=M(acc.balance)-M(tx.amount);
+      } else {
+        acc.balance=M(acc.balance)+M(tx.amount);
+      }
     }
     this._syncAccountBalance(tx.accountId);
     if(tx.accountId2)this._syncAccountBalance(tx.accountId2);
@@ -3170,6 +3203,7 @@ function openTxM(editId=null){
   editingTxId=editId;
   if(editId){
     const tx=S.transactions.find(t=>t.id===editId);if(!tx)return;
+    if(tx.linkedTxId){toast('Esta transacción es la mitad de una transferencia — bórrala (se borra el par completo) y créala de nuevo si necesitas cambiarla.',false);editingTxId=null;return}
     const lockedAcc=[tx.accountId,tx.accountId2].filter(Boolean).map(id=>Store.getAccountById(id)).find(a=>a?.locked);
     if(lockedAcc){toast(`"${lockedAcc.name}" está bloqueada — no se pueden editar movimientos de esta cuenta.`,false);return}
     $('tx-modal-title').textContent='Editar transacción';
@@ -3481,23 +3515,55 @@ async function saveTx(){
   if(!accId){toast('Selecciona una cuenta',false);return}
   if(txType==='transfer'&&!$('tx-acc2').value){toast('Selecciona la cuenta destino',false);return}
   const time=$('tx-time').value||tnow_();
-  // Si no se escribió descripción, usamos la subcategoría (o si no hay,
-  // la categoría) como descripción por defecto — mejor que un genérico
-  // "Sin descripción" para identificar la transacción en las listas.
-  const desc=$('tx-dsc').value||subcat||cat||'Sin descripción';
   const msiOn=$('tx-msi').checked&&txType==='expense';
   const msiMo=parseInt($('tx-msi-mo').value)||0;
+
   if(editingTxId){
+    const existing=Store.getTransactionById(editingTxId);
+    // Las transferencias del formato nuevo son dos transacciones
+    // vinculadas — editar solo una mitad desde este formulario dejaría a
+    // la otra mitad desincronizada (monto/fecha distintos entre las dos).
+    // Más simple y seguro: pedir borrar y volver a crear.
+    if(existing?.linkedTxId){
+      toast('Esta transacción es la mitad de una transferencia — bórrala (se borra el par completo) y créala de nuevo si necesitas cambiarla.',false);
+      return;
+    }
     const ok=await confirm_('¿Guardar cambios?','Se actualizará esta transacción y se ajustará el balance de la cuenta.','Guardar');
     if(!ok)return;
     saveBtn.disabled=true;
+    const desc=$('tx-dsc').value||subcat||cat||'Sin descripción';
     // EDIT: Store.updateTransaction revierte el balance viejo y aplica el nuevo internamente
     const patch={type:txType,amount:amt,date:dt,time,description:desc,category:cat,subcategory:subcat||undefined,accountId:accId,accountId2:$('tx-acc2').value,notes:$('tx-notes').value};
     Store.updateTransaction(editingTxId,patch);
     cM('mo-tx');renderTxP();renderDash();toast('Transacción actualizada');saveBtn.disabled=false;return;
   }
+
   saveBtn.disabled=true;
-  const tx={type:txType,amount:amt,date:dt,time,description:desc,category:cat,subcategory:subcat||undefined,accountId:accId,accountId2:$('tx-acc2').value,notes:$('tx-notes').value,
+
+  if(txType==='transfer'){
+    const dstId=$('tx-acc2').value;
+    const srcAcc=Store.getAccountById(accId);const dstAcc=Store.getAccountById(dstId);
+    // Categoría "Transferencia" reutilizada (se crea una sola vez) y
+    // descripción que deja claro qué pasó — antes la categoría quedaba
+    // vacía y la descripción era libre, sin indicar el movimiento real.
+    const transferCat=ensureCategory('Transferencia','expense');
+    const desc=$('tx-dsc').value||`Transferencia: ${srcAcc?.name||'?'} → ${dstAcc?.name||'?'}`;
+    const notes=$('tx-notes').value;
+    // Dos transacciones vinculadas — una por cuenta — para que el
+    // movimiento aparezca en el historial de AMBAS cuentas, no solo en la
+    // de origen.
+    const outTx=Store.addTransaction({type:'transfer',amount:amt,date:dt,time,description:desc,category:transferCat.name,accountId:accId,transferDirection:'out',notes});
+    const inTx=Store.addTransaction({type:'transfer',amount:amt,date:dt,time,description:desc,category:transferCat.name,accountId:dstId,transferDirection:'in',linkedTxId:outTx.id,notes});
+    Store.updateTransaction(outTx.id,{linkedTxId:inTx.id});
+    cM('mo-tx');renderDash();renderTxP();toast('Transferencia guardada');saveBtn.disabled=false;
+    return;
+  }
+
+  // Si no se escribió descripción, usamos la subcategoría (o si no hay,
+  // la categoría) como descripción por defecto — mejor que un genérico
+  // "Sin descripción" para identificar la transacción en las listas.
+  const desc=$('tx-dsc').value||subcat||cat||'Sin descripción';
+  const tx={type:txType,amount:amt,date:dt,time,description:desc,category:cat,subcategory:subcat||undefined,accountId:accId,notes:$('tx-notes').value,
     msi:msiOn?{months:msiMo,paid:0,monthly:amt/msiMo,paidAmt:0}:null};
   Store.addTransaction(tx);
   cM('mo-tx');renderDash();renderTxP();toast('Transacción guardada');saveBtn.disabled=false;
@@ -3637,7 +3703,13 @@ function renderTxP(){
     metaParts.push(a?esc(a.name):'Sin cuenta');
     if(t.time)metaParts.push(fmtTime(t.time));
     if(t.msi)metaParts.push(`${t.msi.months} MSI`);
-    return`<div class="tx-row"><div class="tx-icon">${getCatIcon(t.category)}</div><div class="tx-main"><div class="tx-desc">${esc(t.description)}</div><div class="tx-meta">${metaParts.join(' · ')}</div></div><div style="text-align:right;flex-shrink:0"><div class="tx-amt" style="color:${clr}">${t.type==='expense'?'-':t.type==='income'?'+':''}${fmt(t.amount)}</div><div class="tx-meta">${tl[t.type]}</div></div><button class="btn bg_ ico sm" title="Más opciones" style="margin-left:4px" onclick="showRowMenu(this,[{label:'Editar',icon:'✎',onClick:()=>openTxM('${t.id}')},{label:'Eliminar',icon:'✕',danger:true,onClick:()=>delTx('${t.id}')}])">⋮</button></div>`;
+    // Signo del monto: gasto siempre resta, ingreso siempre suma; una
+    // transferencia resta o suma según de qué lado esté esta mitad
+    // (formato nuevo con transferDirection) — el formato viejo (una sola
+    // transacción con las dos cuentas) no tiene un "lado" único, así que
+    // ahí se deja sin signo, como siempre.
+    const sign=t.type==='expense'?'-':t.type==='income'?'+':t.type==='transfer'?(t.transferDirection==='in'?'+':t.transferDirection==='out'?'-':''):'';
+    return`<div class="tx-row"><div class="tx-icon">${getCatIcon(t.category)}</div><div class="tx-main"><div class="tx-desc">${esc(t.description)}</div><div class="tx-meta">${metaParts.join(' · ')}</div></div><div style="text-align:right;flex-shrink:0"><div class="tx-amt" style="color:${clr}">${sign}${fmt(t.amount)}</div><div class="tx-meta">${tl[t.type]}</div></div><button class="btn bg_ ico sm" title="Más opciones" style="margin-left:4px" onclick="showRowMenu(this,[{label:'Editar',icon:'✎',onClick:()=>openTxM('${t.id}')},{label:'Eliminar',icon:'✕',danger:true,onClick:()=>delTx('${t.id}')}])">⋮</button></div>`;
   };
 
   // Agrupar por fecha solo tiene sentido cuando el orden es por fecha —
@@ -3667,12 +3739,14 @@ function txGroupLabel(dateStr){
 
 async function delTx(id){
   const tx=Store.getTransactionById(id);if(!tx)return;
-  const lockedAcc=[tx.accountId,tx.accountId2].filter(Boolean).map(a=>Store.getAccountById(a)).find(a=>a?.locked);
+  const linked=tx.linkedTxId?Store.getTransactionById(tx.linkedTxId):null;
+  const accountIds=[tx.accountId,tx.accountId2,linked?.accountId].filter(Boolean);
+  const lockedAcc=accountIds.map(a=>Store.getAccountById(a)).find(a=>a?.locked);
   if(lockedAcc){toast(`"${lockedAcc.name}" está bloqueada — no se pueden eliminar movimientos de esta cuenta.`,false);return}
-  const ok=await confirm_('¿Eliminar transacción?','Se revertirá el movimiento en la cuenta correspondiente.');
+  const ok=await confirm_('¿Eliminar transacción?',linked?'Es una transferencia — se eliminarán las dos mitades (origen y destino) y se revertirá el balance de ambas cuentas.':'Se revertirá el movimiento en la cuenta correspondiente.');
   if(!ok)return;
   Store.deleteTransaction(id);
-  renderTxP();renderDash();toast('Transacción eliminada');
+  renderTxP();renderDash();toast(linked?'Transferencia eliminada':'Transacción eliminada');
 }
 
 // ==================== ACCOUNTS ====================
