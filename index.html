@@ -300,6 +300,10 @@ input:checked+.sl:before{transform:translateX(18px);background:#fff}
 #mob-overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:150}
 #mob-overlay.open{display:block}
 #bottom-nav{display:none}
+/* Mientras hay un modal abierto, la barra inferior se oculta — antes se
+   quedaba encima del formulario (z-index más alto) y podía tapar el
+   botón "Guardar" del pie del modal. */
+body.modal-open #bottom-nav{display:none !important}
 
 @media (max-width:680px){
   #mob-menu-btn{display:none}
@@ -331,6 +335,7 @@ input:checked+.sl:before{transform:translateX(18px);background:#fff}
      out para ver un formulario completo). */
   .mo{padding:10px}
   .mo .md{max-width:calc(100vw - 20px) !important;box-sizing:border-box}
+  .mo .mfoot{padding-bottom:calc(16px + env(safe-area-inset-bottom))}
 
   /* ---- Barra de navegación inferior ---- */
   #bottom-nav{display:flex;position:fixed;bottom:0;left:0;right:0;z-index:190;background:var(--bg2);border-top:1px solid var(--bdr);padding:10px 4px calc(10px + env(safe-area-inset-bottom));align-items:flex-start;justify-content:space-around}
@@ -2100,8 +2105,14 @@ const isUUID=s=>typeof s==='string'&&/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a
 const td_=()=>new Date().toISOString().split('T')[0];
 const tnow_=()=>{const d=new Date();return String(d.getHours()).padStart(2,'0')+':'+String(d.getMinutes()).padStart(2,'0')+':'+String(d.getSeconds()).padStart(2,'0')};
 const fmt=n=>M(n||0).toLocaleString('es-MX',{style:'currency',currency:S?.settings?.currency||'MXN',minimumFractionDigits:2,maximumFractionDigits:2});
-const oM=id=>$(id).classList.add('op');
-const cM=id=>$(id).classList.remove('op');
+// Antes, en móvil, la barra de navegación inferior (z-index más alto que
+// los modales) podía quedar encima del pie del formulario, tapando el
+// botón "Guardar". Ahora se oculta mientras haya al menos un modal
+// abierto (contador, por si hay un modal de confirmación sobre otro
+// modal) y vuelve a aparecer cuando se cierran todos.
+let _openModalCount=0;
+const oM=id=>{$(id).classList.add('op');_openModalCount++;document.body.classList.add('modal-open')};
+const cM=id=>{$(id).classList.remove('op');_openModalCount=Math.max(0,_openModalCount-1);if(_openModalCount===0)document.body.classList.remove('modal-open')};
 
 // ==================== STATE ====================
 // Mismo esqueleto que el estado default de más abajo, pero SIN las
@@ -2814,10 +2825,15 @@ function confirm_(title,msg,btnLabel='Eliminar'){
     $('confirm-title').textContent=title;
     $('confirm-msg').textContent=msg;
     $('confirm-ok-btn').textContent=btnLabel;
+    _openModalCount++;document.body.classList.add('modal-open');
     $('confirm-overlay').classList.add('op');
   });
 }
-function confirmResolve(v){$('confirm-overlay').classList.remove('op');if(_confirmCb){_confirmCb(v);_confirmCb=null}}
+function confirmResolve(v){
+  $('confirm-overlay').classList.remove('op');
+  _openModalCount=Math.max(0,_openModalCount-1);if(_openModalCount===0)document.body.classList.remove('modal-open');
+  if(_confirmCb){_confirmCb(v);_confirmCb=null}
+}
 
 // ==================== MENÚ DE 3 PUNTOS ====================
 // Reemplaza los pares de botones ✎ Editar / ✕ Eliminar que estaban sueltos
@@ -2964,7 +2980,7 @@ function renderBilling(){
       <!-- Recent transactions for this card -->
       <div style="border-top:1px solid var(--bdr);padding:12px 16px">
         <div style="font-size:11px;color:var(--t3);text-transform:uppercase;letter-spacing:.7px;margin-bottom:8px">Últimos movimientos</div>
-        ${(()=>{const recent=S.transactions.filter(t=>t.accountId===a.id&&t.type==='expense').sort((x,y)=>y.date.localeCompare(x.date)).slice(0,4);return recent.length?recent.map(t=>`<div style="display:flex;justify-content:space-between;align-items:center;padding:5px 0;border-bottom:1px solid var(--bdr)"><div style="flex:1;min-width:0"><div style="font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(t.description)}</div><div style="font-size:10px;color:var(--t3)">${t.date} · ${esc(t.category)||'—'}</div></div><span style="font-family:'DM Mono',monospace;font-size:12px;color:var(--exp);flex-shrink:0;margin-left:10px">-${fmt(t.amount)}</span></div>`).join(''):'<div style="font-size:12px;color:var(--t3)">Sin movimientos</div>';})()}
+        ${(()=>{const recent=S.transactions.filter(t=>t.accountId===a.id&&t.type==='expense').sort((x,y)=>y.date.localeCompare(x.date)).slice(0,4);return recent.length?recent.map(t=>`<div style="display:flex;justify-content:space-between;align-items:center;padding:5px 0;border-bottom:1px solid var(--bdr)"><div style="flex:1;min-width:0"><div style="font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(t.description)}</div><div style="font-size:10px;color:var(--t3)">${fmtDate(t.date)} · ${esc(t.category)||'—'}</div></div><span style="font-family:'DM Mono',monospace;font-size:12px;color:var(--exp);flex-shrink:0;margin-left:10px">-${fmt(t.amount)}</span></div>`).join(''):'<div style="font-size:12px;color:var(--t3)">Sin movimientos</div>';})()}
       </div>
     </div>`;
   });
@@ -3826,6 +3842,16 @@ function renderAccounts(){
   g.innerHTML=html;
   renderMSI();updateNW();
 }
+// Clic en una tarjeta de cuenta: va a Transacciones ya filtrado por esa
+// cuenta. go('transactions') ya deja el selector de cuentas poblado (lo
+// hace renderTxP al detectarlo vacío) — aquí solo falta fijar el valor y
+// volver a pintar para que el filtro se aplique de una vez.
+function viewAccountTransactions(accountId){
+  go('transactions');
+  const sel=$('txacc');
+  if(sel)sel.value=accountId;
+  renderTxP();
+}
 function accountCardHTML(a){
     const tl={cash:'Efectivo',debit:'Débito',credit:'TDC'};const tc={cash:'bdg-g',debit:'bdg-b',credit:'bdg-p'};
     let extra='';
@@ -3888,8 +3914,8 @@ function accountCardHTML(a){
     // solo para ver "¿qué pasó aquí últimamente?".
     const recent=Store.queryTransactions({accountId:a.id,sortBy:'date',sortDir:'desc'}).slice(0,2);
     const recentHtml=recent.length?`<div style="margin-top:10px;padding-top:9px;border-top:1px solid var(--bdr)">${recent.map(t=>`<div style="display:flex;justify-content:space-between;gap:8px;font-size:11px;color:var(--t3);padding:2px 0"><span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(t.description)}</span><span style="font-family:'DM Mono',monospace;color:${t.type==='expense'?'var(--exp)':t.type==='income'?'var(--inc)':'var(--t2)'};flex-shrink:0">${t.type==='expense'?'-':t.type==='income'?'+':''}${fmt(t.amount)}</span></div>`).join('')}</div>`:'';
-    return`<div style="background:var(--bg3);border:1px solid var(--bdr);border-radius:var(--r);padding:15px;position:relative;border-left:3px solid ${a.color||'var(--ac)'}${a.locked?';opacity:.85':''}">
-      <div style="position:absolute;top:12px;right:12px;display:flex;align-items:center;gap:4px">
+    return`<div class="card-click" style="background:var(--bg3);border:1px solid var(--bdr);border-radius:var(--r);padding:15px;position:relative;border-left:3px solid ${a.color||'var(--ac)'}${a.locked?';opacity:.85':''}" onclick="viewAccountTransactions('${a.id}')">
+      <div style="position:absolute;top:12px;right:12px;display:flex;align-items:center;gap:4px" onclick="event.stopPropagation()">
         <span class="bdg ${tc[a.type]||'bdg-n'}">${tl[a.type]||a.type}</span>
         <button class="btn bg_ ico sm" title="${a.locked?'Desbloquear cuenta':'Bloquear cuenta (no permite crear/editar movimientos)'}" onclick="toggleAccLocked('${a.id}')">${a.locked?'🔒':'🔓'}</button>
         <button class="btn bg_ ico sm" title="${a.balanceHidden?'Mostrar saldo':'Ocultar saldo'}" onclick="toggleAccBalanceHidden('${a.id}')">${a.balanceHidden?'🙈':'👁'}</button>
@@ -5641,7 +5667,7 @@ function exportReport(){
   const now=new Date().toLocaleDateString('es-MX',{year:'numeric',month:'long',day:'numeric'});
   const accs=S.accounts.map(a=>`  • ${a.name}: ${fmt(a.balance)}`).join('\n');
   const cats=sortedCats.map(([c,v])=>`  • ${c}: ${fmt(v)}`).join('\n');
-  const topTxs=[...txs].sort((a,b)=>b.amount-a.amount).slice(0,5).map(t=>`  • ${t.date} ${t.description||''}: ${fmt(t.amount)}`).join('\n');
+  const topTxs=[...txs].sort((a,b)=>b.amount-a.amount).slice(0,5).map(t=>`  • ${fmtDate(t.date)} ${t.description||''}: ${fmt(t.amount)}`).join('\n');
   const report=`REPORTE FINANCIERO — Fînance
 Generado: ${now}
 ${'═'.repeat(50)}
