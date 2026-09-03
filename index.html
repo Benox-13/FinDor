@@ -1413,13 +1413,20 @@ function dequeueTxSync(txId){
   updateOfflineBadge();
 }
 // Reintentos genéricos para escrituras que NO son transacciones (cuentas,
-// deudas, metas, suscripciones). Las transacciones ya tienen su propia
-// cola persistente; el resto de las entidades solo tenía un intento único
-// — si fallaba (por ejemplo, por una columna de Supabase que aún no
+// deudas, metas, suscripciones, vehículos/registros de vehículo, secciones
+// personalizadas/registros de sección). Las transacciones ya tienen su
+// propia cola persistente; el resto de las entidades solo tenía un intento
+// único — si fallaba (por ejemplo, por una columna de Supabase que aún no
 // existiera), se quedaba "atascado" sin ningún aviso ni reintento. Con
 // esto, cada escritura que falla se registra aquí y se reintenta en el
 // siguiente pushPendingIfAny()/autoSyncTick() con los datos MÁS
 // RECIENTES en memoria (no una copia vieja del momento del fallo).
+//
+// Nota de alcance: por ahora esto cubre las actualizaciones (update*) de
+// cada entidad, igual que ya pasaba con cuentas/deudas/metas/suscripciones
+// — crear (add*) y borrar (delete*) siguen con un solo intento sin cola,
+// consistente con el resto. Extenderlo a add*/delete* también es un
+// siguiente paso posible, no incluido en este incremento.
 let retryableWrites={};
 async function retryFailedWrites(){
   const keys=Object.keys(retryableWrites);
@@ -2659,7 +2666,18 @@ const Store = {
     if(!v)return null;
     Object.assign(v,patch);
     save();
-    if(sb&&currentUserId&&isUUID(id))cloudWrite(sb.from('vehicles').upsert(vehicleToCloud(v),{onConflict:'id'}),`actualizar vehículo ${v.name}`);
+    // Mismo patrón de reintento que cuentas/deudas/metas/suscripciones:
+    // si el upsert falla (ej. sin conexión), se guarda en retryableWrites
+    // y se reintenta solo en el siguiente safeSyncPull()/pushPendingIfAny().
+    if(sb&&currentUserId&&isUUID(id)){
+      const key='vehicle:'+id;
+      const doWrite=async()=>{
+        const vv=this.getVehicleById(id);if(!vv)return;
+        const ok=await cloudWrite(sb.from('vehicles').upsert(vehicleToCloud(vv),{onConflict:'id'}),`actualizar vehículo ${vv.name}`);
+        if(ok)delete retryableWrites[key];else retryableWrites[key]=doWrite;
+      };
+      doWrite();
+    }
     return v;
   },
   deleteVehicle(id){
@@ -2684,7 +2702,16 @@ const Store = {
     if(idx<0)return null;
     v.records[idx]={...v.records[idx],...patch};
     save();
-    if(sb&&currentUserId&&isUUID(recordId))cloudWrite(sb.from('vehicle_records').upsert(vehicleRecordToCloud(v.records[idx],vehicleId),{onConflict:'id'}),'actualizar registro de vehículo');
+    if(sb&&currentUserId&&isUUID(recordId)){
+      const key='vehicle_record:'+recordId;
+      const doWrite=async()=>{
+        const vv=this.getVehicleById(vehicleId);if(!vv)return;
+        const idx2=(vv.records||[]).findIndex(r=>r.id===recordId);if(idx2<0)return;
+        const ok=await cloudWrite(sb.from('vehicle_records').upsert(vehicleRecordToCloud(vv.records[idx2],vehicleId),{onConflict:'id'}),'actualizar registro de vehículo');
+        if(ok)delete retryableWrites[key];else retryableWrites[key]=doWrite;
+      };
+      doWrite();
+    }
     return v.records[idx];
   },
   deleteVehicleRecord(vehicleId,recordId){
@@ -2714,7 +2741,15 @@ const Store = {
     if(!s)return null;
     Object.assign(s,patch);
     save();
-    if(sb&&currentUserId&&isUUID(id))cloudWrite(sb.from('custom_sections').upsert(customSectionToCloud(s),{onConflict:'id'}),`actualizar sección ${s.name}`);
+    if(sb&&currentUserId&&isUUID(id)){
+      const key='custom_section:'+id;
+      const doWrite=async()=>{
+        const ss=this.getCustomSectionById(id);if(!ss)return;
+        const ok=await cloudWrite(sb.from('custom_sections').upsert(customSectionToCloud(ss),{onConflict:'id'}),`actualizar sección ${ss.name}`);
+        if(ok)delete retryableWrites[key];else retryableWrites[key]=doWrite;
+      };
+      doWrite();
+    }
     return s;
   },
   deleteCustomSection(id){
@@ -2779,7 +2814,16 @@ const Store = {
     if(idx<0)return null;
     s.records[idx]={...s.records[idx],...patch};
     save();
-    if(sb&&currentUserId&&isUUID(sectionId))this._pushSectionRecord(sectionId,s.records[idx],true);
+    if(sb&&currentUserId&&isUUID(sectionId)){
+      const key='section_record:'+recordId;
+      const doWrite=async()=>{
+        const ss=this.getCustomSectionById(sectionId);if(!ss)return;
+        const idx2=(ss.records||[]).findIndex(r=>r.id===recordId);if(idx2<0)return;
+        const ok=await this._pushSectionRecord(sectionId,ss.records[idx2],true);
+        if(ok)delete retryableWrites[key];else retryableWrites[key]=doWrite;
+      };
+      doWrite();
+    }
     return s.records[idx];
   },
   // Sube un registro de sección resolviendo member por nombre (dentro de la
@@ -2797,11 +2841,14 @@ const Store = {
     }
     const payload={user_id:currentUserId,section_id:sectionId,dt:r.dt,member_id:memberId,category_id:catId,
       amount_cents:amtToCents(r.amt),description:r.desc||null,note:r.note||null,account_id:r.accountId||null,tx_id:r.txId||null};
+    // Devuelve ok/fail para que quien llama (updateSectionRecord) sepa si
+    // debe registrar esto en retryableWrites para reintentar después.
     if(isUpdate&&isUUID(r.id)){
-      await cloudWrite(sb.from('custom_section_records').update(payload).eq('id',r.id),'actualizar registro de sección');
+      return await cloudWrite(sb.from('custom_section_records').update(payload).eq('id',r.id),'actualizar registro de sección');
     } else if(isUUID(r.id)){
-      await cloudWrite(sb.from('custom_section_records').insert(payload),'crear registro de sección');
+      return await cloudWrite(sb.from('custom_section_records').insert(payload),'crear registro de sección');
     }
+    return true;
   },
   deleteSectionRecord(sectionId,recordId){
     const s=this.getCustomSectionById(sectionId);
