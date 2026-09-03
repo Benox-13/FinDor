@@ -706,6 +706,9 @@ body.modal-open #bottom-nav{display:none !important}
         <div class="swatch" data-a="pink" style="background:#f472b6" onclick="setAccent('pink',this)"></div>
       </div>
     </div>
+    <div class="ss"><h3>Transacciones</h3>
+      <div class="sr"><div><div class="si-l">Balance por día</div><div class="si-s">Muestra el balance de la cuenta al final de cada día — solo cuando filtras la lista a una sola cuenta</div></div><label class="sw"><input type="checkbox" id="cfg-daily-balance" onchange="setShowDailyBalance(this.checked)"><span class="sl"></span></label></div>
+    </div>
     <button class="btn bp sm" onclick="saveAspecto()">Guardar cambios</button>
   </div>
   <div id="cfg-dashboard" style="display:none">
@@ -1512,6 +1515,7 @@ function fmtTime(hms){
 }
 function setDateFormat(v){S.settings.dateFormat=v;save();pushSettings();renderAll_();}
 function setTimeFormat(v){S.settings.timeFormat=v;save();pushSettings();renderAll_();}
+function setShowDailyBalance(v){S.settings.showDailyBalance=!!v;save();pushSettings();renderTxP();}
 // Vuelve a dibujar las pantallas donde se muestran fechas, para que el
 // cambio de formato se refleje de inmediato sin tener que recargar.
 function renderAll_(){
@@ -1533,6 +1537,7 @@ async function pushSettings(){
     preferences:{name:S.settings.name||'',email:S.settings.email||'',photo:S.settings.photo||null,
       theme:S.settings.theme||'dark',accent:S.settings.accent||'green',
       dateFormat:S.settings.dateFormat||'dmy',timeFormat:S.settings.timeFormat||'24h',
+      showDailyBalance:!!S.settings.showDailyBalance,
       dashboardWidgets:S.dw||{},notifications:S.notif||{}},
   },{onConflict:'user_id'}),'ajustes');
 }
@@ -1682,6 +1687,7 @@ async function pullFromSupabase(){
       name:setRow.preferences?.name||'',email:setRow.preferences?.email||'',photo:setRow.preferences?.photo||null,
       currency:setRow.currency||'MXN',theme:setRow.preferences?.theme||'dark',accent:setRow.preferences?.accent||'green',
       dateFormat:setRow.preferences?.dateFormat||'dmy',timeFormat:setRow.preferences?.timeFormat||'24h',
+      showDailyBalance:!!setRow.preferences?.showDailyBalance,
     }:S.settings;
     const newDw=setRow?.preferences?.dashboardWidgets?{upcoming:true,subs:true,debts:true,goals:true,...setRow.preferences.dashboardWidgets}:S.dw;
     const newNotif=setRow?.preferences?.notifications||S.notif;
@@ -2376,13 +2382,47 @@ const Store = {
   // nunca en Supabase — así que el siguiente pull automático traía de
   // vuelta el balance viejo de la nube y "borraba" el efecto de la
   // transacción, aunque la transacción en sí sí se hubiera guardado bien.
+  //
+  // BUG REAL ENCONTRADO (transferencias): crear una transferencia dispara
+  // TRES llamadas seguidas a esta función para la cuenta de origen (resta
+  // el monto, luego el vínculo linkedTxId revierte y reaplica el mismo
+  // balance por dentro de updateTransaction) — las tres en el mismo
+  // instante, sin esperar a que la anterior termine. Como cada una subía
+  // su propio "upsert" de inmediato, viajaban casi a la par por la red, y
+  // si la respuesta de una subida VIEJA llegaba después que la de la
+  // subida nueva, la nube se quedaba con el balance equivocado — aunque
+  // localmente ya estuviera correcto. Además, si una sola de esas subidas
+  // fallaba (ej. un hipo de red), no había ningún reintento: a diferencia
+  // de las transacciones (que tienen su propia cola robusta), el balance
+  // de la cuenta se perdía en silencio.
+  //
+  // Arreglo: agrupar (con queueMicrotask) todas las llamadas que lleguen
+  // para la MISMA cuenta dentro del mismo instante en una sola subida —
+  // como todas las mutaciones síncronas de balance ya habrán terminado
+  // para cuando el microtask se ejecuta, esa única subida siempre lleva el
+  // valor FINAL correcto, sin importar cuántas veces se haya llamado esta
+  // función mientras tanto. Y esa única subida ahora sí usa retryableWrites
+  // (misma clave 'account:'+id que updateAccount), así que si falla, se
+  // reintenta sola en el siguiente safeSyncPull()/pushPendingIfAny().
   _syncAccountBalance(accountId){
     if(!sb||!currentUserId||!isUUID(accountId))return;
-    const acc=this.getAccountById(accountId);
-    if(!acc)return;
-    // upsert, no update: si la cuenta por alguna razón no existiera todavía
-    // en la nube, la crea en vez de fallar en silencio.
-    cloudWrite(sb.from('accounts').upsert(accountToCloud(acc),{onConflict:'id'}),`sincronizar balance de ${acc.name}`);
+    if(!this._pendingBalanceSync)this._pendingBalanceSync=new Set();
+    if(this._pendingBalanceSync.has(accountId))return; // ya hay una subida agendada para esta cuenta en este instante
+    this._pendingBalanceSync.add(accountId);
+    queueMicrotask(()=>{
+      this._pendingBalanceSync.delete(accountId);
+      const acc=this.getAccountById(accountId);
+      if(!acc)return;
+      const key='account:'+accountId;
+      const doWrite=async()=>{
+        const a=this.getAccountById(accountId);if(!a)return;
+        // upsert, no update: si la cuenta por alguna razón no existiera
+        // todavía en la nube, la crea en vez de fallar en silencio.
+        const ok=await cloudWrite(sb.from('accounts').upsert(accountToCloud(a),{onConflict:'id'}),`sincronizar balance de ${a.name}`);
+        if(ok)delete retryableWrites[key];else retryableWrites[key]=doWrite;
+      };
+      doWrite();
+    });
   },
   applyBalance(tx){
     const acc=this.getAccountById(tx.accountId);
@@ -3714,6 +3754,46 @@ function setTxSort(col){
   else{_txSortBy=col;_txSortDir=col==='date'?'desc':'desc';}
   renderTxP();
 }
+// ==================== BALANCE POR DÍA (Transacciones) ====================
+// Para UNA cuenta, calcula el balance al FINAL de cada fecha en la que
+// tuvo movimientos. Recorre TODAS las transacciones reales de esa cuenta
+// (sin importar los filtros de categoría/tipo/búsqueda que tenga puesta
+// la pantalla), yendo de la más reciente hacia atrás y descontando el
+// efecto de cada una — así el número siempre es real, aunque la lista que
+// se ve esté filtrada. Se apoya en Store.getAccountById(id).balance como
+// punto de partida, que es el balance verdadero de HOY.
+function computeDailyBalances(accountId){
+  const acc=Store.getAccountById(accountId);
+  if(!acc)return{};
+  const all=Store.getTransactions()
+    .filter(t=>t.accountId===accountId||t.accountId2===accountId)
+    .slice().sort((a,b)=>(a.date+(a.time||'00:00')).localeCompare(b.date+(b.time||'00:00')));
+  // Efecto (con signo) de una transacción sobre ESTA cuenta en particular
+  // — mismo criterio de signo que usa applyBalance()/reverseBalance().
+  const effect=t=>{
+    if(t.type==='income')return M(t.amount);
+    if(t.type==='expense')return -M(t.amount);
+    if(t.type==='transfer'){
+      if(t.accountId2)return t.accountId===accountId?-M(t.amount):M(t.amount); // formato viejo
+      return t.transferDirection==='in'?M(t.amount):-M(t.amount);
+    }
+    return 0;
+  };
+  let running=M(acc.balance);
+  const byDate={};
+  for(let i=all.length-1;i>=0;i--){
+    const t=all[i];
+    // Solo se guarda la PRIMERA vez que se ve cada fecha en este recorrido
+    // (de más reciente a más vieja) — eso corresponde a la ÚLTIMA
+    // transacción cronológica de ese día, que es la que define el balance
+    // "al final del día". Si se sobreescribiera en cada vuelta, quedaría
+    // el balance de la primera transacción del día en vez de la última.
+    if(!(t.date in byDate))byDate[t.date]=running;
+    running=M(running-effect(t));
+  }
+  return byDate;
+}
+
 function renderTxP(){
   // Repopulate account/category filter options if empty
   const accSel=$('txacc');
@@ -3784,7 +3864,20 @@ function renderTxP(){
       if(t.date!==lastDate){groups.push({date:t.date,items:[]});lastDate=t.date}
       groups[groups.length-1].items.push(t);
     });
-    tb.innerHTML=groups.map(g=>`<div class="tx-date-hdr">${esc(txGroupLabel(g.date))}</div>${g.items.map(rowHTML).join('')}`).join('');
+    // Balance por día: solo tiene sentido cuando la vista está filtrada a
+    // UNA sola cuenta (mezclar varias cuentas en un solo número sería
+    // engañoso, sobre todo con transferencias entre ellas) y solo si la
+    // persona activó la opción en Ajustes. Se calcula sobre el historial
+    // COMPLETO de la cuenta (computeDailyBalances), no sobre "txs" (que
+    // puede estar filtrado por categoría/tipo/búsqueda), para que el
+    // número siempre sea el balance real de ese día.
+    const showBal=!!(accId&&S.settings?.showDailyBalance);
+    const dailyBal=showBal?computeDailyBalances(accId):null;
+    tb.innerHTML=groups.map(g=>{
+      const bal=dailyBal&&(g.date in dailyBal)?dailyBal[g.date]:null;
+      const balHtml=bal!==null?`<span style="text-transform:none;letter-spacing:normal;color:var(--t2);font-family:'DM Mono',monospace;font-weight:600">${fmt(bal)}</span>`:'';
+      return`<div class="tx-date-hdr" style="display:flex;justify-content:space-between;align-items:baseline">${esc(txGroupLabel(g.date))}${balHtml}</div>${g.items.map(rowHTML).join('')}`;
+    }).join('');
   } else {
     tb.innerHTML=txs.map(rowHTML).join('');
   }
@@ -4799,6 +4892,7 @@ function renderSettings(){
   $('cfg-dark').checked=!S.settings.theme||S.settings.theme==='dark';
   $('cfg-name').value=S.settings.name||'';$('cfg-cur').value=S.settings.currency||'MXN';
   $('cfg-datefmt').value=S.settings.dateFormat||'dmy';$('cfg-timefmt').value=S.settings.timeFormat||'24h';
+  if($('cfg-daily-balance'))$('cfg-daily-balance').checked=!!S.settings.showDailyBalance;
   const dw=S.dw;['txs','cats','accs','goals','budget','upcoming','subs','debts'].forEach(k=>{const el=$('w-'+k);if(el)el.checked=!!dw[k]});
   const nt=S.notif||{};['bgt','dbt','sub','gol'].forEach(k=>{const el=$('n-'+k);if(el)el.checked=nt[k]!==false});
   document.querySelectorAll('.swatch[data-a]').forEach(s=>{s.classList.toggle('sel',s.dataset.a===(S.settings.accent||'green'))});
