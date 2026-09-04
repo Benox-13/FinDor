@@ -541,10 +541,20 @@ body.modal-open #bottom-nav{display:none !important}
     <div class="m_ m_-bal"><div class="ml">Balance</div><div class="mv" id="an-bal">$0</div></div>
     <div class="m_ m_-sav"><div class="ml">Tasa ahorro</div><div class="mv" id="an-sav">0%</div></div>
   </div>
+  <!-- Comparación vs periodo anterior + datos rápidos -->
+  <div class="card" style="margin-bottom:14px">
+    <div class="slbl">Comparado con el periodo anterior</div>
+    <div id="an-insights" style="display:flex;gap:10px;flex-wrap:wrap;margin-top:6px"></div>
+  </div>
   <div class="g2" style="margin-bottom:14px">
     <div class="card"><div class="slbl">Ingresos vs Gastos (mensual)</div><div class="cht"><canvas id="ch-ie"></canvas></div></div>
     <div class="card"><div class="slbl">Gastos por categoría</div><div class="cht"><canvas id="ch-cat"></canvas></div></div>
   </div>
+  <div class="g2" style="margin-bottom:14px">
+    <div class="card"><div class="slbl">Top categorías de gasto</div><div class="cht"><canvas id="ch-topcat"></canvas></div></div>
+    <div class="card"><div class="slbl">Ingresos por categoría</div><div class="cht"><canvas id="ch-inccat"></canvas></div></div>
+  </div>
+  <div class="card" style="margin-bottom:14px"><div class="slbl">Gasto por día de la semana</div><div class="cht" style="height:180px"><canvas id="ch-weekday"></canvas></div></div>
   <div class="card"><div class="slbl">Tendencia de balance</div><div class="cht" style="height:180px"><canvas id="ch-trend"></canvas></div></div>
   <div class="card" style="margin-top:14px"><div class="slbl">Evolución del patrimonio</div><div class="cht" style="height:180px"><canvas id="ch-nw-report"></canvas></div></div>
 </div>
@@ -4214,7 +4224,7 @@ function execMsiPay(){
 }
 
 // ==================== ANALYSIS ====================
-let anPeriod='month';let ch1,ch2,ch3,ch4;
+let anPeriod='month';let ch1,ch2,ch3,ch4,ch5,ch6,ch7;
 
 function setPeriod(p,el){anPeriod=p;document.querySelectorAll('.p2b').forEach(b=>b.classList.remove('on'));el.classList.add('on');renderAnalysis()}
 
@@ -4227,6 +4237,30 @@ function getPeriodTxs(){
   return all;
 }
 
+// Mismo periodo, pero el INMEDIATAMENTE ANTERIOR — para poder comparar
+// "¿gasté más o menos que el periodo pasado?". Con "Todo" no hay un
+// periodo anterior que tenga sentido, así que devuelve vacío (la tarjeta
+// de comparación se oculta sola en ese caso).
+function getPreviousPeriodTxs(){
+  const now=new Date();const all=S.transactions;
+  if(anPeriod==='month'){
+    const d=new Date(now.getFullYear(),now.getMonth()-1,1);
+    return all.filter(t=>{const dt=dateLocal(t.date);return dt.getMonth()===d.getMonth()&&dt.getFullYear()===d.getFullYear()});
+  }
+  if(anPeriod==='3m'){
+    const end=new Date();end.setMonth(end.getMonth()-3);
+    const start=new Date();start.setMonth(start.getMonth()-6);
+    return all.filter(t=>{const dt=dateLocal(t.date);return dt>=start&&dt<end});
+  }
+  if(anPeriod==='6m'){
+    const end=new Date();end.setMonth(end.getMonth()-6);
+    const start=new Date();start.setMonth(start.getMonth()-12);
+    return all.filter(t=>{const dt=dateLocal(t.date);return dt>=start&&dt<end});
+  }
+  if(anPeriod==='year')return all.filter(t=>dateLocal(t.date).getFullYear()===now.getFullYear()-1);
+  return [];
+}
+
 function renderAnalysis(){
   const txs=getPeriodTxs();
   const inc=txs.filter(t=>t.type==='income').reduce((a,t)=>a+M(t.amount),0);
@@ -4235,6 +4269,42 @@ function renderAnalysis(){
   $('an-inc').textContent=fmt(inc);$('an-exp').textContent=fmt(exp);
   $('an-bal').textContent=fmt(bal);$('an-bal').style.color=bal>=0?'var(--inc)':'var(--exp)';
   $('an-sav').textContent=sav+'%';$('an-sav').style.color=sav>=20?'var(--inc)':sav>=10?'var(--yel)':'var(--exp)';
+
+  // ---- Comparación vs periodo anterior + datos rápidos ----
+  // Se ocupa esto para responder preguntas que los totales por sí solos
+  // no responden: "¿gasté más que el mes pasado?", "¿cuál fue mi gasto
+  // más grande?", "¿cuánto gasto en promedio por movimiento?".
+  const prevTxs=getPreviousPeriodTxs();
+  const prevInc=prevTxs.filter(t=>t.type==='income').reduce((a,t)=>a+M(t.amount),0);
+  const prevExp=prevTxs.filter(t=>t.type==='expense').reduce((a,t)=>a+M(t.amount),0);
+  const pctChange=(cur,prev)=>{
+    if(prev<=0)return cur>0?null:0; // sin dato previo, no hay % que mostrar (no dividir entre 0)
+    return Math.round((cur-prev)/prev*100);
+  };
+  const expChange=pctChange(exp,prevExp);
+  const incChange=pctChange(inc,prevInc);
+  const expTxs=txs.filter(t=>t.type==='expense');
+  const biggestExp=expTxs.slice().sort((a,b)=>M(b.amount)-M(a.amount))[0];
+  const avgExp=expTxs.length?exp/expTxs.length:0;
+  const insightsEl=$('an-insights');
+  if(insightsEl){
+    const chip=(label,value,color,sub)=>`<div style="background:var(--bg4);border-radius:12px;padding:8px 14px;min-width:120px">
+      <div style="font-size:10px;color:var(--t3);text-transform:uppercase;letter-spacing:.5px;margin-bottom:3px">${label}</div>
+      <div style="font-family:'DM Mono',monospace;font-size:15px;font-weight:700;color:${color||'var(--txt)'}">${value}</div>
+      ${sub?`<div style="font-size:10px;color:var(--t3);margin-top:1px">${sub}</div>`:''}
+    </div>`;
+    let html='';
+    if(anPeriod==='all'){
+      html+=chip('Periodo','Sin comparación','var(--t2)','"Todo" no tiene un periodo anterior');
+    } else {
+      html+=expChange===null?chip('Gastos','Sin dato previo','var(--t2)'):chip('Gastos vs anterior',(expChange>=0?'+':'')+expChange+'%',expChange>0?'var(--exp)':'var(--inc)',fmt(prevExp)+' → '+fmt(exp));
+      html+=incChange===null?chip('Ingresos','Sin dato previo','var(--t2)'):chip('Ingresos vs anterior',(incChange>=0?'+':'')+incChange+'%',incChange>=0?'var(--inc)':'var(--exp)',fmt(prevInc)+' → '+fmt(inc));
+    }
+    html+=chip('Gasto más grande',biggestExp?fmt(M(biggestExp.amount)):'—','var(--exp)',biggestExp?esc(biggestExp.description||biggestExp.category||''):'Sin gastos en el periodo');
+    html+=chip('Promedio por gasto',expTxs.length?fmt(avgExp):'—','var(--txt)',expTxs.length?expTxs.length+' movimiento(s)':'');
+    insightsEl.innerHTML=html;
+  }
+
   const dark=!S.settings.theme||S.settings.theme==='dark';
   const textC=dark?'#9ca3b0':'#4a5068';const gridC=dark?'rgba(255,255,255,0.06)':'rgba(0,0,0,0.06)';
   Chart.defaults.color=textC;Chart.defaults.font.family='Sora';
@@ -4287,6 +4357,41 @@ function renderAnalysis(){
   } else {
     const ctx=$('ch-nw-report').getContext('2d');ctx.clearRect(0,0,$('ch-nw-report').width,$('ch-nw-report').height);ctx.fillStyle=textC;ctx.textAlign='center';ctx.font='13px Sora';ctx.fillText('Necesitas al menos 2 meses de historial — se guarda automáticamente',150,90);
   }
+
+  // ---- Top categorías de gasto (barra horizontal) ----
+  // Complementa la dona: en una dona es difícil comparar valores exactos
+  // entre rebanadas parecidas — un ranking en barra es más fácil de leer.
+  if(ch5)ch5.destroy();
+  const topCatsSorted=Object.entries(catExp).sort((a,b)=>b[1]-a[1]).slice(0,8);
+  if(topCatsSorted.length){
+    ch5=new Chart($('ch-topcat'),{type:'bar',data:{labels:topCatsSorted.map(c=>c[0]),datasets:[{data:topCatsSorted.map(c=>c[1]),backgroundColor:topCatsSorted.map((_,i)=>palette[i%palette.length]),borderRadius:4}]},options:{indexAxis:'y',responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false}},scales:{x:{grid:{color:gridC},ticks:{callback:v=>fmt(v)}},y:{grid:{display:false}}}}});
+  } else {
+    const ctx=$('ch-topcat').getContext('2d');ctx.clearRect(0,0,$('ch-topcat').width,$('ch-topcat').height);ctx.fillStyle=textC;ctx.textAlign='center';ctx.font='13px Sora';ctx.fillText('Sin gastos en el período',150,90);
+  }
+
+  // ---- Ingresos por categoría (dona, simétrico al de gastos) ----
+  if(ch6)ch6.destroy();
+  const catInc={};txs.filter(t=>t.type==='income').forEach(t=>{const k=getCatParent(t.category)||t.category||'Otros';catInc[k]=(catInc[k]||0)+M(t.amount)});
+  const iLabels=Object.keys(catInc);const iVals=Object.values(catInc);
+  if(iLabels.length){
+    ch6=new Chart($('ch-inccat'),{type:'doughnut',data:{labels:iLabels,datasets:[{data:iVals,backgroundColor:palette.slice(0,iLabels.length),borderWidth:0,hoverOffset:4}]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{position:'right',labels:{font:{size:11},boxWidth:12}}}}});
+  } else {
+    const ctx=$('ch-inccat').getContext('2d');ctx.clearRect(0,0,$('ch-inccat').width,$('ch-inccat').height);ctx.fillStyle=textC;ctx.textAlign='center';ctx.font='13px Sora';ctx.fillText('Sin ingresos en el período',150,110);
+  }
+
+  // ---- Gasto por día de la semana ----
+  // Revela patrones que ningún otro gráfico muestra (ej. "gasto más los
+  // fines de semana") — sirve para el periodo completo seleccionado, no
+  // solo el mes actual, sumando todos los gastos de cada día de la
+  // semana (Lunes..Domingo) dentro del rango.
+  if(ch7)ch7.destroy();
+  const wdNames=['Dom','Lun','Mar','Mié','Jue','Vie','Sáb'];
+  const wdOrder=[1,2,3,4,5,6,0]; // empezar en Lunes, terminar en Domingo
+  const wdSums=[0,0,0,0,0,0,0];
+  txs.filter(t=>t.type==='expense').forEach(t=>{const d=dateLocal(t.date);wdSums[d.getDay()]+=M(t.amount)});
+  const wdLabels=wdOrder.map(i=>wdNames[i]);
+  const wdVals=wdOrder.map(i=>wdSums[i]);
+  ch7=new Chart($('ch-weekday'),{type:'bar',data:{labels:wdLabels,datasets:[{data:wdVals,backgroundColor:'rgba(248,113,113,0.45)',borderColor:'#f87171',borderWidth:1.5,borderRadius:4}]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false}},scales:{x:{grid:{color:gridC}},y:{grid:{color:gridC},ticks:{callback:v=>fmt(v)}}}}});
 }
 
 function getLast6Months(){const r=[];const d=new Date();for(let i=5;i>=0;i--){const x=new Date(d.getFullYear(),d.getMonth()-i,1);r.push(x.getFullYear()+'-'+String(x.getMonth()+1).padStart(2,'0'))}return r}
