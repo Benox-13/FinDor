@@ -1434,18 +1434,93 @@ function dequeueTxSync(txId){
 // siguiente pushPendingIfAny()/autoSyncTick() con los datos MÁS
 // RECIENTES en memoria (no una copia vieja del momento del fallo).
 //
-// Nota de alcance: por ahora esto cubre las actualizaciones (update*) de
-// cada entidad, igual que ya pasaba con cuentas/deudas/metas/suscripciones
-// — crear (add*) y borrar (delete*) siguen con un solo intento sin cola,
-// consistente con el resto. Extenderlo a add*/delete* también es un
-// siguiente paso posible, no incluido en este incremento.
+// BUG REAL ENCONTRADO (grave): retryableWrites vivía SOLO en memoria
+// (`let retryableWrites={}`) — nunca se guardaba en localStorage. Eso
+// significaba que si algo fallaba en subir (ej. un registro de vehículo
+// rechazado por un CHECK constraint en Supabase) y el usuario cerraba o
+// recargaba la app (muy común en iPhone: iOS descarga la pestaña en
+// segundo plano), al volver a abrir la cola de reintentos aparecía VACÍA
+// — la app "se olvidaba" de que algo seguía sin subir. safeSyncPull() ya
+// reintenta y bloquea el pull si queda algo pendiente, pero con la cola
+// vacía no había nada que reintentar ni que bloquear, así que el
+// siguiente pull traía la nube (que nunca tuvo ese registro) y lo
+// borraba localmente — la causa real de que las mensualidades de
+// vehículos "desaparecieran" después de cerrar la app.
+//
+// Arreglo: retryableWrites ahora se guarda en localStorage como datos
+// simples (no funciones — las funciones no se pueden guardar), y se
+// reconstruye la función real a ejecutar mediante execRetryableWrite()
+// según el campo `fn` del descriptor. Así, un reinicio de la app SÍ
+// recuerda lo pendiente, lo reintenta, y sigue bloqueando el pull si
+// vuelve a fallar — en vez de perder el dato en silencio.
 let retryableWrites={};
+try{ retryableWrites=JSON.parse(localStorage.getItem('finance_v4_retryable')||'{}'); }catch(e){ retryableWrites={}; }
+function saveRetryableWrites(){ try{localStorage.setItem('finance_v4_retryable',JSON.stringify(retryableWrites));}catch(e){console.warn('No se pudo guardar la cola de reintentos de escrituras:',e);} }
+
+// Ejecuta UN descriptor de retryableWrites, releyendo el estado ACTUAL en
+// memoria (nunca una copia vieja) — mismo criterio que ya usaban los
+// doWrite() individuales antes de este cambio. Si la entidad ya no existe
+// (se borró mientras tanto), se considera éxito (nada que sincronizar).
+async function execRetryableWrite(desc){
+  if(!desc||!sb||!currentUserId)return true;
+  switch(desc.fn){
+    case 'account':{
+      const a=Store.getAccountById(desc.id);if(!a)return true;
+      return await cloudWrite(sb.from('accounts').upsert(accountToCloud(a),{onConflict:'id'}),`sincronizar cuenta ${a.name}`);
+    }
+    case 'debt':{
+      const d=Store.getDebtById(desc.k,desc.id);if(!d)return true;
+      return await cloudWrite(sb.from('debts').upsert(debtToCloud(d,desc.k==='owed'?'owed_to_me':'i_owe'),{onConflict:'id'}),`sincronizar deuda ${d.person}`);
+    }
+    case 'goal':{
+      const g=Store.getGoalById(desc.id);if(!g)return true;
+      return await cloudWrite(sb.from('goals').upsert(goalToCloud(g),{onConflict:'id'}),`sincronizar meta ${g.name}`);
+    }
+    case 'subscription':{
+      const s=Store.getSubscriptionById(desc.id);if(!s)return true;
+      const cat=S.categories.find(c=>c.name===s.category);
+      return await cloudWrite(sb.from('subscriptions').upsert(subscriptionToCloud(s,cat&&isUUID(cat.id)?cat.id:null),{onConflict:'id'}),`sincronizar suscripción ${s.name}`);
+    }
+    case 'vehicle':{
+      const v=Store.getVehicleById(desc.id);if(!v)return true;
+      return await cloudWrite(sb.from('vehicles').upsert(vehicleToCloud(v),{onConflict:'id'}),`sincronizar vehículo ${v.name}`);
+    }
+    case 'vehicle_record':{
+      const v=Store.getVehicleById(desc.vehicleId);if(!v)return true;
+      const r=(v.records||[]).find(x=>x.id===desc.recordId);if(!r)return true;
+      return await cloudWrite(sb.from('vehicle_records').upsert(vehicleRecordToCloud(r,desc.vehicleId),{onConflict:'id'}),'sincronizar registro de vehículo');
+    }
+    case 'custom_section':{
+      const s=Store.getCustomSectionById(desc.id);if(!s)return true;
+      return await cloudWrite(sb.from('custom_sections').upsert(customSectionToCloud(s),{onConflict:'id'}),`sincronizar sección ${s.name}`);
+    }
+    case 'section_record':{
+      const s=Store.getCustomSectionById(desc.sectionId);if(!s)return true;
+      const r=(s.records||[]).find(x=>x.id===desc.recordId);if(!r)return true;
+      return await Store._pushSectionRecord(desc.sectionId,r,true);
+    }
+  }
+  return true;
+}
+
+// Registra un descriptor (dato plano, serializable) y lo intenta subir de
+// inmediato — igual que antes, pero ahora la cola sobrevive a un reinicio
+// de la app porque se guarda en localStorage en cada cambio.
+function queueRetryableWrite(key,desc){
+  retryableWrites[key]=desc;
+  saveRetryableWrites();
+  execRetryableWrite(desc).then(ok=>{
+    if(ok){delete retryableWrites[key];saveRetryableWrites();}
+  });
+}
+
 async function retryFailedWrites(){
   const keys=Object.keys(retryableWrites);
   for(const k of keys){
-    const fn=retryableWrites[k];
-    if(fn)await fn();
+    const ok=await execRetryableWrite(retryableWrites[k]);
+    if(ok)delete retryableWrites[k];
   }
+  saveRetryableWrites();
 }
 
 async function processSyncQueue(){
@@ -2270,13 +2345,7 @@ const Store = {
     // pensaría que sincronizó sin haber creado nada. upsert crea si falta,
     // actualiza si ya existía — seguro en ambos casos.
     if(sb&&currentUserId&&isUUID(id)){
-      const key='account:'+id;
-      const doWrite=async()=>{
-        const a=this.getAccountById(id);if(!a)return;
-        const ok=await cloudWrite(sb.from('accounts').upsert(accountToCloud(a),{onConflict:'id'}),`actualizar cuenta ${a.name}`);
-        if(ok)delete retryableWrites[key];else retryableWrites[key]=doWrite;
-      };
-      doWrite();
+      queueRetryableWrite('account:'+id,{fn:'account',id});
     }
     return acc;
   },
@@ -2442,15 +2511,7 @@ const Store = {
       this._pendingBalanceSync.delete(accountId);
       const acc=this.getAccountById(accountId);
       if(!acc)return;
-      const key='account:'+accountId;
-      const doWrite=async()=>{
-        const a=this.getAccountById(accountId);if(!a)return;
-        // upsert, no update: si la cuenta por alguna razón no existiera
-        // todavía en la nube, la crea en vez de fallar en silencio.
-        const ok=await cloudWrite(sb.from('accounts').upsert(accountToCloud(a),{onConflict:'id'}),`sincronizar balance de ${a.name}`);
-        if(ok)delete retryableWrites[key];else retryableWrites[key]=doWrite;
-      };
-      doWrite();
+      queueRetryableWrite('account:'+accountId,{fn:'account',id:accountId});
     });
   },
   applyBalance(tx){
@@ -2609,13 +2670,7 @@ const Store = {
     Object.assign(d,patch);
     save();
     if(sb&&currentUserId&&isUUID(id)){
-      const key='debt:'+id;
-      const doWrite=async()=>{
-        const dd=this.getDebtById(k,id);if(!dd)return;
-        const ok=await cloudWrite(sb.from('debts').upsert(debtToCloud(dd,k==='owed'?'owed_to_me':'i_owe'),{onConflict:'id'}),`actualizar deuda ${dd.person}`);
-        if(ok)delete retryableWrites[key];else retryableWrites[key]=doWrite;
-      };
-      doWrite();
+      queueRetryableWrite('debt:'+id,{fn:'debt',k,id});
     }
     return d;
   },
@@ -2653,13 +2708,7 @@ const Store = {
     Object.assign(g,patch);
     save();
     if(sb&&currentUserId&&isUUID(id)){
-      const key='goal:'+id;
-      const doWrite=async()=>{
-        const gg=this.getGoalById(id);if(!gg)return;
-        const ok=await cloudWrite(sb.from('goals').upsert(goalToCloud(gg),{onConflict:'id'}),`actualizar meta ${gg.name}`);
-        if(ok)delete retryableWrites[key];else retryableWrites[key]=doWrite;
-      };
-      doWrite();
+      queueRetryableWrite('goal:'+id,{fn:'goal',id});
     }
     return g;
   },
@@ -2703,14 +2752,7 @@ const Store = {
     Object.assign(s,patch);
     save();
     if(sb&&currentUserId&&isUUID(id)){
-      const key='subscription:'+id;
-      const doWrite=async()=>{
-        const ss=this.getSubscriptionById(id);if(!ss)return;
-        const cat=S.categories.find(c=>c.name===ss.category);
-        const ok=await cloudWrite(sb.from('subscriptions').upsert(subscriptionToCloud(ss,cat&&isUUID(cat.id)?cat.id:null),{onConflict:'id'}),`actualizar suscripción ${ss.name}`);
-        if(ok)delete retryableWrites[key];else retryableWrites[key]=doWrite;
-      };
-      doWrite();
+      queueRetryableWrite('subscription:'+id,{fn:'subscription',id});
     }
     return s;
   },
@@ -2739,13 +2781,7 @@ const Store = {
     // si el upsert falla (ej. sin conexión), se guarda en retryableWrites
     // y se reintenta solo en el siguiente safeSyncPull()/pushPendingIfAny().
     if(sb&&currentUserId&&isUUID(id)){
-      const key='vehicle:'+id;
-      const doWrite=async()=>{
-        const vv=this.getVehicleById(id);if(!vv)return;
-        const ok=await cloudWrite(sb.from('vehicles').upsert(vehicleToCloud(vv),{onConflict:'id'}),`actualizar vehículo ${vv.name}`);
-        if(ok)delete retryableWrites[key];else retryableWrites[key]=doWrite;
-      };
-      doWrite();
+      queueRetryableWrite('vehicle:'+id,{fn:'vehicle',id});
     }
     return v;
   },
@@ -2774,13 +2810,7 @@ const Store = {
     // retryableWrites DESDE ANTES de intentar subir (no solo si falla),
     // así que mientras está en camino, un pull se queda bloqueado.
     if(sb&&currentUserId&&isUUID(vehicleId)){
-      const key='vehicle_record:'+r.id;
-      const doWrite=async()=>{
-        const ok=await cloudWrite(sb.from('vehicle_records').upsert(vehicleRecordToCloud(r,vehicleId),{onConflict:'id'}),'crear registro de vehículo');
-        if(ok)delete retryableWrites[key];else retryableWrites[key]=doWrite;
-      };
-      retryableWrites[key]=doWrite;
-      doWrite();
+      queueRetryableWrite('vehicle_record:'+r.id,{fn:'vehicle_record',vehicleId,recordId:r.id});
     }
     return r;
   },
@@ -2792,14 +2822,7 @@ const Store = {
     v.records[idx]={...v.records[idx],...patch};
     save();
     if(sb&&currentUserId&&isUUID(recordId)){
-      const key='vehicle_record:'+recordId;
-      const doWrite=async()=>{
-        const vv=this.getVehicleById(vehicleId);if(!vv)return;
-        const idx2=(vv.records||[]).findIndex(r=>r.id===recordId);if(idx2<0)return;
-        const ok=await cloudWrite(sb.from('vehicle_records').upsert(vehicleRecordToCloud(vv.records[idx2],vehicleId),{onConflict:'id'}),'actualizar registro de vehículo');
-        if(ok)delete retryableWrites[key];else retryableWrites[key]=doWrite;
-      };
-      doWrite();
+      queueRetryableWrite('vehicle_record:'+recordId,{fn:'vehicle_record',vehicleId,recordId});
     }
     return v.records[idx];
   },
@@ -2831,13 +2854,7 @@ const Store = {
     Object.assign(s,patch);
     save();
     if(sb&&currentUserId&&isUUID(id)){
-      const key='custom_section:'+id;
-      const doWrite=async()=>{
-        const ss=this.getCustomSectionById(id);if(!ss)return;
-        const ok=await cloudWrite(sb.from('custom_sections').upsert(customSectionToCloud(ss),{onConflict:'id'}),`actualizar sección ${ss.name}`);
-        if(ok)delete retryableWrites[key];else retryableWrites[key]=doWrite;
-      };
-      doWrite();
+      queueRetryableWrite('custom_section:'+id,{fn:'custom_section',id});
     }
     return s;
   },
@@ -2904,14 +2921,7 @@ const Store = {
     s.records[idx]={...s.records[idx],...patch};
     save();
     if(sb&&currentUserId&&isUUID(sectionId)){
-      const key='section_record:'+recordId;
-      const doWrite=async()=>{
-        const ss=this.getCustomSectionById(sectionId);if(!ss)return;
-        const idx2=(ss.records||[]).findIndex(r=>r.id===recordId);if(idx2<0)return;
-        const ok=await this._pushSectionRecord(sectionId,ss.records[idx2],true);
-        if(ok)delete retryableWrites[key];else retryableWrites[key]=doWrite;
-      };
-      doWrite();
+      queueRetryableWrite('section_record:'+recordId,{fn:'section_record',sectionId,recordId});
     }
     return s.records[idx];
   },
