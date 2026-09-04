@@ -137,7 +137,7 @@ tr:hover td{background:var(--bg3);transition:background .12s}
 .mo.op{opacity:1;pointer-events:auto}
 .mo .md{transform:scale(.96) translateY(6px);transition:transform .18s cubic-bezier(.34,1.56,.64,1)}
 .mo.op .md{transform:scale(1) translateY(0)}
-.md{background:var(--bg2);border:1px solid var(--bdr2);border-radius:var(--r3);width:100%;max-width:510px;max-height:92vh;overflow-y:auto;box-shadow:0 20px 60px rgba(0,0,0,.6)}
+.md{background:var(--bg2);border:1px solid var(--bdr2);border-radius:var(--r3);width:100%;max-width:510px;max-height:92vh;overflow-y:auto;overflow-x:hidden;box-shadow:0 20px 60px rgba(0,0,0,.6)}
 .mh{padding:20px 24px 16px;border-bottom:1px solid var(--bdr);display:flex;align-items:center;justify-content:space-between}
 .mttl{font-family:'DM Serif Display',serif;font-size:20px}
 .mbody{padding:20px 24px}.mfoot{padding:16px 24px;border-top:1px solid var(--bdr);display:flex;gap:8px;justify-content:flex-end}
@@ -151,7 +151,7 @@ select.fc option{background:var(--bg3)}
 
 /* ============ TX TYPE TOGGLE ============ */
 .ttype{display:flex;gap:6px;margin-bottom:16px;padding:4px;background:var(--bg3);border-radius:var(--r2)}
-.ttb{flex:1;padding:9px;border-radius:8px;border:none;background:transparent;color:var(--t2);cursor:pointer;font-family:'Sora',sans-serif;font-size:13px;font-weight:600;text-align:center;transition:all .18s}
+.ttb{flex:1;min-width:0;padding:9px;border-radius:8px;border:none;background:transparent;color:var(--t2);cursor:pointer;font-family:'Sora',sans-serif;font-size:13px;font-weight:600;text-align:center;line-height:1.25;transition:all .18s}
 .tton-i{background:linear-gradient(135deg,rgba(48,214,147,.2),rgba(34,196,126,.1));color:var(--ac);box-shadow:inset 0 0 0 1px rgba(48,214,147,.3)}
 .tton-e{background:linear-gradient(135deg,rgba(255,95,109,.2),rgba(232,76,89,.1));color:var(--red);box-shadow:inset 0 0 0 1px rgba(255,95,109,.3)}
 .tton-t{background:linear-gradient(135deg,rgba(78,158,255,.2),rgba(41,121,245,.1));color:var(--blu);box-shadow:inset 0 0 0 1px rgba(78,158,255,.3)}
@@ -336,6 +336,15 @@ body.modal-open #bottom-nav{display:none !important}
   .mo{padding:10px}
   .mo .md{max-width:calc(100vw - 20px) !important;box-sizing:border-box}
   .mo .mfoot{padding-bottom:calc(16px + env(safe-area-inset-bottom))}
+  /* Selector de tipo (Ingreso/Gasto/Transferir): en pantallas angostas
+     "Transferir" es la palabra más larga de las tres y es la que se
+     desbordaba (obligando a hacer zoom out para verla completa). Con
+     min-width:0 (arriba) el botón ya puede encogerse o partir el texto en
+     dos líneas si hace falta, y aquí además achicamos un poco la fuente y
+     el padding para que quepa en una sola línea en la mayoría de los
+     iPhone. */
+  .ttype{gap:4px}
+  .ttb{font-size:11px;padding:8px 3px}
 
   /* ---- Barra de navegación inferior ---- */
   #bottom-nav{display:flex;position:fixed;bottom:0;left:0;right:0;z-index:190;background:var(--bg2);border-top:1px solid var(--bdr);padding:10px 4px calc(10px + env(safe-area-inset-bottom));align-items:flex-start;justify-content:space-around}
@@ -1499,6 +1508,26 @@ function fmtDate(iso){
   if(f==='mdy')return `${m}/${d}/${y}`;
   if(f==='iso')return `${y}-${m}-${d}`;
   return `${d}/${m}/${y}`;
+}
+// Convierte una fecha ISO 'YYYY-MM-DD' (como se guardan las transacciones)
+// a un objeto Date en HORA LOCAL, no UTC.
+//
+// BUG REAL ENCONTRADO: `new Date('2026-09-01')` lo interpreta el
+// navegador como medianoche UTC. En una zona horaria detrás de UTC (como
+// México, UTC-6), esa medianoche UTC cae en "31 de agosto, 6pm" hora
+// local — así que `.getMonth()` devolvía AGOSTO para una transacción
+// fechada el 1 de septiembre. Esto hacía que CUALQUIER transacción
+// fechada el día 1 de un mes se contara en el mes ANTERIOR en el
+// Dashboard, Presupuestos y Analytics (el gasto "desaparecía" del mes
+// donde en realidad ocurrió). Construyendo el Date a mano a partir de
+// año/mes/día (en vez de dejar que el navegador lo interprete como UTC)
+// se evita el corrimiento de zona horaria por completo.
+function dateLocal(iso){
+  if(!iso)return new Date(NaN);
+  const parts=iso.split('-');
+  if(parts.length!==3)return new Date(iso);
+  const[y,m,d]=parts.map(Number);
+  return new Date(y,m-1,d);
 }
 function fmtTime(hms){
   if(!hms)return '';
@@ -2732,7 +2761,27 @@ const Store = {
     const r={id:uid(),...data};
     v.records.push(r);
     save();
-    if(sb&&currentUserId&&isUUID(vehicleId))cloudWrite(sb.from('vehicle_records').insert(vehicleRecordToCloud(r,vehicleId)),'crear registro de vehículo');
+    // BUG REAL ENCONTRADO: antes, esta subida era "dispara y olvida" sin
+    // registrar nada en retryableWrites mientras estaba en camino. Como
+    // safeSyncPull() solo bloquea el pull si hay algo pendiente en
+    // syncQueue/retryableWrites, si un pull automático llegaba justo
+    // mientras este insert todavía no terminaba (el registro nunca
+    // había llegado a existir en la nube), ese pull traía la versión
+    // vieja del vehículo SIN este registro y la sobreescribía localmente
+    // — el registro "desaparecía" de la lista de vehículos, aunque la
+    // transacción vinculada (que sí tiene protección propia) se quedara
+    // bien guardada y visible en la lista general. Ahora se registra en
+    // retryableWrites DESDE ANTES de intentar subir (no solo si falla),
+    // así que mientras está en camino, un pull se queda bloqueado.
+    if(sb&&currentUserId&&isUUID(vehicleId)){
+      const key='vehicle_record:'+r.id;
+      const doWrite=async()=>{
+        const ok=await cloudWrite(sb.from('vehicle_records').upsert(vehicleRecordToCloud(r,vehicleId),{onConflict:'id'}),'crear registro de vehículo');
+        if(ok)delete retryableWrites[key];else retryableWrites[key]=doWrite;
+      };
+      retryableWrites[key]=doWrite;
+      doWrite();
+    }
     return r;
   },
   updateVehicleRecord(vehicleId,recordId,patch){
@@ -3142,7 +3191,7 @@ function renderDash(){
   const now=new Date();
   $('ddate').textContent=now.toLocaleDateString('es-MX',{weekday:'long',year:'numeric',month:'long',day:'numeric'});
   const mo=now.getMonth(),yr=now.getFullYear();
-  const mtxs=S.transactions.filter(t=>{const d=new Date(t.date);return d.getMonth()===mo&&d.getFullYear()===yr});
+  const mtxs=S.transactions.filter(t=>{const d=dateLocal(t.date);return d.getMonth()===mo&&d.getFullYear()===yr});
   const inc=mtxs.filter(t=>t.type==='income').reduce((a,t)=>a+M(t.amount),0);
   const exp=mtxs.filter(t=>t.type==='expense').reduce((a,t)=>a+M(t.amount),0);
   const bal=inc-exp,sav=inc>0?Math.round(bal/inc*100):0;
@@ -3197,7 +3246,20 @@ function renderDash(){
       // efectivo/débito en el mismo total no tiene sentido (es deuda
       // disponible, no dinero tuyo).
       if(creditAccs.length){
-        out.push(`<div class="card card-click" onclick="go('accounts')"><div class="slbl">Tarjetas de crédito</div>${creditAccs.map(a=>{const used=a.limit?a.limit-M(a.balance):0;return`<div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid var(--bdr)"><div style="display:flex;align-items:center;gap:7px"><div style="width:8px;height:8px;border-radius:50%;background:${a.color||'var(--pur)'}"></div><span style="font-size:13px">${esc(a.name)}${a.locked?' 🔒':''}</span></div><span style="font-family:'DM Mono',monospace;font-size:13px;color:var(--t2)">${a.balanceHidden?'••••••':fmt(used)}${a.limit?' / '+fmt(a.limit):''}</span></div>`}).join('')}</div>`);
+        out.push(`<div class="card card-click" onclick="go('accounts')"><div class="slbl">Tarjetas de crédito</div>${creditAccs.map(a=>{
+          const available=M(a.balance||0);
+          const periodSpend=tdcPeriodSpend(a);
+          return`<div style="padding:7px 0;border-bottom:1px solid var(--bdr)">
+            <div style="display:flex;justify-content:space-between;align-items:center">
+              <div style="display:flex;align-items:center;gap:7px"><div style="width:8px;height:8px;border-radius:50%;background:${a.color||'var(--pur)'}"></div><span style="font-size:13px">${esc(a.name)}${a.locked?' 🔒':''}</span></div>
+              <span style="font-size:11px;color:var(--t3)">${a.limit?'Límite: '+fmt(a.limit):''}</span>
+            </div>
+            <div style="display:flex;justify-content:space-between;margin-top:4px">
+              <span style="font-size:11px;color:var(--t3)">Gasto del periodo: <span style="font-family:'DM Mono',monospace;color:var(--red)">${a.balanceHidden?'••••':periodSpend!==null?fmt(periodSpend):'—'}</span></span>
+              <span style="font-size:11px;color:var(--t3)">Disponible: <span style="font-family:'DM Mono',monospace;color:var(--t2)">${a.balanceHidden?'••••':fmt(available)}</span></span>
+            </div>
+          </div>`;
+        }).join('')}</div>`);
       }
       return out;
     };
@@ -3992,6 +4054,22 @@ function viewAccountTransactions(accountId){
   if(sel)sel.value=accountId;
   renderTxP();
 }
+// Gasto de UNA tarjeta de crédito en el periodo de facturación ACTUAL
+// (desde el último día de corte hasta hoy). Se centraliza aquí porque se
+// usa tanto en la tarjeta grande de Cuentas como en el widget compacto
+// del Dashboard — antes solo existía duplicado dentro de accountCardHTML.
+// Devuelve null si la cuenta no tiene día de corte configurado (no hay
+// forma de saber dónde empieza el periodo).
+function tdcPeriodSpend(a){
+  if(!a.cutDay)return null;
+  const now=new Date();
+  const toLocal=d=>`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+  let lastCut=new Date(now.getFullYear(),now.getMonth(),a.cutDay);
+  if(lastCut>now)lastCut=new Date(now.getFullYear(),now.getMonth()-1,a.cutDay);
+  const lastCutStr=toLocal(lastCut);
+  const todayStr=toLocal(now);
+  return S.transactions.filter(t=>t.type==='expense'&&t.accountId===a.id&&t.date>lastCutStr&&t.date<=todayStr).reduce((s,t)=>s+M(t.amount),0);
+}
 function accountCardHTML(a){
     const tl={cash:'Efectivo',debit:'Débito',credit:'TDC'};const tc={cash:'bdg-g',debit:'bdg-b',credit:'bdg-p'};
     let extra='';
@@ -4017,17 +4095,9 @@ function accountCardHTML(a){
         }
         datesHtml=`<div style="display:flex;gap:12px;font-size:11px;color:var(--t3);margin-top:8px;flex-wrap:wrap">${cutInfo}${payInfo}</div>`;
       }
-      // Current billing period spending (since last cut date)
-      let periodSpend=0;
-      if(a.cutDay){
-        const now=new Date();
-        const toLocal=d=>`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
-        let lastCut=new Date(now.getFullYear(),now.getMonth(),a.cutDay);
-        if(lastCut>now)lastCut=new Date(now.getFullYear(),now.getMonth()-1,a.cutDay);
-        const lastCutStr=toLocal(lastCut);
-        const todayStr=toLocal(now);
-        periodSpend=S.transactions.filter(t=>t.type==='expense'&&t.accountId===a.id&&t.date>lastCutStr&&t.date<=todayStr).reduce((s,t)=>s+M(t.amount),0);
-      }
+      // Current billing period spending (since last cut date) — usa el
+      // helper compartido tdcPeriodSpend() en vez de repetir el cálculo.
+      const periodSpend=tdcPeriodSpend(a)||0;
       const periodHtml=a.cutDay?`<div style="margin-top:8px;padding:8px 10px;background:rgba(255,95,109,0.06);border-radius:var(--r2);border:1px solid rgba(255,95,109,0.12)"><div style="font-size:11px;color:var(--t3);margin-bottom:2px">Gastado este periodo</div><div style="font-family:'DM Mono',monospace;font-size:15px;color:var(--red)">${a.balanceHidden?'••••••':fmt(periodSpend)}</div></div>`:'';
       // Invoice card (shown after cut date until pay date)
       let invoiceHtml='';
@@ -4140,10 +4210,10 @@ function setPeriod(p,el){anPeriod=p;document.querySelectorAll('.p2b').forEach(b=
 
 function getPeriodTxs(){
   const now=new Date();const all=S.transactions;
-  if(anPeriod==='month'){const m=now.getMonth(),y=now.getFullYear();return all.filter(t=>{const d=new Date(t.date);return d.getMonth()===m&&d.getFullYear()===y})}
-  if(anPeriod==='3m'){const c=new Date();c.setMonth(c.getMonth()-3);return all.filter(t=>new Date(t.date)>=c)}
-  if(anPeriod==='6m'){const c=new Date();c.setMonth(c.getMonth()-6);return all.filter(t=>new Date(t.date)>=c)}
-  if(anPeriod==='year')return all.filter(t=>new Date(t.date).getFullYear()===now.getFullYear());
+  if(anPeriod==='month'){const m=now.getMonth(),y=now.getFullYear();return all.filter(t=>{const d=dateLocal(t.date);return d.getMonth()===m&&d.getFullYear()===y})}
+  if(anPeriod==='3m'){const c=new Date();c.setMonth(c.getMonth()-3);return all.filter(t=>dateLocal(t.date)>=c)}
+  if(anPeriod==='6m'){const c=new Date();c.setMonth(c.getMonth()-6);return all.filter(t=>dateLocal(t.date)>=c)}
+  if(anPeriod==='year')return all.filter(t=>dateLocal(t.date).getFullYear()===now.getFullYear());
   return all;
 }
 
@@ -4237,9 +4307,9 @@ function renderBudget(){
   const mo=target.getMonth(),yr=target.getFullYear();
   const lbl=$('budget-month-lbl');
   if(lbl)lbl.textContent=target.toLocaleDateString('es-MX',{month:'long',year:'numeric'});
-  const mtxs=S.transactions.filter(t=>{const d=new Date(t.date);return d.getMonth()===mo&&d.getFullYear()===yr&&t.type==='expense'});
+  const mtxs=S.transactions.filter(t=>{const d=dateLocal(t.date);return d.getMonth()===mo&&d.getFullYear()===yr&&t.type==='expense'});
   const prevTarget=new Date(yr,mo-1,1);
-  const prevMtxs=S.transactions.filter(t=>{const d=new Date(t.date);return d.getMonth()===prevTarget.getMonth()&&d.getFullYear()===prevTarget.getFullYear()&&t.type==='expense'});
+  const prevMtxs=S.transactions.filter(t=>{const d=dateLocal(t.date);return d.getMonth()===prevTarget.getMonth()&&d.getFullYear()===prevTarget.getFullYear()&&t.type==='expense'});
   const expCats=S.categories.filter(c=>c.type==='expense');
   if(!expCats.length){el.innerHTML=emptyState('📊','Sin categorías de gasto','Crea al menos una categoría de gasto en Ajustes → Categorías para poder definir presupuestos.','Ir a Categorías',"go('settings');cfgTab('categorias',document.querySelector('#cfg-tabs button[onclick*=categorias]'))");return}
 
@@ -5147,13 +5217,18 @@ function renderVehicleDetail(id){
   const totalCost=recs.reduce((a,r)=>a+M(r.cost||0),0);
   const chargeCost=recs.filter(r=>r.type==='charge').reduce((a,r)=>a+M(r.cost||0),0);
   const maintCost=recs.filter(r=>r.type==='maintenance').reduce((a,r)=>a+M(r.cost||0),0);
-  const otherCost=recs.filter(r=>['parking','wash','insurance','other'].includes(r.type)).reduce((a,r)=>a+M(r.cost||0),0);
+  // BUG REAL ENCONTRADO: este filtro no incluía 'installment' (mensualidad)
+  // — el costo de la mensualidad SÍ se sumaba a totalCost, pero totalCost
+  // no se mostraba en ningún lado de esta pantalla, así que la mensualidad
+  // quedaba invisible en el resumen del vehículo (aunque la transacción sí
+  // existiera). Se agrega 'installment' aquí para que se vea reflejada.
+  const otherCost=recs.filter(r=>['parking','wash','insurance','installment','other'].includes(r.type)).reduce((a,r)=>a+M(r.cost||0),0);
   const lastKm=recs.filter(r=>r.km).sort((a,b)=>new Date(b.dt)-new Date(a.dt))[0]?.km||0;
   $('vd-stats').innerHTML=`
     <div class="ev-s"><div class="ev-v">${lastKm?lastKm.toLocaleString():0}</div><div class="ev-l">km odómetro</div></div>
     <div class="ev-s"><div class="ev-v" style="color:var(--yel)">${fmt(chargeCost)}</div><div class="ev-l">${v.fuelType==='electric'?'cargas':'combustible'}</div></div>
     <div class="ev-s"><div class="ev-v" style="color:var(--blu)">${fmt(maintCost)}</div><div class="ev-l">mantenimiento</div></div>
-    <div class="ev-s"><div class="ev-v" style="color:var(--pur)">${fmt(otherCost)}</div><div class="ev-l">parking+lavado+seguro</div></div>`;
+    <div class="ev-s"><div class="ev-v" style="color:var(--pur)">${fmt(otherCost)}</div><div class="ev-l">parking+lavado+seguro+mensualidad</div></div>`;
   // Tarjeta de progreso de mensualidades — solo si el vehículo está
   // marcado como financiado. El conteo de "pagadas" se calcula contando
   // los registros de tipo 'installment' que ya existen — así nunca se
@@ -5715,7 +5790,7 @@ function checkNotifications(){
   const alerts=[];const now=new Date();const mo=now.getMonth(),yr=now.getFullYear();
   // Budget exceeded
   if(S.notif.bgt!==false){
-    const mtxs=S.transactions.filter(t=>{const d=new Date(t.date);return d.getMonth()===mo&&d.getFullYear()===yr&&t.type==='expense'});
+    const mtxs=S.transactions.filter(t=>{const d=dateLocal(t.date);return d.getMonth()===mo&&d.getFullYear()===yr&&t.type==='expense'});
     S.budgets.forEach(b=>{
       const spent=mtxs.filter(t=>t.category===b.category||getCatParent(t.category)===b.category).reduce((a,t)=>a+M(t.amount),0);
       if(spent>b.limit)alerts.push({type:'warn',msg:'⚠️ Presupuesto excedido: '+b.category+' ('+fmt(spent)+'/'+fmt(b.limit)+')',action:"go('budget')"});
