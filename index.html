@@ -4323,82 +4323,21 @@ function renderBudget(){
   const expCats=S.categories.filter(c=>c.type==='expense');
   if(!expCats.length){el.innerHTML=emptyState('📊','Sin categorías de gasto','Crea al menos una categoría de gasto en Ajustes → Categorías para poder definir presupuestos.','Ir a Categorías',"go('settings');cfgTab('categorias',document.querySelector('#cfg-tabs button[onclick*=categorias]'))");return}
 
-  const allLimited=S.budgets.reduce((a,b)=>a+b.limit,0);
-  const allSpent=S.budgets.reduce((a,b)=>{
-    const sp=mtxs.filter(t=>t.category===b.category||getCatParent(t.category)===b.category).reduce((s,t)=>s+M(t.amount),0);
-    return a+sp;
-  },0);
-  const totalUnlimitedSpend=mtxs.reduce((a,t)=>a+M(t.amount),0);
-  const globalP=allLimited>0?Math.min(100,allSpent/allLimited*100):0;
-  const globalPct=globalP.toFixed(0);
-  const remaining=Math.max(0,allLimited-allSpent);
-  const overBudgetCats=S.budgets.filter(b=>{
-    const sp=mtxs.filter(t=>t.category===b.category||getCatParent(t.category)===b.category).reduce((s,t)=>s+M(t.amount),0);
-    return sp>b.limit;
-  }).length;
-  const onTrackCats=S.budgets.filter(b=>{
-    const sp=mtxs.filter(t=>t.category===b.category||getCatParent(t.category)===b.category).reduce((s,t)=>s+M(t.amount),0);
-    return sp/b.limit<=0.7;
-  }).length;
+  // ---- Rediseño estilo MoneyCoach ----
+  // Paleta fija para identificar cada categoría en el anillo de arriba
+  // (colores de IDENTIDAD, no de estado — a diferencia de las tarjetas de
+  // abajo, que usan rojo/amarillo/verde para indicar SALUD del gasto).
+  const BUDGET_PALETTE=['#30d693','#4e9eff','#a855f7','#ffb340','#fb923c','#f472b6','#34d399','#818cf8','#facc15','#22d3ee'];
 
-  // SVG donut for global summary
-  const r=46,cx=60,cy=60,circ=2*Math.PI*r;
-  const dashFill=circ*(Math.min(1,globalP/100));
-  const donutColor=globalP>90?'#ff5f6d':globalP>70?'#f7b731':'#30d693';
-
-  let html=`
-  <div style="background:var(--bg3);border:1px solid var(--bdr);border-radius:16px;padding:20px;margin-bottom:20px;position:relative;overflow:hidden">
-    <div style="position:absolute;top:-30px;right:-30px;width:160px;height:160px;border-radius:50%;background:${donutColor};opacity:.04;pointer-events:none"></div>
-    <div style="display:flex;align-items:center;gap:20px;flex-wrap:wrap">
-      <div style="flex-shrink:0;position:relative;width:120px;height:120px">
-        <svg width="120" height="120" viewBox="0 0 120 120" style="transform:rotate(-90deg);position:absolute;inset:0">
-          <circle cx="${cx}" cy="${cy}" r="${r}" fill="none" stroke="var(--bg4)" stroke-width="12"/>
-          <circle cx="${cx}" cy="${cy}" r="${r}" fill="none" stroke="${donutColor}" stroke-width="12"
-            stroke-dasharray="${dashFill} ${circ}" stroke-linecap="round"
-            style="transition:stroke-dasharray .6s cubic-bezier(.4,0,.2,1)"/>
-        </svg>
-        <div style="position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center">
-          <span style="font-family:'DM Mono',monospace;font-size:20px;font-weight:700;line-height:1;color:${donutColor}">${globalPct}%</span>
-          <span style="font-size:9px;color:var(--t3);text-transform:uppercase;letter-spacing:.5px;margin-top:2px">usado</span>
-        </div>
-      </div>
-      <div style="flex:1;min-width:160px">
-        <div style="margin-bottom:14px">
-          <div style="font-size:11px;color:var(--t3);text-transform:uppercase;letter-spacing:.6px;margin-bottom:3px">Gastado este mes</div>
-          <div style="font-family:'DM Mono',monospace;font-size:24px;font-weight:700;color:${allSpent>allLimited&&allLimited>0?'var(--exp)':'var(--txt)'}">${fmt(allSpent)}</div>
-          ${allLimited>0?`<div style="font-size:12px;color:var(--t3)">de ${fmt(allLimited)} presupuestado</div>`:'<div style="font-size:12px;color:var(--t3)">sin límite global</div>'}
-        </div>
-        <div style="display:flex;gap:10px;flex-wrap:wrap">
-          ${remaining>0&&allLimited>0?`<div style="background:rgba(48,214,147,.1);border:1px solid rgba(48,214,147,.2);border-radius:10px;padding:5px 10px">
-            <div style="font-size:9px;color:var(--inc);text-transform:uppercase;letter-spacing:.5px">Disponible</div>
-            <div style="font-family:'DM Mono',monospace;font-size:13px;font-weight:600;color:var(--inc)">${fmt(remaining)}</div>
-          </div>`:''}
-          ${overBudgetCats>0?`<div style="background:rgba(255,95,109,.1);border:1px solid rgba(255,95,109,.2);border-radius:10px;padding:5px 10px">
-            <div style="font-size:9px;color:var(--exp);text-transform:uppercase;letter-spacing:.5px">Excedidas</div>
-            <div style="font-family:'DM Mono',monospace;font-size:13px;font-weight:600;color:var(--exp)">${overBudgetCats} cat.</div>
-          </div>`:''}
-          ${onTrackCats>0?`<div style="background:rgba(48,214,147,.08);border:1px solid rgba(48,214,147,.15);border-radius:10px;padding:5px 10px">
-            <div style="font-size:9px;color:var(--inc);text-transform:uppercase;letter-spacing:.5px">Al día</div>
-            <div style="font-family:'DM Mono',monospace;font-size:13px;font-weight:600;color:var(--inc)">${onTrackCats} cat.</div>
-          </div>`:''}
-        </div>
-      </div>
-    </div>
-    ${allLimited>0&&totalUnlimitedSpend>allSpent?`<div style="margin-top:14px;padding-top:14px;border-top:1px solid var(--bdr);display:flex;justify-content:space-between;align-items:center">
-      <span style="font-size:11px;color:var(--t3)">Gasto total incluyendo sin límite</span>
-      <span style="font-family:'DM Mono',monospace;font-size:13px;color:var(--exp)">${fmt(totalUnlimitedSpend)}</span>
-    </div>`:''}
-  </div>
-  <div style="display:flex;flex-direction:column;gap:10px">`;
-
-  expCats.forEach(cat=>{
-    const catId='bgt-acc-'+cat.name.replace(/\s/g,'_');
+  // Se calculan primero TODOS los datos por categoría — así el anillo de
+  // arriba y las tarjetas de abajo usan exactamente los mismos números
+  // (antes se recalculaba por separado en cada parte).
+  const catStats=expCats.map((cat,i)=>{
     const subs=cat.subs||[];
     const catSpent=mtxs.filter(t=>t.category===cat.name||getCatParent(t.category)===cat.name).reduce((a,t)=>a+M(t.amount),0);
     const catBgt=S.budgets.find(b=>b.category===cat.name);
     let catLimit=catBgt?catBgt.limit:0;
-    let rolloverAmt=0;
-    let rolloverNote='';
+    let rolloverAmt=0,rolloverNote='';
     if(catBgt&&S.budgetRollover){
       const prevSpent=prevMtxs.filter(t=>t.category===cat.name||getCatParent(t.category)===cat.name).reduce((a,t)=>a+M(t.amount),0);
       rolloverAmt=Math.max(0,catBgt.limit-prevSpent);
@@ -4406,28 +4345,97 @@ function renderBudget(){
       if(rolloverAmt>0)rolloverNote=`<span style="font-size:10px;color:var(--inc);background:rgba(48,214,147,.12);padding:2px 7px;border-radius:20px">↩ +${fmt(rolloverAmt)}</span>`;
     }
     const catP=catLimit>0?Math.min(100,catSpent/catLimit*100):0;
-    const catPct=catP.toFixed(0);
     const catOver=catLimit>0&&catSpent>catLimit;
+    return{cat,subs,catSpent,catLimit,rolloverAmt,rolloverNote,catP,catOver,color:BUDGET_PALETTE[i%BUDGET_PALETTE.length]};
+  });
+
+  const allLimited=catStats.reduce((a,cs)=>a+cs.catLimit,0);
+  const allSpent=catStats.reduce((a,cs)=>a+cs.catSpent,0);
+  const totalUnlimitedSpend=mtxs.reduce((a,t)=>a+M(t.amount),0);
+  const globalP=allLimited>0?Math.min(100,allSpent/allLimited*100):0;
+  const globalPct=globalP.toFixed(0);
+  const remaining=Math.max(0,allLimited-allSpent);
+  const overBudgetCats=catStats.filter(cs=>cs.catOver).length;
+  const onTrackCats=catStats.filter(cs=>cs.catLimit>0&&cs.catP<=70).length;
+  const donutColor=globalP>90?'var(--red)':globalP>70?'var(--yel)':'var(--ac)';
+
+  // ---- Anillo multi-segmento (look característico de MoneyCoach): un
+  // arco de color por categoría, proporcional a lo que ESA categoría
+  // gastó respecto al presupuesto total del mes — así de un vistazo se ve
+  // no solo cuánto se ha gastado, sino QUÉ categorías se lo están
+  // llevando. Se dibuja como círculos SVG apilados (mismo truco que ya
+  // usaba el anillo de un solo color), cada uno con su propio
+  // stroke-dashoffset para empezar donde terminó el anterior.
+  const r=50,cx=64,cy=64,circ=2*Math.PI*r;
+  const ringCats=catStats.filter(cs=>cs.catLimit>0&&cs.catSpent>0);
+  let cumFrac=0;
+  const ringSegs=ringCats.map(cs=>{
+    if(cumFrac>=1)return '';
+    let frac=allLimited>0?cs.catSpent/allLimited:0;
+    if(cumFrac+frac>1)frac=1-cumFrac;
+    const segLen=Math.max(0,circ*frac);
+    const offset=-(cumFrac*circ);
+    cumFrac+=frac;
+    return`<circle cx="${cx}" cy="${cy}" r="${r}" fill="none" stroke="${cs.color}" stroke-width="13"
+      stroke-dasharray="${segLen} ${circ}" stroke-dashoffset="${offset}"
+      style="transition:stroke-dasharray .6s cubic-bezier(.4,0,.2,1)"/>`;
+  }).join('');
+
+  let html=`
+  <div style="background:var(--bg3);border:1px solid var(--bdr);border-radius:20px;padding:22px;margin-bottom:18px">
+    <div style="display:flex;align-items:center;gap:22px;flex-wrap:wrap">
+      <div style="flex-shrink:0;position:relative;width:128px;height:128px">
+        <svg width="128" height="128" viewBox="0 0 128 128" style="transform:rotate(-90deg);position:absolute;inset:0">
+          <circle cx="${cx}" cy="${cy}" r="${r}" fill="none" stroke="var(--bg4)" stroke-width="13"/>
+          ${ringSegs}
+        </svg>
+        <div style="position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center">
+          <span style="font-family:'DM Mono',monospace;font-size:22px;font-weight:700;line-height:1;color:${donutColor}">${globalPct}%</span>
+          <span style="font-size:9px;color:var(--t3);text-transform:uppercase;letter-spacing:.5px;margin-top:3px">usado</span>
+        </div>
+      </div>
+      <div style="flex:1;min-width:170px">
+        <div style="font-size:11px;color:var(--t3);text-transform:uppercase;letter-spacing:.6px;margin-bottom:3px">Gastado este mes</div>
+        <div style="font-family:'DM Mono',monospace;font-size:26px;font-weight:700;color:${allSpent>allLimited&&allLimited>0?'var(--exp)':'var(--txt)'};margin-bottom:2px">${fmt(allSpent)}</div>
+        ${allLimited>0?`<div style="font-size:12px;color:var(--t3);margin-bottom:14px">de ${fmt(allLimited)} presupuestado</div>`:'<div style="font-size:12px;color:var(--t3);margin-bottom:14px">sin límite global</div>'}
+        <div style="display:flex;gap:8px;flex-wrap:wrap">
+          ${remaining>0&&allLimited>0?`<div style="background:rgba(48,214,147,.1);border-radius:10px;padding:5px 10px">
+            <div style="font-size:9px;color:var(--inc);text-transform:uppercase;letter-spacing:.5px">Disponible</div>
+            <div style="font-family:'DM Mono',monospace;font-size:13px;font-weight:600;color:var(--inc)">${fmt(remaining)}</div>
+          </div>`:''}
+          ${overBudgetCats>0?`<div style="background:rgba(255,95,109,.1);border-radius:10px;padding:5px 10px">
+            <div style="font-size:9px;color:var(--exp);text-transform:uppercase;letter-spacing:.5px">Excedidas</div>
+            <div style="font-family:'DM Mono',monospace;font-size:13px;font-weight:600;color:var(--exp)">${overBudgetCats} cat.</div>
+          </div>`:''}
+          ${onTrackCats>0?`<div style="background:rgba(48,214,147,.08);border-radius:10px;padding:5px 10px">
+            <div style="font-size:9px;color:var(--inc);text-transform:uppercase;letter-spacing:.5px">Al día</div>
+            <div style="font-family:'DM Mono',monospace;font-size:13px;font-weight:600;color:var(--inc)">${onTrackCats} cat.</div>
+          </div>`:''}
+        </div>
+      </div>
+    </div>
+    ${ringCats.length?`<div style="display:flex;flex-wrap:wrap;gap:10px;margin-top:16px;padding-top:16px;border-top:1px solid var(--bdr)">
+      ${ringCats.map(cs=>`<div style="display:flex;align-items:center;gap:5px;font-size:11px;color:var(--t2)"><span style="width:8px;height:8px;border-radius:50%;background:${cs.color};flex-shrink:0"></span>${cs.cat.icon} ${esc(cs.cat.name)}</div>`).join('')}
+    </div>`:''}
+    ${allLimited>0&&totalUnlimitedSpend>allSpent?`<div style="margin-top:14px;padding-top:14px;border-top:1px solid var(--bdr);display:flex;justify-content:space-between;align-items:center">
+      <span style="font-size:11px;color:var(--t3)">Gasto total incluyendo sin límite</span>
+      <span style="font-family:'DM Mono',monospace;font-size:13px;color:var(--exp)">${fmt(totalUnlimitedSpend)}</span>
+    </div>`:''}
+  </div>
+  <div style="display:flex;flex-direction:column;gap:10px">`;
+
+  catStats.forEach(({cat,subs,catSpent,catLimit,rolloverNote,catP,catOver})=>{
+    const catId='bgt-acc-'+cat.name.replace(/\s/g,'_');
+    const catPct=catP.toFixed(0);
     const catWarn=!catOver&&catP>70;
     const barColor=catOver?'var(--redg)':catP>70?'var(--yelg)':'var(--acg)';
-    const accentColor=catOver?'var(--exp)':catP>70?'var(--yel)':'var(--ac)';
+    const statusColor=catOver?'var(--exp)':catP>70?'var(--yel)':'var(--ac)';
     const hasSubs=subs.length>0;
 
-    const cr=18,ccx=22,ccy=22,ccirc=2*Math.PI*cr;
-    const cdash=ccirc*(Math.min(1,catP/100));
-    const cdotColor=catOver?'#ff5f6d':catP>70?'#f7b731':'#30d693';
-
-    html+=`<div style="background:var(--bg3);border:1px solid ${catOver?'rgba(255,95,109,.3)':catP>70?'rgba(247,183,49,.2)':'var(--bdr)'};border-radius:14px;overflow:hidden;transition:border-color .2s">
-      <div style="padding:14px 16px;cursor:pointer;user-select:none" onclick="toggleBudgetAcc('${catId}')">
+    html+=`<div style="background:var(--bg3);border-radius:16px;overflow:hidden">
+      <div style="padding:15px 16px;cursor:pointer;user-select:none" onclick="toggleBudgetAcc('${catId}')">
         <div style="display:flex;align-items:center;gap:12px">
-          <div style="position:relative;width:44px;height:44px;flex-shrink:0">
-            <svg width="44" height="44" viewBox="0 0 44 44" style="transform:rotate(-90deg);position:absolute;inset:0">
-              <circle cx="${ccx}" cy="${ccy}" r="${cr}" fill="none" stroke="var(--bg4)" stroke-width="4"/>
-              ${catLimit>0?`<circle cx="${ccx}" cy="${ccy}" r="${cr}" fill="none" stroke="${cdotColor}" stroke-width="4"
-                stroke-dasharray="${cdash} ${ccirc}" stroke-linecap="round"/>`:''}
-            </svg>
-            <div style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font-size:18px">${cat.icon}</div>
-          </div>
+          <div style="width:38px;height:38px;border-radius:12px;background:${catLimit>0?statusColor+'1f':'var(--bg4)'};display:flex;align-items:center;justify-content:center;font-size:18px;flex-shrink:0">${cat.icon}</div>
           <div style="flex:1;min-width:0">
             <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-bottom:2px">
               <span style="font-size:14px;font-weight:600;color:var(--txt)">${cat.name}</span>
@@ -4439,30 +4447,22 @@ function renderBudget(){
               ${catLimit>0?`<span style="color:var(--t3)"> / ${fmt(catLimit)}</span> · <span style="color:${catOver?'var(--exp)':'var(--inc)'}">${catOver?'excedido por '+fmt(catSpent-catLimit):fmt(catLimit-catSpent)+' disponibles'}</span>`:`<span style="color:var(--t3)"> — sin límite</span>`}
             </div>
           </div>
-          <div style="display:flex;align-items:center;gap:8px;flex-shrink:0">
-            ${catLimit>0?`<div style="background:${catOver?'rgba(255,95,109,.12)':catP>70?'rgba(247,183,49,.12)':'rgba(48,214,147,.08)'};border-radius:20px;padding:4px 10px;text-align:center">
-              ${catOver
-                ?`<div style="font-size:10px;font-weight:700;color:var(--exp)">+${fmt(catSpent-catLimit)}</div><div style="font-size:9px;color:var(--exp);opacity:.7">excedido</div>`
-                :`<div style="font-size:13px;font-weight:700;color:${accentColor}">${catPct}%</div>`
-              }
-            </div>`:''}
-            <span id="${catId}-chevron" style="color:var(--t3);font-size:11px;transition:transform .2s">▼</span>
-          </div>
+          <span id="${catId}-chevron" style="color:var(--t3);font-size:11px;transition:transform .2s;flex-shrink:0">▼</span>
         </div>
-        ${catLimit>0?`<div style="margin-top:10px;position:relative;height:8px;background:var(--bg4);border-radius:4px;overflow:hidden">
-          <div style="position:absolute;left:0;top:0;height:100%;width:${catPct}%;background:${barColor};border-radius:4px;transition:width .5s cubic-bezier(.4,0,.2,1)"></div>
-        </div>`:''}
+        <div style="margin-top:11px;position:relative;height:7px;background:var(--bg4);border-radius:4px;overflow:hidden">
+          ${catLimit>0?`<div style="position:absolute;left:0;top:0;height:100%;width:${catPct}%;background:${barColor};border-radius:4px;transition:width .5s cubic-bezier(.4,0,.2,1)"></div>`:''}
+        </div>
       </div>
       <div id="${catId}" style="display:none;border-top:1px solid var(--bdr)">
         <div style="padding:14px 16px;display:flex;flex-direction:column;gap:8px;background:var(--bg4)">
           <div style="background:var(--bg3);border-radius:10px;padding:12px;border:1px solid var(--bdr)">
             <div style="font-size:11px;color:var(--t3);text-transform:uppercase;letter-spacing:.5px;margin-bottom:8px">${cat.icon} ${cat.name} — límite mensual</div>
             <div style="display:flex;align-items:center;gap:8px">
-              <input type="number" placeholder="Sin límite" value="${catBgt?catBgt.limit:''}" min="0" step="0.01"
-                data-had-limit="${catBgt?'1':'0'}"
+              <input type="number" placeholder="Sin límite" value="${S.budgets.find(b=>b.category===cat.name)?S.budgets.find(b=>b.category===cat.name).limit:''}" min="0" step="0.01"
+                data-had-limit="${S.budgets.find(b=>b.category===cat.name)?'1':'0'}"
                 style="flex:1;padding:8px 10px;border-radius:8px;border:1px solid var(--bdr2);background:var(--bg4);color:var(--txt);font-size:13px;font-family:'DM Mono',monospace"
                 onchange="setBudgetLimit('${cat.name}',this.value,this)">
-              ${catBgt?`<button class="btn bd ico sm" onclick="delBudget('${catBgt.id}')" title="Quitar límite" style="border-radius:8px">✕</button>`:''}
+              ${S.budgets.find(b=>b.category===cat.name)?`<button class="btn bd ico sm" onclick="delBudget('${S.budgets.find(b=>b.category===cat.name).id}')" title="Quitar límite" style="border-radius:8px">✕</button>`:''}
             </div>
           </div>
           ${subs.map(sub=>{
@@ -5227,18 +5227,13 @@ function renderVehicleDetail(id){
   const totalCost=recs.reduce((a,r)=>a+M(r.cost||0),0);
   const chargeCost=recs.filter(r=>r.type==='charge').reduce((a,r)=>a+M(r.cost||0),0);
   const maintCost=recs.filter(r=>r.type==='maintenance').reduce((a,r)=>a+M(r.cost||0),0);
-  // BUG REAL ENCONTRADO: este filtro no incluía 'installment' (mensualidad)
-  // — el costo de la mensualidad SÍ se sumaba a totalCost, pero totalCost
-  // no se mostraba en ningún lado de esta pantalla, así que la mensualidad
-  // quedaba invisible en el resumen del vehículo (aunque la transacción sí
-  // existiera). Se agrega 'installment' aquí para que se vea reflejada.
-  const otherCost=recs.filter(r=>['parking','wash','insurance','installment','other'].includes(r.type)).reduce((a,r)=>a+M(r.cost||0),0);
-  const lastKm=recs.filter(r=>r.km).sort((a,b)=>new Date(b.dt)-new Date(a.dt))[0]?.km||0;
+  const installmentCost=recs.filter(r=>r.type==='installment').reduce((a,r)=>a+M(r.cost||0),0);
+  const otherCost=recs.filter(r=>['parking','wash','insurance','other'].includes(r.type)).reduce((a,r)=>a+M(r.cost||0),0);
   $('vd-stats').innerHTML=`
-    <div class="ev-s"><div class="ev-v">${lastKm?lastKm.toLocaleString():0}</div><div class="ev-l">km odómetro</div></div>
+    <div class="ev-s"><div class="ev-v" style="color:var(--ac)">${fmt(installmentCost)}</div><div class="ev-l">mensualidad</div></div>
     <div class="ev-s"><div class="ev-v" style="color:var(--yel)">${fmt(chargeCost)}</div><div class="ev-l">${v.fuelType==='electric'?'cargas':'combustible'}</div></div>
     <div class="ev-s"><div class="ev-v" style="color:var(--blu)">${fmt(maintCost)}</div><div class="ev-l">mantenimiento</div></div>
-    <div class="ev-s"><div class="ev-v" style="color:var(--pur)">${fmt(otherCost)}</div><div class="ev-l">parking+lavado+seguro+mensualidad</div></div>`;
+    <div class="ev-s"><div class="ev-v" style="color:var(--pur)">${fmt(otherCost)}</div><div class="ev-l">parking+lavado+seguro</div></div>`;
   // Tarjeta de progreso de mensualidades — solo si el vehículo está
   // marcado como financiado. El conteo de "pagadas" se calcula contando
   // los registros de tipo 'installment' que ya existen — así nunca se
