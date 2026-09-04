@@ -5196,7 +5196,8 @@ function renderVehicles(){
     const ft=V_FUEL_TYPES[v.fuelType]||V_FUEL_TYPES.gasoline;
     const recs=v.records||[];
     const totalCost=recs.reduce((a,r)=>a+M(r.cost||0),0);
-    const lastKm=recs.filter(r=>r.km).sort((a,b)=>new Date(b.dt)-new Date(a.dt))[0]?.km||0;
+    const now=new Date();
+    const monthCost=recs.filter(r=>{const d=dateLocal(r.dt);return d.getMonth()===now.getMonth()&&d.getFullYear()===now.getFullYear();}).reduce((a,r)=>a+M(r.cost||0),0);
     return`<div class="card card-click" style="border-left:3px solid ${v.color||'var(--ac)'}" onclick="openVehicleDetail('${v.id}')">
       <div style="display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:14px">
         <div style="font-size:32px">${ft.icon}</div>
@@ -5205,12 +5206,12 @@ function renderVehicles(){
       <div style="font-size:16px;font-weight:600;margin-bottom:2px">${esc(v.name)}</div>
       <div style="font-size:12px;color:var(--t3);margin-bottom:14px">${esc(v.brand)||''} ${esc(v.model)||''} ${esc(v.year)||''}</div>
       <div style="display:flex;justify-content:space-between;font-size:13px;margin-bottom:8px">
-        <span style="color:var(--t2)">Gasto total</span>
-        <span style="font-family:'DM Mono',monospace;color:var(--red)">${fmt(totalCost)}</span>
+        <span style="color:var(--t2)">Gasto este mes</span>
+        <span style="font-family:'DM Mono',monospace;color:var(--red)">${fmt(monthCost)}</span>
       </div>
       <div style="display:flex;justify-content:space-between;font-size:13px">
-        <span style="color:var(--t2)">Último odómetro</span>
-        <span style="font-family:'DM Mono',monospace">${lastKm?lastKm.toLocaleString()+' km':'—'}</span>
+        <span style="color:var(--t2)">Gasto total</span>
+        <span style="font-family:'DM Mono',monospace">${fmt(totalCost)}</span>
       </div>
     </div>`;
   }).join('');
