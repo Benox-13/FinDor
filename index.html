@@ -3088,6 +3088,9 @@ function renderBilling(){
       const prevCutDate=new Date(lastCut.getFullYear(),lastCut.getMonth()-1,a.cutDay);
       const prevCutStr=toLocal(prevCutDate);
       invoiceAmt=S.transactions.filter(t=>t.type==='expense'&&t.accountId===a.id&&t.date>prevCutStr&&t.date<=periodStart).reduce((s,t)=>s+M(t.amount),0);
+      // Se resta lo ya pagado desde el corte — antes esto se quedaba
+      // igual sin importar cuánto se hubiera abonado.
+      invoiceAmt=Math.max(0,invoiceAmt-tdcPaidSince(a.id,periodStart));
       if(a.payDay){
         let payDate=new Date(now.getFullYear(),now.getMonth(),a.payDay);
         if(payDate<=now)payDate=new Date(now.getFullYear(),now.getMonth()+1,a.payDay);
@@ -3136,7 +3139,18 @@ function renderBilling(){
       <!-- Recent transactions for this card -->
       <div style="border-top:1px solid var(--bdr);padding:12px 16px">
         <div style="font-size:11px;color:var(--t3);text-transform:uppercase;letter-spacing:.7px;margin-bottom:8px">Últimos movimientos</div>
-        ${(()=>{const recent=S.transactions.filter(t=>t.accountId===a.id&&t.type==='expense').sort((x,y)=>y.date.localeCompare(x.date)).slice(0,4);return recent.length?recent.map(t=>`<div style="display:flex;justify-content:space-between;align-items:center;padding:5px 0;border-bottom:1px solid var(--bdr)"><div style="flex:1;min-width:0"><div style="font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(t.description)}</div><div style="font-size:10px;color:var(--t3)">${fmtDate(t.date)} · ${esc(t.category)||'—'}</div></div><span style="font-family:'DM Mono',monospace;font-size:12px;color:var(--exp);flex-shrink:0;margin-left:10px">-${fmt(t.amount)}</span></div>`).join(''):'<div style="font-size:12px;color:var(--t3)">Sin movimientos</div>';})()}
+        ${(()=>{
+          // Antes esto solo mostraba gastos (type==='expense'), así que un
+          // pago a la tarjeta (una transferencia) NUNCA aparecía aquí —
+          // parecía que el pago "no se había registrado" aunque sí existiera.
+          const recent=S.transactions.filter(t=>t.accountId===a.id&&(t.type==='expense'||t.type==='transfer')).sort((x,y)=>(y.date+(y.time||'')).localeCompare(x.date+(x.time||''))).slice(0,4);
+          return recent.length?recent.map(t=>{
+            const isPay=t.type==='transfer';
+            const sign=t.type==='expense'?'-':isPay?(t.transferDirection==='in'?'+':'-'):'';
+            const clr=t.type==='expense'?'var(--exp)':'var(--blu)';
+            return`<div style="display:flex;justify-content:space-between;align-items:center;padding:5px 0;border-bottom:1px solid var(--bdr)"><div style="flex:1;min-width:0"><div style="font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(t.description)}${isPay?' <span style="color:var(--blu)">· Pago</span>':''}</div><div style="font-size:10px;color:var(--t3)">${fmtDate(t.date)} · ${isPay?'Transferencia':esc(t.category)||'—'}</div></div><span style="font-family:'DM Mono',monospace;font-size:12px;color:${clr};flex-shrink:0;margin-left:10px">${sign}${fmt(t.amount)}</span></div>`;
+          }).join(''):'<div style="font-size:12px;color:var(--t3)">Sin movimientos</div>';
+        })()}
       </div>
     </div>`;
   });
@@ -3196,13 +3210,26 @@ function execBillingPay(){
   const tdc=S.accounts.find(a=>a.id===accId);
   const src=S.accounts.find(a=>a.id===srcId);
   if(!tdc||!src){toast('Cuenta no encontrada',false);return}
-  // Antes esto movía los balances a mano (src.balance-=amt, tdc.balance+=amt)
-  // y metía las dos transacciones directo a S.transactions, sin pasar por
-  // Store — así que ni las transacciones ni el cambio de balance llegaban
-  // nunca a Supabase. Store.addTransaction ya hace todo eso correctamente
-  // (aplica el balance Y lo sincroniza, sube la transacción con reintentos).
-  Store.addTransaction({type:'expense',amount:amt,date,time:tnow_(),description:`Pago TDC — ${tdc.name}`,category:'',accountId:srcId,notes:'Pago de tarjeta de crédito'});
-  Store.addTransaction({type:'income',amount:amt,date,time:tnow_(),description:`Pago recibido — ${tdc.name}`,category:'',accountId:accId,notes:'Abono a tarjeta de crédito'});
+  // BUG REAL ENCONTRADO: esto registraba el pago como un INGRESO en la
+  // tarjeta y un GASTO suelto en la cuenta de origen — dos transacciones
+  // sin ninguna relación entre sí. Eso causaba DOS problemas a la vez:
+  // 1) Como el "ingreso" en la tarjeta era literalmente type:'income',
+  //    se sumaba a "Total ingresos" en Dashboard/Analytics — pagar tu
+  //    propia tarjeta se contaba como si hubieras GANADO dinero.
+  // 2) tdcPaidSince() (que resta los pagos de "Factura pendiente") solo
+  //    reconoce transferencias de verdad (type:'transfer'), así que este
+  //    pago nunca se restaba de lo pendiente — por eso seguía marcando
+  //    el mismo monto del corte sin importar cuánto se hubiera pagado.
+  // Arreglo: se registra exactamente igual que una Transferencia manual
+  // (mismo patrón que usa "Nueva transacción" → Transferencia) — dos
+  // transacciones type:'transfer' vinculadas con linkedTxId, una por
+  // cuenta. Así aparece en el historial de ambas, no cuenta como
+  // ingreso, y si se resta correctamente de la factura pendiente.
+  const transferCat=ensureCategory('Transferencia','expense');
+  const desc=`Pago de tarjeta: ${src.name} → ${tdc.name}`;
+  const outTx=Store.addTransaction({type:'transfer',amount:amt,date,time:tnow_(),description:desc,category:transferCat.name,accountId:srcId,transferDirection:'out',notes:'Pago de tarjeta de crédito'});
+  const inTx=Store.addTransaction({type:'transfer',amount:amt,date,time:tnow_(),description:desc,category:transferCat.name,accountId:accId,transferDirection:'in',linkedTxId:outTx.id,notes:'Pago de tarjeta de crédito'});
+  Store.updateTransaction(outTx.id,{linkedTxId:inTx.id});
   cM('mo-billing-pay');renderBilling();renderAccounts();renderDash();toast('Pago registrado');
 }
 
@@ -4090,6 +4117,20 @@ function tdcPeriodSpend(a){
   const todayStr=toLocal(now);
   return S.transactions.filter(t=>t.type==='expense'&&t.accountId===a.id&&t.date>lastCutStr&&t.date<=todayStr).reduce((s,t)=>s+M(t.amount),0);
 }
+// BUG REAL ENCONTRADO: "Factura pendiente"/"pago pendiente" en las 3
+// pantallas que lo muestran (Facturación, la tarjeta de Cuentas, y el
+// diálogo de pago) se calculaba SOLO sumando los gastos de ese periodo ya
+// cerrado — sin restar nunca los pagos que ya se hubieran hecho. Por eso
+// pagar la tarjeta bajaba el disponible de la cuenta de origen (correcto)
+// pero "lo pendiente" se quedaba exactamente igual: nunca se le restaba
+// nada. Este helper centraliza "cuánto se ha pagado a esta tarjeta desde
+// tal fecha" (normalmente el último corte), para poder restarlo.
+function tdcPaidSince(accountId,sinceDateStr){
+  return S.transactions.filter(t=>t.type==='transfer'&&t.date>sinceDateStr&&(
+    (t.accountId===accountId&&t.transferDirection==='in')|| // formato nuevo: esta mitad ES el destino
+    (t.accountId2===accountId) // formato viejo: una sola tx con las dos cuentas
+  )).reduce((s,t)=>s+M(t.amount),0);
+}
 function accountCardHTML(a){
     const tl={cash:'Efectivo',debit:'Débito',credit:'TDC'};const tc={cash:'bdg-g',debit:'bdg-b',credit:'bdg-p'};
     let extra='';
@@ -4131,10 +4172,13 @@ function accountCardHTML(a){
           const cutDate=new Date(now.getFullYear(),now.getMonth(),a.cutDay);
           const prevCut=new Date(now.getFullYear(),now.getMonth()-1,a.cutDay);
           const invoiceSpend=S.transactions.filter(t=>t.type==='expense'&&t.accountId===a.id&&t.date>=toLocal(prevCut)&&t.date<toLocal(cutDate)).reduce((s,t)=>s+M(t.amount),0);
+          // Se resta lo ya pagado desde el corte — mismo arreglo que en
+          // Facturación y en el diálogo de pago (ver tdcPaidSince).
+          const invoicePending=Math.max(0,invoiceSpend-tdcPaidSince(a.id,toLocal(cutDate)));
           let payDt=new Date(now.getFullYear(),now.getMonth(),a.payDay);
           if(payDt<=cutDate)payDt=new Date(now.getFullYear(),now.getMonth()+1,a.payDay);
           const daysLeft=Math.ceil((payDt-now)/864e5);
-          invoiceHtml=`<div style="margin-top:10px;padding:10px 12px;background:linear-gradient(135deg,rgba(255,179,64,0.08),rgba(255,179,64,0.04));border:1px solid rgba(255,179,64,0.2);border-radius:var(--r2)"><div style="display:flex;justify-content:space-between;align-items:center"><div><div style="font-size:11px;color:var(--yel);font-weight:600;text-transform:uppercase;letter-spacing:.6px;margin-bottom:3px">📄 Factura pendiente</div><div style="font-family:'DM Mono',monospace;font-size:17px;color:var(--yel)">${a.balanceHidden?'••••••':fmt(invoiceSpend)}</div></div><div style="text-align:right"><div style="font-size:11px;color:var(--t3)">Pago límite</div><div style="font-size:13px;color:var(--txt);font-weight:500">día ${a.payDay}</div><div style="font-size:11px;color:${daysLeft<=3?'var(--red)':'var(--t3)'}">${daysLeft}d restantes</div></div></div></div>`;
+          invoiceHtml=`<div style="margin-top:10px;padding:10px 12px;background:linear-gradient(135deg,rgba(255,179,64,0.08),rgba(255,179,64,0.04));border:1px solid rgba(255,179,64,0.2);border-radius:var(--r2)"><div style="display:flex;justify-content:space-between;align-items:center"><div><div style="font-size:11px;color:var(--yel);font-weight:600;text-transform:uppercase;letter-spacing:.6px;margin-bottom:3px">📄 Factura pendiente</div><div style="font-family:'DM Mono',monospace;font-size:17px;color:var(--yel)">${a.balanceHidden?'••••••':fmt(invoicePending)}</div></div><div style="text-align:right"><div style="font-size:11px;color:var(--t3)">Pago límite</div><div style="font-size:13px;color:var(--txt);font-weight:500">día ${a.payDay}</div><div style="font-size:11px;color:${daysLeft<=3?'var(--red)':'var(--t3)'}">${daysLeft}d restantes</div></div></div></div>`;
         }
       }
       extra=`<div style="margin-top:10px"><div style="display:flex;justify-content:space-between;font-size:11px;color:var(--t3);margin-bottom:3px"><span>Usado: ${a.balanceHidden?'••••••':fmt(used)}</span><span>Límite: ${a.balanceHidden?'••••••':fmt(a.limit)}</span></div><div class="pw"><div class="pb" style="width:${p}%;background:${p>80?'var(--redg)':p>50?'var(--yelg)':'var(--acg)'}"></div></div></div>${datesHtml}${periodHtml}${invoiceHtml}`;
@@ -4143,7 +4187,11 @@ function accountCardHTML(a){
     // recientes de esta cuenta, para no tener que entrar a Transacciones
     // solo para ver "¿qué pasó aquí últimamente?".
     const recent=Store.queryTransactions({accountId:a.id,sortBy:'date',sortDir:'desc'}).slice(0,2);
-    const recentHtml=recent.length?`<div style="margin-top:10px;padding-top:9px;border-top:1px solid var(--bdr)">${recent.map(t=>`<div style="display:flex;justify-content:space-between;gap:8px;font-size:11px;color:var(--t3);padding:2px 0"><span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(t.description)}</span><span style="font-family:'DM Mono',monospace;color:${t.type==='expense'?'var(--exp)':t.type==='income'?'var(--inc)':'var(--t2)'};flex-shrink:0">${t.type==='expense'?'-':t.type==='income'?'+':''}${fmt(t.amount)}</span></div>`).join('')}</div>`:'';
+    const recentHtml=recent.length?`<div style="margin-top:10px;padding-top:9px;border-top:1px solid var(--bdr)">${recent.map(t=>{
+      const sign=t.type==='expense'?'-':t.type==='income'?'+':t.type==='transfer'?(t.transferDirection==='in'?'+':'-'):'';
+      const clr=t.type==='expense'?'var(--exp)':t.type==='income'?'var(--inc)':'var(--blu)';
+      return`<div style="display:flex;justify-content:space-between;gap:8px;font-size:11px;color:var(--t3);padding:2px 0"><span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(t.description)}${t.type==='transfer'?' <span style="color:var(--blu)">· Transf.</span>':''}</span><span style="font-family:'DM Mono',monospace;color:${clr};flex-shrink:0">${sign}${fmt(t.amount)}</span></div>`;
+    }).join('')}</div>`:'';
     return`<div class="card-click" style="background:var(--bg3);border:1px solid var(--bdr);border-radius:var(--r);padding:15px;position:relative;border-left:3px solid ${a.color||'var(--ac)'}${a.locked?';opacity:.85':''}" onclick="viewAccountTransactions('${a.id}')">
       <div style="position:absolute;top:12px;right:12px;display:flex;align-items:center;gap:4px" onclick="event.stopPropagation()">
         <span class="bdg ${tc[a.type]||'bdg-n'}">${tl[a.type]||a.type}</span>
