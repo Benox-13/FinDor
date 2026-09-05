@@ -94,6 +94,12 @@ body{background:var(--bg);color:var(--txt);font-family:'Sora',sans-serif;font-si
 /* ============ CARDS & GRIDS ============ */
 .card{background:var(--bg2);border:1px solid var(--bdr);border-radius:var(--r);padding:20px;box-shadow:var(--sha2)}
 .g2{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+/* Cuadrícula de widgets del Dashboard — TODOS del mismo tamaño (ver
+   .dgrid>.card) para poder reordenarlos libremente sin que uno quede
+   gigante y otro chiquito. El contenido que no cabe se desplaza con
+   scroll interno en vez de estirar la tarjeta. */
+.dgrid{display:grid;grid-template-columns:1fr 1fr;gap:14px;align-items:stretch}
+.dgrid>.card{height:300px;overflow-y:auto;box-sizing:border-box;margin-top:0!important}
 .g3{display:grid;grid-template-columns:repeat(3,1fr);gap:16px}
 .g4{display:grid;grid-template-columns:repeat(4,1fr);gap:14px}
 
@@ -307,6 +313,9 @@ body.modal-open #bottom-nav{display:none !important}
 
 @media (max-width:680px){
   #mob-menu-btn{display:none}
+  /* Una sola columna en móvil — con 2 columnas los widgets del dashboard
+     quedarían demasiado angostos para leerse cómodo. */
+  .dgrid{grid-template-columns:1fr}
   /* El menú pasa de ocupar espacio fijo en el layout a flotar por encima,
      oculto fuera de la pantalla hasta que se abre. */
   #sb{position:fixed;top:0;left:0;transform:translateX(-100%);transition:transform .25s ease;z-index:180;box-shadow:0 0 40px rgba(0,0,0,.5)}
@@ -459,7 +468,7 @@ body.modal-open #bottom-nav{display:none !important}
     <div class="m_ m_-bal"><div class="ml">Balance mes</div><div class="mv" id="d-bal">$0</div></div>
     <div class="m_ m_-sav"><div class="ml">Tasa ahorro</div><div class="mv" id="d-sav">0%</div><div class="ms">del ingreso</div></div>
   </div>
-  <div id="d-grid"></div>
+  <div id="d-grid" class="dgrid"></div>
 </div>
 
 <!-- TRANSACTIONS -->
@@ -1775,7 +1784,7 @@ async function pullFromSupabase(){
       monthlyPayment:v.extra?.monthly_payment_cents!=null?centsToAmt(v.extra.monthly_payment_cents):undefined,
       totalMonths:v.extra?.total_months||undefined,
       records:results.vehicle_records.filter(r=>r.vehicle_id===v.id).map(r=>({
-        id:r.id,dt:r.dt,type:r.type,qty:r.qty||0,cost:centsToAmt(r.cost_cents),km:r.km||0,notes:r.notes||'',
+        id:r.id,dt:r.dt,type:r.type,qty:r.qty||0,cost:centsToAmt(r.cost_cents),km:r.km||0,notes:r.notes||'',txId:r.tx_id||null,
       })),
     }));
 
@@ -1915,7 +1924,7 @@ function vehicleToCloud(v){
 }
 function vehicleRecordToCloud(r,vehicleId){
   return{id:r.id,user_id:currentUserId,vehicle_id:vehicleId,dt:r.dt,type:r.type,qty:r.qty||null,
-    cost_cents:amtToCents(r.cost||0),km:r.km||null,notes:r.notes||null};
+    cost_cents:amtToCents(r.cost||0),km:r.km||null,notes:r.notes||null,tx_id:isUUID(r.txId)?r.txId:null};
 }
 function customSectionToCloud(s){
   return{id:s.id,user_id:currentUserId,name:s.name,icon:s.icon||null,member_label:s.memberLabel||'Miembro'};
@@ -2373,6 +2382,12 @@ const Store = {
     S.transactions.push(tx);
     this.applyBalance(tx);
     save();
+    // Si esta transacción nace ligada a un préstamo o meta (debtId/goalId),
+    // se recalcula su total desde cero — normalmente ya coincide (quien
+    // llama ya lo había puesto a mano), pero así se autocorrige solo si
+    // algún día no coincidiera.
+    if(tx.debtId)this.recalcDebtPaid(tx.debtId);
+    if(tx.goalId)this.recalcGoalSaved(tx.goalId);
     if(sb&&currentUserId){
       // La anotamos en la cola de reintentos DE UNA VEZ, antes de intentar
       // subirla — no solo si falla. Si no hiciéramos esto, y la página se
@@ -2396,6 +2411,23 @@ const Store = {
     S.transactions[idx]=updated;
     this.applyBalance(updated);
     save();
+    // BUG REAL ENCONTRADO: editar una transacción desde "Transacciones"
+    // nunca se reflejaba en el vehículo/préstamo/meta al que estuviera
+    // ligada — cada uno vivía su vida por separado. Ahora, si esta
+    // transacción está ligada a un registro de vehículo, se le copian
+    // monto/fecha; y si tiene debtId/goalId, se recalcula el total pagado/
+    // ahorrado desde las transacciones reales (no un contador aparte).
+    const linkedVeh=this.findVehicleRecordByTxId(id);
+    if(linkedVeh&&(patch.amount!==undefined||patch.date!==undefined)){
+      const vpatch={};
+      if(patch.amount!==undefined)vpatch.cost=updated.amount;
+      if(patch.date!==undefined)vpatch.dt=updated.date;
+      this.updateVehicleRecord(linkedVeh.vehicleId,linkedVeh.record.id,vpatch);
+    }
+    if(updated.debtId)this.recalcDebtPaid(updated.debtId);
+    if(old.debtId&&old.debtId!==updated.debtId)this.recalcDebtPaid(old.debtId);
+    if(updated.goalId)this.recalcGoalSaved(updated.goalId);
+    if(old.goalId&&old.goalId!==updated.goalId)this.recalcGoalSaved(old.goalId);
     if(sb&&currentUserId){
       // Mismo razonamiento que en addTransaction: anotar antes de intentar,
       // no solo si falla.
@@ -2409,6 +2441,15 @@ const Store = {
     if(!tx)return;
     this.reverseBalance(tx);
     S.transactions=S.transactions.filter(t=>t.id!==id);
+    // Si estaba ligada a un registro de vehículo, se desvincula — NO se
+    // borra el registro del vehículo: quien borra la transacción puede
+    // querer borrar solo el movimiento de dinero, no el historial del
+    // vehículo (ej. seguir viendo que ese mes se hizo el mantenimiento,
+    // aunque ya no haya un cargo asociado a ninguna cuenta).
+    const linkedVeh=this.findVehicleRecordByTxId(id);
+    if(linkedVeh)this.updateVehicleRecord(linkedVeh.vehicleId,linkedVeh.record.id,{txId:null});
+    if(tx.debtId)this.recalcDebtPaid(tx.debtId);
+    if(tx.goalId)this.recalcGoalSaved(tx.goalId);
     save();
     if(sb&&currentUserId&&isUUID(id)){
       // Igual: anotamos el borrado en la cola ANTES de intentarlo. Si la
@@ -2775,6 +2816,55 @@ const Store = {
   // ---------------- VEHICLES ----------------
   getVehicles(){ return S.vehicles; },
   getVehicleById(id){ return S.vehicles.find(v=>v.id===id); },
+  // BUG REAL ENCONTRADO: un registro de vehículo (ej. una mensualidad) y
+  // su transacción vinculada eran dos objetos totalmente sueltos, sin
+  // ninguna referencia entre sí — editar o borrar uno nunca afectaba al
+  // otro. Este helper busca, dado el id de una transacción, si algún
+  // registro de vehículo la tiene como su "txId" — así updateTransaction/
+  // deleteTransaction pueden reflejar el cambio también en el vehículo.
+  findVehicleRecordByTxId(txId){
+    for(const v of S.vehicles){
+      const r=(v.records||[]).find(x=>x.txId===txId);
+      if(r)return{vehicleId:v.id,record:r};
+    }
+    return null;
+  },
+  // Mismo problema para Préstamos y Objetivos: "cuánto llevo pagado/
+  // ahorrado" (d.paid / g.saved) era un contador que se incrementaba a
+  // mano al registrar un pago/abono, pero nunca se recalculaba si esa
+  // transacción se editaba o borraba después desde Transacciones — se
+  // quedaba con el número viejo para siempre. Estos dos recalculan el
+  // total SIEMPRE a partir de las transacciones reales ligadas (nunca se
+  // llama espontáneamente; solo después de que una transacción con
+  // debtId/goalId cambia), así que se autocorrige solo.
+  _findDebt(debtId){
+    let d=S.debts_owed.find(x=>x.id===debtId);if(d)return{k:'owed',d};
+    d=S.debts_iowe.find(x=>x.id===debtId);if(d)return{k:'iowe',d};
+    return null;
+  },
+  recalcDebtPaid(debtId){
+    const found=this._findDebt(debtId);if(!found)return;
+    const{k,d}=found;
+    // La transacción que registra el préstamo ORIGINAL tiene el signo
+    // contrario a un pago real (income si debo, expense si me deben) —
+    // por eso se filtra por tipo, para no contarla como "ya pagado".
+    const repayType=k==='iowe'?'expense':'income';
+    const paid=this.getDebtHistory(debtId).filter(t=>t.type===repayType).reduce((s,t)=>s+M(t.amount),0);
+    if(M(d.paid||0)===paid)return;
+    this.updateDebt(k,debtId,{paid});
+  },
+  recalcGoalSaved(goalId){
+    const g=this.getGoalById(goalId);if(!g)return;
+    const saved=this.getGoalHistory(goalId).reduce((s,t)=>{
+      if(t.type==='expense')return s+M(t.amount);
+      if(t.type==='transfer'&&t.accountId2)return s+M(t.amount); // formato viejo de abono con cuenta destino
+      if(t.type==='transfer'&&t.transferDirection==='in')return s+M(t.amount);
+      return s;
+    },0);
+    const clamped=Math.max(0,Math.min(g.target,saved));
+    if(M(g.saved||0)===clamped)return;
+    this.updateGoal(goalId,{saved:clamped});
+  },
   addVehicle(data){
     const v={id:uid(),records:[],...data};
     S.vehicles.push(v);
@@ -3266,79 +3356,77 @@ function renderDash(){
     const se=$('d-sav');se.textContent=sav+'%';se.style.color=sav>=20?'var(--inc)':sav>=10?'var(--yel)':'var(--exp)';
   }
   // Build grid of enabled widgets
-  const parts=[];
-  if(dw.txs||dw.cats||dw.accs||dw.subs||dw.debts){
-    let left='',right='';
-    if(dw.txs){
-      const r=[...S.transactions].sort((a,b)=>new Date(b.date)-new Date(a.date)).slice(0,6);
-      left=`<div class="card"><div class="slbl">Últimas transacciones</div>${r.length?r.map(t=>`<div style="display:flex;align-items:center;justify-content:space-between;padding:7px 0;border-bottom:1px solid var(--bdr)"><div style="display:flex;align-items:center;gap:9px"><div style="width:28px;height:28px;border-radius:50%;background:var(--bg4);display:flex;align-items:center;justify-content:center;font-size:12px">${getCatIcon(t.category)}</div><div><div style="font-size:13px">${esc(t.description)}</div><div style="font-size:11px;color:var(--t3)">${fmtDate(t.date)} · ${esc(t.category)||'—'}</div></div></div><div style="font-family:'DM Mono',monospace;font-size:13px;color:${t.type==='income'?'var(--inc)':t.type==='expense'?'var(--exp)':'var(--blu)'};">${t.type==='expense'?'-':''}${fmt(t.amount)}</div></div>`).join(''):emptyState('💸','Aún no hay movimientos','Tu actividad reciente va a aparecer aquí en cuanto registres tu primera transacción.','+ Nueva transacción',"openTxM()")}</div>`;
+  // Rediseño: TODOS los widgets (antes solo 4 de 8 se podían reordenar,
+  // y "Últimas transacciones"/Objetivos/Presupuesto/Próximos pagos vivían
+  // fuera del sistema de orden, en posiciones fijas) ahora son parte de
+  // UNA sola lista reordenable, y se pintan del MISMO tamaño (ver
+  // .dgrid>.card en el CSS) para poder moverlos todos libremente sin que
+  // uno quede gigante y otro chiquito.
+  const buildTxs=()=>{
+    const r=[...S.transactions].sort((a,b)=>new Date(b.date)-new Date(a.date)).slice(0,6);
+    return[`<div class="card"><div class="slbl">Últimas transacciones</div>${r.length?r.map(t=>`<div style="display:flex;align-items:center;justify-content:space-between;padding:7px 0;border-bottom:1px solid var(--bdr)"><div style="display:flex;align-items:center;gap:9px"><div style="width:28px;height:28px;border-radius:50%;background:var(--bg4);display:flex;align-items:center;justify-content:center;font-size:12px">${getCatIcon(t.category)}</div><div><div style="font-size:13px">${esc(t.description)}</div><div style="font-size:11px;color:var(--t3)">${fmtDate(t.date)} · ${esc(t.category)||'—'}</div></div></div><div style="font-family:'DM Mono',monospace;font-size:13px;color:${t.type==='income'?'var(--inc)':t.type==='expense'?'var(--exp)':'var(--blu)'};">${t.type==='expense'?'-':''}${fmt(t.amount)}</div></div>`).join(''):emptyState('💸','Aún no hay movimientos','Tu actividad reciente va a aparecer aquí en cuanto registres tu primera transacción.','+ Nueva transacción',"openTxM()")}</div>`];
+  };
+  const buildCats=()=>{
+    const ce={};mtxs.filter(t=>t.type==='expense').forEach(t=>{ce[t.category]=(ce[t.category]||0)+M(t.amount)});
+    const srt=Object.entries(ce).sort((a,b)=>b[1]-a[1]).slice(0,5);const mx=srt[0]?.[1]||1;
+    return[`<div class="card"><div class="slbl">Gastos por categoría</div>${srt.length?srt.map(([c,v])=>`<div style="margin-bottom:9px"><div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:3px"><span>${getCatIcon(c)} ${c}</span><span style="color:var(--t2);font-family:'DM Mono',monospace">${fmt(v)}</span></div><div class="pw"><div class="pb" style="width:${(v/mx*100).toFixed(0)}%;background:var(--red)"></div></div></div>`).join(''):'<div style="color:var(--t3);font-size:13px;text-align:center;padding:8px">Sin gastos</div>'}</div>`];
+  };
+  const buildAccs=()=>{
+    const out=[];
+    const cashDebit=S.accounts.filter(a=>!a.archived&&(a.type==='cash'||a.type==='debit'));
+    const creditAccs=S.accounts.filter(a=>!a.archived&&a.type==='credit');
+    const cashDebitTotal=cashDebit.reduce((s,a)=>s+(a.balanceHidden?0:M(a.balance)),0);
+    const anyHidden=cashDebit.some(a=>a.balanceHidden);
+    out.push(`<div class="card card-click" onclick="go('accounts')"><div class="slbl">Cuentas</div>${cashDebit.length?cashDebit.map(a=>`<div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid var(--bdr)"><div style="display:flex;align-items:center;gap:7px"><div style="width:8px;height:8px;border-radius:50%;background:${a.color||'var(--ac)'}"></div><span style="font-size:13px">${esc(a.name)}${a.locked?' 🔒':''}</span></div><span style="font-family:'DM Mono',monospace;font-size:13px;color:${a.balanceHidden?'var(--t3)':M(a.balance)>=0?'var(--inc)':'var(--exp)'}">${accBalanceLabel(a)}</span></div>`).join(''):'<div style="color:var(--t3);font-size:13px">Sin cuentas de efectivo/débito</div>'}${cashDebit.length?`<div style="display:flex;justify-content:space-between;padding-top:8px;margin-top:2px;font-weight:600"><span style="font-size:13px">Total</span><span style="font-family:'DM Mono',monospace;font-size:13px;color:${cashDebitTotal>=0?'var(--inc)':'var(--exp)'}">${anyHidden?'••••••':fmt(cashDebitTotal)}</span></div>`:''}</div>`);
+    // Tarjetas de crédito en su propia tarjeta — mezclarlas con
+    // efectivo/débito en el mismo total no tiene sentido (es deuda
+    // disponible, no dinero tuyo).
+    if(creditAccs.length){
+      out.push(`<div class="card card-click" onclick="go('accounts')"><div class="slbl">Tarjetas de crédito</div>${creditAccs.map(a=>{
+        const available=M(a.balance||0);
+        const periodSpend=tdcPeriodSpend(a);
+        return`<div style="padding:7px 0;border-bottom:1px solid var(--bdr)">
+          <div style="display:flex;justify-content:space-between;align-items:center">
+            <div style="display:flex;align-items:center;gap:7px"><div style="width:8px;height:8px;border-radius:50%;background:${a.color||'var(--pur)'}"></div><span style="font-size:13px">${esc(a.name)}${a.locked?' 🔒':''}</span></div>
+            <span style="font-size:11px;color:var(--t3)">${a.limit?'Límite: '+fmt(a.limit):''}</span>
+          </div>
+          <div style="display:flex;justify-content:space-between;margin-top:4px">
+            <span style="font-size:11px;color:var(--t3)">Gasto del periodo: <span style="font-family:'DM Mono',monospace;color:var(--red)">${a.balanceHidden?'••••':periodSpend!==null?fmt(periodSpend):'—'}</span></span>
+            <span style="font-size:11px;color:var(--t3)">Disponible: <span style="font-family:'DM Mono',monospace;color:var(--t2)">${a.balanceHidden?'••••':fmt(available)}</span></span>
+          </div>
+        </div>`;
+      }).join('')}</div>`);
     }
-    const rightParts=[];
-    // Cada widget se arma en su propia función para poder ensamblarlos en
-    // el orden que el usuario configuró en Ajustes → Dashboard, en vez de
-    // un orden fijo en el código.
-    const buildCats=()=>{
-      const ce={};mtxs.filter(t=>t.type==='expense').forEach(t=>{ce[t.category]=(ce[t.category]||0)+M(t.amount)});
-      const srt=Object.entries(ce).sort((a,b)=>b[1]-a[1]).slice(0,5);const mx=srt[0]?.[1]||1;
-      return[`<div class="card"><div class="slbl">Gastos por categoría</div>${srt.length?srt.map(([c,v])=>`<div style="margin-bottom:9px"><div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:3px"><span>${getCatIcon(c)} ${c}</span><span style="color:var(--t2);font-family:'DM Mono',monospace">${fmt(v)}</span></div><div class="pw"><div class="pb" style="width:${(v/mx*100).toFixed(0)}%;background:var(--red)"></div></div></div>`).join(''):'<div style="color:var(--t3);font-size:13px;text-align:center;padding:8px">Sin gastos</div>'}</div>`];
-    };
-    const buildAccs=()=>{
-      const out=[];
-      const cashDebit=S.accounts.filter(a=>!a.archived&&(a.type==='cash'||a.type==='debit'));
-      const creditAccs=S.accounts.filter(a=>!a.archived&&a.type==='credit');
-      const cashDebitTotal=cashDebit.reduce((s,a)=>s+(a.balanceHidden?0:M(a.balance)),0);
-      const anyHidden=cashDebit.some(a=>a.balanceHidden);
-      out.push(`<div class="card card-click" onclick="go('accounts')"><div class="slbl">Cuentas</div>${cashDebit.length?cashDebit.map(a=>`<div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid var(--bdr)"><div style="display:flex;align-items:center;gap:7px"><div style="width:8px;height:8px;border-radius:50%;background:${a.color||'var(--ac)'}"></div><span style="font-size:13px">${esc(a.name)}${a.locked?' 🔒':''}</span></div><span style="font-family:'DM Mono',monospace;font-size:13px;color:${a.balanceHidden?'var(--t3)':M(a.balance)>=0?'var(--inc)':'var(--exp)'}">${accBalanceLabel(a)}</span></div>`).join(''):'<div style="color:var(--t3);font-size:13px">Sin cuentas de efectivo/débito</div>'}${cashDebit.length?`<div style="display:flex;justify-content:space-between;padding-top:8px;margin-top:2px;font-weight:600"><span style="font-size:13px">Total</span><span style="font-family:'DM Mono',monospace;font-size:13px;color:${cashDebitTotal>=0?'var(--inc)':'var(--exp)'}">${anyHidden?'••••••':fmt(cashDebitTotal)}</span></div>`:''}</div>`);
-      // Tarjetas de crédito en su propia tarjeta — mezclarlas con
-      // efectivo/débito en el mismo total no tiene sentido (es deuda
-      // disponible, no dinero tuyo).
-      if(creditAccs.length){
-        out.push(`<div class="card card-click" onclick="go('accounts')"><div class="slbl">Tarjetas de crédito</div>${creditAccs.map(a=>{
-          const available=M(a.balance||0);
-          const periodSpend=tdcPeriodSpend(a);
-          return`<div style="padding:7px 0;border-bottom:1px solid var(--bdr)">
-            <div style="display:flex;justify-content:space-between;align-items:center">
-              <div style="display:flex;align-items:center;gap:7px"><div style="width:8px;height:8px;border-radius:50%;background:${a.color||'var(--pur)'}"></div><span style="font-size:13px">${esc(a.name)}${a.locked?' 🔒':''}</span></div>
-              <span style="font-size:11px;color:var(--t3)">${a.limit?'Límite: '+fmt(a.limit):''}</span>
-            </div>
-            <div style="display:flex;justify-content:space-between;margin-top:4px">
-              <span style="font-size:11px;color:var(--t3)">Gasto del periodo: <span style="font-family:'DM Mono',monospace;color:var(--red)">${a.balanceHidden?'••••':periodSpend!==null?fmt(periodSpend):'—'}</span></span>
-              <span style="font-size:11px;color:var(--t3)">Disponible: <span style="font-family:'DM Mono',monospace;color:var(--t2)">${a.balanceHidden?'••••':fmt(available)}</span></span>
-            </div>
-          </div>`;
-        }).join('')}</div>`);
-      }
-      return out;
-    };
-    const buildSubs=()=>{
-      const activeSubs=S.subscriptions.filter(s=>(s.status||'active')==='active');
-      const monthlyTotal=activeSubs.reduce((a,s)=>a+(s.freq==='monthly'?s.cost:s.freq==='annual'?s.cost/12:s.cost*4.33),0);
-      const nextFew=[...activeSubs].sort((a,b)=>new Date(a.nextDate)-new Date(b.nextDate)).slice(0,3);
-      return[`<div class="card card-click" onclick="go('subscriptions')"><div class="slbl">Suscripciones</div>${nextFew.length?nextFew.map(s=>`<div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid var(--bdr)"><span style="font-size:13px">${esc(s.icon)} ${esc(s.name)}</span><span style="font-family:'DM Mono',monospace;font-size:13px;color:var(--t2)">${fmt(s.cost)}</span></div>`).join(''):'<div style="color:var(--t3);font-size:13px">Sin suscripciones activas</div>'}${activeSubs.length?`<div style="display:flex;justify-content:space-between;padding-top:8px;margin-top:2px;font-weight:600"><span style="font-size:13px">Total/mes</span><span style="font-family:'DM Mono',monospace;font-size:13px">${fmt(monthlyTotal)}</span></div>`:''}</div>`];
-    };
-    const buildDebts=()=>{
-      const owedTotal=S.debts_owed.reduce((a,d)=>a+Math.max(0,d.amount-(d.paid||0)),0);
-      const ioweTotal=S.debts_iowe.reduce((a,d)=>a+Math.max(0,d.amount-(d.paid||0)),0);
-      return[`<div class="card card-click" onclick="go('loans')"><div class="slbl">Préstamos</div><div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid var(--bdr)"><span style="font-size:13px">Me deben</span><span style="font-family:'DM Mono',monospace;font-size:13px;color:var(--inc)">${fmt(owedTotal)}</span></div><div style="display:flex;justify-content:space-between;padding:6px 0"><span style="font-size:13px">Debo</span><span style="font-family:'DM Mono',monospace;font-size:13px;color:var(--exp)">${fmt(ioweTotal)}</span></div></div>`];
-    };
-    const widgetBuilders={cats:buildCats,accs:buildAccs,subs:buildSubs,debts:buildDebts};
-    getDashOrder().forEach(k=>{if(dw[k])rightParts.push(...widgetBuilders[k]())});
-    right=rightParts.join('<div style="height:13px"></div>');
-    if(left&&right)parts.push(`<div class="g2">${left}<div>${right}</div></div>`);
-    else if(left)parts.push(left);else if(right)parts.push(right);
-  }
-  if(dw.goals&&S.goals.length){
+    return out;
+  };
+  const buildSubs=()=>{
+    const activeSubs=S.subscriptions.filter(s=>(s.status||'active')==='active');
+    const monthlyTotal=activeSubs.reduce((a,s)=>a+(s.freq==='monthly'?s.cost:s.freq==='annual'?s.cost/12:s.cost*4.33),0);
+    const nextFew=[...activeSubs].sort((a,b)=>new Date(a.nextDate)-new Date(b.nextDate)).slice(0,3);
+    return[`<div class="card card-click" onclick="go('subscriptions')"><div class="slbl">Suscripciones</div>${nextFew.length?nextFew.map(s=>`<div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid var(--bdr)"><span style="font-size:13px">${esc(s.icon)} ${esc(s.name)}</span><span style="font-family:'DM Mono',monospace;font-size:13px;color:var(--t2)">${fmt(s.cost)}</span></div>`).join(''):'<div style="color:var(--t3);font-size:13px">Sin suscripciones activas</div>'}${activeSubs.length?`<div style="display:flex;justify-content:space-between;padding-top:8px;margin-top:2px;font-weight:600"><span style="font-size:13px">Total/mes</span><span style="font-family:'DM Mono',monospace;font-size:13px">${fmt(monthlyTotal)}</span></div>`:''}</div>`];
+  };
+  const buildDebts=()=>{
+    const owedTotal=S.debts_owed.reduce((a,d)=>a+Math.max(0,d.amount-(d.paid||0)),0);
+    const ioweTotal=S.debts_iowe.reduce((a,d)=>a+Math.max(0,d.amount-(d.paid||0)),0);
+    return[`<div class="card card-click" onclick="go('loans')"><div class="slbl">Préstamos</div><div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid var(--bdr)"><span style="font-size:13px">Me deben</span><span style="font-family:'DM Mono',monospace;font-size:13px;color:var(--inc)">${fmt(owedTotal)}</span></div><div style="display:flex;justify-content:space-between;padding:6px 0"><span style="font-size:13px">Debo</span><span style="font-family:'DM Mono',monospace;font-size:13px;color:var(--exp)">${fmt(ioweTotal)}</span></div></div>`];
+  };
+  // Objetivos y Presupuesto antes desaparecían del todo si no había datos
+  // (en vez de mostrar un estado vacío) — eso hacía que la posición de
+  // los demás widgets "brincara" de forma impredecible al reordenar.
+  // Ahora siempre ocupan su lugar en la cuadrícula, igual que el resto.
+  const buildGoals=()=>{
     const ag=S.goals.filter(g=>g.saved<g.target).slice(0,4);
-    if(ag.length)parts.push(`<div class="card card-click" style="margin-top:13px" onclick="go('goals')"><div class="slbl">Objetivos</div><div class="g2">${ag.map(g=>{const p=Math.min(100,g.saved/g.target*100).toFixed(0);return`<div><div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:3px"><span>${g.icon} ${g.name}</span><span style="font-family:'DM Mono',monospace;color:var(--t2)">${p}%</span></div><div class="pw"><div class="pb" style="width:${p}%;background:var(--ac)"></div></div></div>`}).join('')}</div></div>`);
-  }
-  if(dw.budget&&S.budgets.length){
+    if(!ag.length)return[`<div class="card card-click" onclick="go('goals')"><div class="slbl">Objetivos</div><div style="color:var(--t3);font-size:13px;text-align:center;padding:8px">Sin objetivos activos</div></div>`];
+    return[`<div class="card card-click" onclick="go('goals')"><div class="slbl">Objetivos</div><div class="g2">${ag.map(g=>{const p=Math.min(100,g.saved/g.target*100).toFixed(0);return`<div><div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:3px"><span>${g.icon} ${g.name}</span><span style="font-family:'DM Mono',monospace;color:var(--t2)">${p}%</span></div><div class="pw"><div class="pb" style="width:${p}%;background:var(--ac)"></div></div></div>`}).join('')}</div></div>`];
+  };
+  const buildBudget=()=>{
+    if(!S.budgets.length)return[`<div class="card card-click" onclick="go('budget')"><div class="slbl">Presupuesto del mes</div><div style="color:var(--t3);font-size:13px;text-align:center;padding:8px">Sin presupuestos configurados</div></div>`];
     const items=S.budgets.map(b=>{const sp=mtxs.filter(t=>t.type==='expense'&&(t.category===b.category||getCatParent(t.category)===b.category)).reduce((a,t)=>a+M(t.amount),0);const p=Math.min(100,sp/b.limit*100).toFixed(0);return`<div><div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:3px"><span>${getCatIcon(b.category)} ${esc(b.category)}</span><span style="font-family:'DM Mono',monospace;color:${p>90?'var(--red)':p>70?'var(--yel)':'var(--t2)'}">${fmt(sp)}/${fmt(b.limit)}</span></div><div class="pw"><div class="pb" style="width:${p}%;background:${p>90?'var(--redg)':p>70?'var(--yelg)':'var(--acg)'}"></div></div></div>`});
-    parts.push(`<div class="card" style="margin-top:13px"><div class="slbl">Presupuesto del mes</div><div class="g2">${items.join('')}</div></div>`);
-  }
+    return[`<div class="card card-click" onclick="go('budget')"><div class="slbl">Presupuesto del mes</div><div class="g2">${items.join('')}</div></div>`];
+  };
   // Próximos pagos: suscripciones y préstamos (que yo debo) con fecha
-  // dentro de los próximos 30 días — antes esto no existía en ningún lado
-  // del dashboard, había que ir a revisar cada sección por separado.
-  if(dw.upcoming){
+  // dentro de los próximos 30 días.
+  const buildUpcoming=()=>{
     const today=new Date();today.setHours(0,0,0,0);
     const up=[];
     S.subscriptions.forEach(s=>{
@@ -3354,9 +3442,12 @@ function renderDash(){
     });
     up.sort((a,b)=>a.days-b.days);
     const shown=up.slice(0,5);
-    parts.push(`<div class="card" style="margin-top:13px"><div class="slbl">Próximos pagos</div>${shown.length?shown.map(i=>`<div style="display:flex;justify-content:space-between;align-items:center;padding:8px 0;border-bottom:1px solid var(--bdr)"><div style="display:flex;align-items:center;gap:9px"><div style="width:28px;height:28px;border-radius:50%;background:var(--bg4);display:flex;align-items:center;justify-content:center;font-size:12px">${i.icon}</div><div><div style="font-size:13px">${esc(i.label)}</div><div style="font-size:11px;color:var(--t3)">${esc(i.kind)} · ${fmtDate(i.date)}${i.days===0?' · Hoy':i.days===1?' · Mañana':' · en '+i.days+' días'}</div></div></div><div style="font-family:'DM Mono',monospace;font-size:13px;color:var(--exp)">${fmt(i.amount)}</div></div>`).join(''):emptyState('📅','Sin pagos próximos','No tienes suscripciones ni préstamos con vencimiento en los próximos 30 días.')}</div>`);
-  }
-  $('d-grid').innerHTML=parts.join('');
+    return[`<div class="card"><div class="slbl">Próximos pagos</div>${shown.length?shown.map(i=>`<div style="display:flex;justify-content:space-between;align-items:center;padding:8px 0;border-bottom:1px solid var(--bdr)"><div style="display:flex;align-items:center;gap:9px"><div style="width:28px;height:28px;border-radius:50%;background:var(--bg4);display:flex;align-items:center;justify-content:center;font-size:12px">${i.icon}</div><div><div style="font-size:13px">${esc(i.label)}</div><div style="font-size:11px;color:var(--t3)">${esc(i.kind)} · ${fmtDate(i.date)}${i.days===0?' · Hoy':i.days===1?' · Mañana':' · en '+i.days+' días'}</div></div></div><div style="font-family:'DM Mono',monospace;font-size:13px;color:var(--exp)">${fmt(i.amount)}</div></div>`).join(''):emptyState('📅','Sin pagos próximos','No tienes suscripciones ni préstamos con vencimiento en los próximos 30 días.')}</div>`];
+  };
+  const widgetBuilders={txs:buildTxs,cats:buildCats,accs:buildAccs,subs:buildSubs,debts:buildDebts,goals:buildGoals,budget:buildBudget,upcoming:buildUpcoming};
+  const allParts=[];
+  getDashOrder().forEach(k=>{if(dw[k]&&widgetBuilders[k])allParts.push(...widgetBuilders[k]())});
+  $('d-grid').innerHTML=allParts.join('');
 }
 
 // Estado vacío reutilizable — ícono + título + mensaje explicando qué
@@ -5224,8 +5315,8 @@ function renderLoansHistory(){
 }
 function applyTheme(){const d=$('cfg-dark').checked;document.documentElement.setAttribute('data-theme',d?'dark':'light');S.settings.theme=d?'dark':'light';save();pushSettings();}
 function setAccent(a,el){document.documentElement.setAttribute('data-accent',a==='green'?'':a);document.querySelectorAll('.swatch[data-a]').forEach(s=>s.classList.remove('sel'));el.classList.add('sel');S.settings.accent=a;save();pushSettings();}
-const DASH_ORDER_LABELS={cats:'Gastos por categoría',accs:'Resumen de cuentas',subs:'Suscripciones',debts:'Préstamos'};
-const DASH_ORDER_DEFAULT=['cats','accs','subs','debts'];
+const DASH_ORDER_LABELS={txs:'Últimas transacciones',cats:'Gastos por categoría',accs:'Resumen de cuentas',subs:'Suscripciones',debts:'Préstamos',goals:'Objetivos',budget:'Presupuesto del mes',upcoming:'Próximos pagos'};
+const DASH_ORDER_DEFAULT=['txs','cats','accs','subs','debts','goals','budget','upcoming'];
 function getDashOrder(){
   const o=S.dw.order;
   if(!o||!o.length)return[...DASH_ORDER_DEFAULT];
@@ -5552,23 +5643,54 @@ async function saveVRec(){
   const type=$('vr-type').value;
   const obj={dt,type,qty:M($('vr-qty').value)||0,cost,km:M($('vr-km').value)||0,notes:$('vr-notes').value};
   const eid=$('vr-eid').value;
+  const desc=`${V_TYPE_LABELS[type]} — ${v.name}`;
   if(eid){
     const ok=await confirm_('¿Guardar cambios?','Se actualizará este registro.','Guardar');
     if(!ok)return;
-    Store.updateVehicleRecord(vid,eid,obj);toast('Actualizado');
+    // BUG REAL ENCONTRADO: editar aquí nunca tocaba la transacción ligada
+    // (si la había) — quedaban desincronizados: el registro mostraba un
+    // costo y la transacción otro. Ahora: si ya había una transacción
+    // ligada y sigue pidiéndose autotx, se actualiza con los mismos
+    // datos; si ya no se pide autotx, se borra; si antes no había y ahora
+    // sí se pide, se crea.
+    const existing=(v.records||[]).find(r=>r.id===eid);
+    let txId=existing?.txId||null;
+    if(txId&&autotx&&cost>0){
+      Store.updateTransaction(txId,{amount:cost,date:dt,description:desc,category:cat||undefined,accountId:accId||undefined});
+    } else if(txId&&(!autotx||cost<=0)){
+      Store.deleteTransaction(txId);
+      txId=null;
+    } else if(!txId&&autotx&&cost>0){
+      const tx=Store.addTransaction({type:'expense',amount:cost,date:dt,time:tnow_(),description:desc,category:cat,accountId:accId,notes:'Registro de vehículo'});
+      txId=tx.id;
+    }
+    Store.updateVehicleRecord(vid,eid,{...obj,txId});
+    toast('Actualizado');
   }
-  else{Store.addVehicleRecord(vid,obj);toast('Registro guardado')}
-  // Generar transacción es opcional — el registro del vehículo (arriba) se
-  // guarda siempre; esto solo además descuenta el costo de una cuenta si
-  // el usuario lo pidió explícitamente.
-  if(autotx&&cost>0){
-    Store.addTransaction({type:'expense',amount:cost,date:dt,time:tnow_(),description:`${V_TYPE_LABELS[type]} — ${v.name}`,category:cat,accountId:accId,notes:'Registro de vehículo'});
+  else{
+    // Se crea la transacción PRIMERO (si aplica) para poder guardar su id
+    // como txId en el registro desde el principio — antes eran dos
+    // objetos totalmente sueltos, sin ninguna relación entre sí, así que
+    // editar o borrar uno nunca afectaba al otro.
+    let txId=null;
+    if(autotx&&cost>0){
+      const tx=Store.addTransaction({type:'expense',amount:cost,date:dt,time:tnow_(),description:desc,category:cat,accountId:accId,notes:'Registro de vehículo'});
+      txId=tx.id;
+    }
+    Store.addVehicleRecord(vid,{...obj,txId});
+    toast('Registro guardado');
   }
   cM('mo-vrec');renderVehicleDetail(vid);
 }
 
 async function delVRec(vid,rid){
   const ok=await confirm_('¿Eliminar registro?','');if(!ok)return;
+  const v=Store.getVehicleById(vid);
+  const r=v&&(v.records||[]).find(x=>x.id===rid);
+  // Se borra también la transacción ligada, si la había — antes se
+  // quedaba huérfana en Transacciones, sin ningún registro de vehículo
+  // que la respaldara.
+  if(r?.txId)Store.deleteTransaction(r.txId);
   Store.deleteVehicleRecord(vid,rid);renderVehicleDetail(vid);toast('Eliminado');
 }
 
