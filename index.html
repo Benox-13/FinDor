@@ -4153,8 +4153,32 @@ function accountCardHTML(a){
       </div>
       <div style="font-size:15px;font-weight:500;margin-bottom:4px">${esc(a.name)}${a.locked?' 🔒':''}</div>
       <div style="font-family:'DM Mono',monospace;font-size:19px;color:${a.balanceHidden?'var(--t3)':M(a.balance)>=0?'var(--inc)':'var(--exp)'}">${accBalanceLabel(a)}</div>
+      ${a.type==='credit'&&!a.locked?`<button class="btn bp sm" style="margin-top:10px;width:100%" onclick="event.stopPropagation();payCreditCard('${a.id}')">💳 Pagar tarjeta</button>`:''}
       ${extra}${recentHtml}
     </div>`;
+}
+// Abre "Nueva transacción" precargada como TRANSFERENCIA hacia esta
+// tarjeta — así queda claro que pagar una TDC es un traspaso de dinero
+// (de la cuenta de donde sale, hacia la tarjeta), no un gasto suelto.
+//
+// BUG DE FLUJO ENCONTRADO (no de código, de UX): no existía ningún botón
+// dedicado para esto, así que era fácil registrar el pago como un Gasto
+// normal desde la cuenta de débito — eso sí baja el dinero disponible de
+// esa cuenta (correcto), pero como un Gasto solo toca UNA cuenta, la
+// tarjeta nunca se entera del pago: "lo que debes" en la tarjeta se queda
+// igual, y el pago no aparece en el historial de la tarjeta. La forma
+// correcta es una Transferencia (mueve dinero DE la cuenta de origen
+// HACIA la tarjeta) — este botón deja eso precargado para no repetir el
+// error.
+function payCreditCard(cardId){
+  const card=Store.getAccountById(cardId);
+  if(!card)return;
+  openTxM();
+  setTxT('transfer');
+  ensureAccountOption('tx-acc2',cardId);
+  $('tx-acc2').value=cardId;
+  $('tx-dsc').value='Pago de tarjeta';
+  onAccChange();
 }
 async function toggleAccLocked(id){
   const a=Store.getAccountById(id);if(!a)return;
