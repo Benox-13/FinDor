@@ -98,8 +98,18 @@ body{background:var(--bg);color:var(--txt);font-family:'Sora',sans-serif;font-si
    .dgrid>.card) para poder reordenarlos libremente sin que uno quede
    gigante y otro chiquito. El contenido que no cabe se desplaza con
    scroll interno en vez de estirar la tarjeta. */
-.dgrid{display:grid;grid-template-columns:1fr 1fr;gap:14px;align-items:stretch}
-.dgrid>.card{height:300px;overflow-y:auto;box-sizing:border-box;margin-top:0!important}
+/* Cuadrícula de widgets del Dashboard, en 6 columnas para poder mezclar
+   tamaños: las tarjetas con más contenido (Transacciones, Categorías,
+   Presupuesto, Próximos pagos) ocupan la MITAD del ancho (3/6); las que
+   solo muestran un par de números clave (Cuentas, Tarjetas, Préstamos,
+   Objetivos, Suscripciones) ocupan un TERCIO (2/6) y bastante menos alto
+   — no necesitan tanto espacio porque su detalle completo vive en su
+   propia sección, a la que ya mandan al tocarlas. */
+.dgrid{display:grid;grid-template-columns:repeat(6,1fr);gap:14px;align-items:stretch}
+.dgrid>.card{overflow-y:auto;box-sizing:border-box;margin-top:0!important}
+.dgrid>.card.dcard-lg{grid-column:span 3;height:300px}
+.dgrid>.card.dcard-sm{grid-column:span 2;height:110px;padding:14px 16px}
+.dgrid>.card.dcard-sm .slbl{margin-bottom:6px}
 .g3{display:grid;grid-template-columns:repeat(3,1fr);gap:16px}
 .g4{display:grid;grid-template-columns:repeat(4,1fr);gap:14px}
 
@@ -315,7 +325,12 @@ body.modal-open #bottom-nav{display:none !important}
   #mob-menu-btn{display:none}
   /* Una sola columna en móvil — con 2 columnas los widgets del dashboard
      quedarían demasiado angostos para leerse cómodo. */
-  .dgrid{grid-template-columns:1fr}
+  /* En móvil: 2 columnas base — las grandes ocupan la fila completa, las
+     compactas quedan 2 por fila (ya no caben 3 cómodas en una pantalla
+     angosta). */
+  .dgrid{grid-template-columns:repeat(2,1fr)}
+  .dgrid>.card.dcard-lg{grid-column:span 2;height:280px}
+  .dgrid>.card.dcard-sm{grid-column:span 1;height:100px;padding:14px 16px}
   /* El menú pasa de ocupar espacio fijo en el layout a flotar por encima,
      oculto fuera de la pantalla hasta que se abre. */
   #sb{position:fixed;top:0;left:0;transform:translateX(-100%);transition:transform .25s ease;z-index:180;box-shadow:0 0 40px rgba(0,0,0,.5)}
@@ -1136,7 +1151,7 @@ body.modal-open #bottom-nav{display:none !important}
     <div class="mh"><span class="mttl" id="debt-hist-ttl">Historial</span><button class="btn bg_ ico sm" onclick="cM('mo-debt-hist')">✕</button></div>
     <div class="mbody">
       <div id="debt-hist-summary" style="display:flex;gap:10px;margin-bottom:14px"></div>
-      <table class="tb"><thead><tr><th>Fecha</th><th>Descripción</th><th>Monto</th><th>Cuenta</th></tr></thead><tbody id="debt-hist-tb"></tbody></table>
+      <table class="tb"><thead><tr><th>Fecha</th><th>Descripción</th><th>Monto</th><th>Cuenta</th><th></th></tr></thead><tbody id="debt-hist-tb"></tbody></table>
     </div>
     <div class="mfoot"><button class="btn bg_ sm" onclick="cM('mo-debt-hist')">Cerrar</button></div>
   </div>
@@ -1148,7 +1163,7 @@ body.modal-open #bottom-nav{display:none !important}
     <div class="mh"><span class="mttl" id="goal-hist-ttl">Historial</span><button class="btn bg_ ico sm" onclick="cM('mo-goal-hist')">✕</button></div>
     <div class="mbody">
       <div id="goal-hist-summary" style="display:flex;gap:10px;margin-bottom:14px"></div>
-      <table class="tb"><thead><tr><th>Fecha</th><th>Monto</th><th>Cuenta</th></tr></thead><tbody id="goal-hist-tb"></tbody></table>
+      <table class="tb"><thead><tr><th>Fecha</th><th>Monto</th><th>Cuenta</th><th></th></tr></thead><tbody id="goal-hist-tb"></tbody></table>
     </div>
     <div class="mfoot"><button class="btn bg_ sm" onclick="cM('mo-goal-hist')">Cerrar</button></div>
   </div>
@@ -3419,65 +3434,77 @@ function renderDash(){
   // uno quede gigante y otro chiquito.
   const buildTxs=()=>{
     const r=[...S.transactions].sort((a,b)=>new Date(b.date)-new Date(a.date)).slice(0,6);
-    return[`<div class="card"><div class="slbl">Últimas transacciones</div>${r.length?r.map(t=>`<div style="display:flex;align-items:center;justify-content:space-between;padding:7px 0;border-bottom:1px solid var(--bdr)"><div style="display:flex;align-items:center;gap:9px"><div style="width:28px;height:28px;border-radius:50%;background:var(--bg4);display:flex;align-items:center;justify-content:center;font-size:12px">${getCatIcon(t.category)}</div><div><div style="font-size:13px">${esc(t.description)}</div><div style="font-size:11px;color:var(--t3)">${fmtDate(t.date)} · ${esc(t.category)||'—'}</div></div></div><div style="font-family:'DM Mono',monospace;font-size:13px;color:${t.type==='income'?'var(--inc)':t.type==='expense'?'var(--exp)':'var(--blu)'};">${t.type==='expense'?'-':''}${fmt(t.amount)}</div></div>`).join(''):emptyState('💸','Aún no hay movimientos','Tu actividad reciente va a aparecer aquí en cuanto registres tu primera transacción.','+ Nueva transacción',"openTxM()")}</div>`];
+    return[`<div class="card dcard-lg"><div class="slbl">Últimas transacciones</div>${r.length?r.map(t=>`<div style="display:flex;align-items:center;justify-content:space-between;padding:7px 0;border-bottom:1px solid var(--bdr)"><div style="display:flex;align-items:center;gap:9px"><div style="width:28px;height:28px;border-radius:50%;background:var(--bg4);display:flex;align-items:center;justify-content:center;font-size:12px">${getCatIcon(t.category)}</div><div><div style="font-size:13px">${esc(t.description)}</div><div style="font-size:11px;color:var(--t3)">${fmtDate(t.date)} · ${esc(t.category)||'—'}</div></div></div><div style="font-family:'DM Mono',monospace;font-size:13px;color:${t.type==='income'?'var(--inc)':t.type==='expense'?'var(--exp)':'var(--blu)'};">${t.type==='expense'?'-':''}${fmt(t.amount)}</div></div>`).join(''):emptyState('💸','Aún no hay movimientos','Tu actividad reciente va a aparecer aquí en cuanto registres tu primera transacción.','+ Nueva transacción',"openTxM()")}</div>`];
   };
   const buildCats=()=>{
     const ce={};mtxs.filter(t=>t.type==='expense').forEach(t=>{ce[t.category]=(ce[t.category]||0)+M(t.amount)});
     const srt=Object.entries(ce).sort((a,b)=>b[1]-a[1]).slice(0,5);const mx=srt[0]?.[1]||1;
-    return[`<div class="card"><div class="slbl">Gastos por categoría</div>${srt.length?srt.map(([c,v])=>`<div style="margin-bottom:9px"><div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:3px"><span>${getCatIcon(c)} ${c}</span><span style="color:var(--t2);font-family:'DM Mono',monospace">${fmt(v)}</span></div><div class="pw"><div class="pb" style="width:${(v/mx*100).toFixed(0)}%;background:var(--red)"></div></div></div>`).join(''):'<div style="color:var(--t3);font-size:13px;text-align:center;padding:8px">Sin gastos</div>'}</div>`];
+    return[`<div class="card dcard-lg"><div class="slbl">Gastos por categoría</div>${srt.length?srt.map(([c,v])=>`<div style="margin-bottom:9px"><div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:3px"><span>${getCatIcon(c)} ${c}</span><span style="color:var(--t2);font-family:'DM Mono',monospace">${fmt(v)}</span></div><div class="pw"><div class="pb" style="width:${(v/mx*100).toFixed(0)}%;background:var(--red)"></div></div></div>`).join(''):'<div style="color:var(--t3);font-size:13px;text-align:center;padding:8px">Sin gastos</div>'}</div>`];
   };
+  // Cuentas/Tarjetas/Suscripciones/Préstamos/Objetivos: antes mostraban
+  // una lista completa (una fila por cuenta/suscripción/etc.) a la misma
+  // altura que las tarjetas grandes — mucho espacio para poca información
+  // realmente nueva (el detalle ya vive en su propia sección). Ahora son
+  // tarjetas compactas ("dcard-sm", 1/3 del ancho — ver CSS) con solo el
+  // o los números clave de un vistazo; tocarlas manda a la sección
+  // completa (ya tenían el onclick, eso no cambió).
   const buildAccs=()=>{
     const out=[];
     const cashDebit=S.accounts.filter(a=>!a.archived&&(a.type==='cash'||a.type==='debit'));
     const creditAccs=S.accounts.filter(a=>!a.archived&&a.type==='credit');
     const cashDebitTotal=cashDebit.reduce((s,a)=>s+(a.balanceHidden?0:M(a.balance)),0);
     const anyHidden=cashDebit.some(a=>a.balanceHidden);
-    out.push(`<div class="card card-click" onclick="go('accounts')"><div class="slbl">Cuentas</div>${cashDebit.length?cashDebit.map(a=>`<div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid var(--bdr)"><div style="display:flex;align-items:center;gap:7px"><div style="width:8px;height:8px;border-radius:50%;background:${a.color||'var(--ac)'}"></div><span style="font-size:13px">${esc(a.name)}${a.locked?' 🔒':''}</span></div><span style="font-family:'DM Mono',monospace;font-size:13px;color:${a.balanceHidden?'var(--t3)':M(a.balance)>=0?'var(--inc)':'var(--exp)'}">${accBalanceLabel(a)}</span></div>`).join(''):'<div style="color:var(--t3);font-size:13px">Sin cuentas de efectivo/débito</div>'}${cashDebit.length?`<div style="display:flex;justify-content:space-between;padding-top:8px;margin-top:2px;font-weight:600"><span style="font-size:13px">Total</span><span style="font-family:'DM Mono',monospace;font-size:13px;color:${cashDebitTotal>=0?'var(--inc)':'var(--exp)'}">${anyHidden?'••••••':fmt(cashDebitTotal)}</span></div>`:''}</div>`);
-    // Tarjetas de crédito en su propia tarjeta — mezclarlas con
-    // efectivo/débito en el mismo total no tiene sentido (es deuda
-    // disponible, no dinero tuyo).
+    out.push(`<div class="card dcard-sm card-click" onclick="go('accounts')">
+      <div class="slbl">🏦 Cuentas</div>
+      <div style="font-family:'DM Mono',monospace;font-size:19px;font-weight:700;color:${anyHidden?'var(--t3)':cashDebitTotal>=0?'var(--inc)':'var(--exp)'}">${anyHidden?'••••••':fmt(cashDebitTotal)}</div>
+      <div style="font-size:11px;color:var(--t3);margin-top:2px">${cashDebit.length} cuenta${cashDebit.length===1?'':'s'}</div>
+    </div>`);
     if(creditAccs.length){
-      out.push(`<div class="card card-click" onclick="go('accounts')"><div class="slbl">Tarjetas de crédito</div>${creditAccs.map(a=>{
-        const available=M(a.balance||0);
-        const periodSpend=tdcPeriodSpend(a);
-        return`<div style="padding:7px 0;border-bottom:1px solid var(--bdr)">
-          <div style="display:flex;justify-content:space-between;align-items:center">
-            <div style="display:flex;align-items:center;gap:7px"><div style="width:8px;height:8px;border-radius:50%;background:${a.color||'var(--pur)'}"></div><span style="font-size:13px">${esc(a.name)}${a.locked?' 🔒':''}</span></div>
-            <span style="font-size:11px;color:var(--t3)">${a.limit?'Límite: '+fmt(a.limit):''}</span>
-          </div>
-          <div style="display:flex;justify-content:space-between;margin-top:4px">
-            <span style="font-size:11px;color:var(--t3)">Gasto del periodo: <span style="font-family:'DM Mono',monospace;color:var(--red)">${a.balanceHidden?'••••':periodSpend!==null?fmt(periodSpend):'—'}</span></span>
-            <span style="font-size:11px;color:var(--t3)">Disponible: <span style="font-family:'DM Mono',monospace;color:var(--t2)">${a.balanceHidden?'••••':fmt(available)}</span></span>
-          </div>
-        </div>`;
-      }).join('')}</div>`);
+      const totalAvail=creditAccs.reduce((s,a)=>s+(a.balanceHidden?0:M(a.balance||0)),0);
+      const anyHiddenC=creditAccs.some(a=>a.balanceHidden);
+      out.push(`<div class="card dcard-sm card-click" onclick="go('accounts')">
+        <div class="slbl">💳 Tarjetas</div>
+        <div style="font-family:'DM Mono',monospace;font-size:19px;font-weight:700;color:var(--t2)">${anyHiddenC?'••••••':fmt(totalAvail)}</div>
+        <div style="font-size:11px;color:var(--t3);margin-top:2px">${creditAccs.length} tarjeta${creditAccs.length===1?'':'s'} · disponible</div>
+      </div>`);
     }
     return out;
   };
   const buildSubs=()=>{
     const activeSubs=S.subscriptions.filter(s=>(s.status||'active')==='active');
     const monthlyTotal=activeSubs.reduce((a,s)=>a+(s.freq==='monthly'?s.cost:s.freq==='annual'?s.cost/12:s.cost*4.33),0);
-    const nextFew=[...activeSubs].sort((a,b)=>new Date(a.nextDate)-new Date(b.nextDate)).slice(0,3);
-    return[`<div class="card card-click" onclick="go('subscriptions')"><div class="slbl">Suscripciones</div>${nextFew.length?nextFew.map(s=>`<div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid var(--bdr)"><span style="font-size:13px">${esc(s.icon)} ${esc(s.name)}</span><span style="font-family:'DM Mono',monospace;font-size:13px;color:var(--t2)">${fmt(s.cost)}</span></div>`).join(''):'<div style="color:var(--t3);font-size:13px">Sin suscripciones activas</div>'}${activeSubs.length?`<div style="display:flex;justify-content:space-between;padding-top:8px;margin-top:2px;font-weight:600"><span style="font-size:13px">Total/mes</span><span style="font-family:'DM Mono',monospace;font-size:13px">${fmt(monthlyTotal)}</span></div>`:''}</div>`];
+    return[`<div class="card dcard-sm card-click" onclick="go('subscriptions')">
+      <div class="slbl">↻ Suscripciones</div>
+      <div style="font-family:'DM Mono',monospace;font-size:19px;font-weight:700">${fmt(monthlyTotal)}</div>
+      <div style="font-size:11px;color:var(--t3);margin-top:2px">${activeSubs.length} activa${activeSubs.length===1?'':'s'} · por mes</div>
+    </div>`];
   };
   const buildDebts=()=>{
     const owedTotal=S.debts_owed.reduce((a,d)=>a+Math.max(0,d.amount-(d.paid||0)),0);
     const ioweTotal=S.debts_iowe.reduce((a,d)=>a+Math.max(0,d.amount-(d.paid||0)),0);
-    return[`<div class="card card-click" onclick="go('loans')"><div class="slbl">Préstamos</div><div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid var(--bdr)"><span style="font-size:13px">Me deben</span><span style="font-family:'DM Mono',monospace;font-size:13px;color:var(--inc)">${fmt(owedTotal)}</span></div><div style="display:flex;justify-content:space-between;padding:6px 0"><span style="font-size:13px">Debo</span><span style="font-family:'DM Mono',monospace;font-size:13px;color:var(--exp)">${fmt(ioweTotal)}</span></div></div>`];
+    return[`<div class="card dcard-sm card-click" onclick="go('loans')">
+      <div class="slbl">⇅ Préstamos</div>
+      <div style="display:flex;gap:16px;margin-top:1px">
+        <div><div style="font-family:'DM Mono',monospace;font-size:15px;font-weight:700;color:var(--inc)">${fmt(owedTotal)}</div><div style="font-size:10px;color:var(--t3)">Me deben</div></div>
+        <div><div style="font-family:'DM Mono',monospace;font-size:15px;font-weight:700;color:var(--exp)">${fmt(ioweTotal)}</div><div style="font-size:10px;color:var(--t3)">Debo</div></div>
+      </div>
+    </div>`];
   };
-  // Objetivos y Presupuesto antes desaparecían del todo si no había datos
-  // (en vez de mostrar un estado vacío) — eso hacía que la posición de
-  // los demás widgets "brincara" de forma impredecible al reordenar.
-  // Ahora siempre ocupan su lugar en la cuadrícula, igual que el resto.
   const buildGoals=()=>{
-    const ag=S.goals.filter(g=>g.saved<g.target).slice(0,4);
-    if(!ag.length)return[`<div class="card card-click" onclick="go('goals')"><div class="slbl">Objetivos</div><div style="color:var(--t3);font-size:13px;text-align:center;padding:8px">Sin objetivos activos</div></div>`];
-    return[`<div class="card card-click" onclick="go('goals')"><div class="slbl">Objetivos</div><div class="g2">${ag.map(g=>{const p=Math.min(100,g.saved/g.target*100).toFixed(0);return`<div><div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:3px"><span>${g.icon} ${g.name}</span><span style="font-family:'DM Mono',monospace;color:var(--t2)">${p}%</span></div><div class="pw"><div class="pb" style="width:${p}%;background:var(--ac)"></div></div></div>`}).join('')}</div></div>`];
+    const ag=S.goals.filter(g=>g.saved<g.target);
+    const totalSaved=ag.reduce((s,g)=>s+M(g.saved||0),0);
+    const totalTarget=ag.reduce((s,g)=>s+M(g.target||0),0);
+    const pct=totalTarget>0?Math.round(totalSaved/totalTarget*100):0;
+    return[`<div class="card dcard-sm card-click" onclick="go('goals')">
+      <div class="slbl">🎯 Objetivos</div>
+      <div style="font-family:'DM Mono',monospace;font-size:19px;font-weight:700">${ag.length?pct+'%':'—'}</div>
+      <div style="font-size:11px;color:var(--t3);margin-top:2px">${ag.length} activo${ag.length===1?'':'s'}${ag.length?' · '+fmt(totalSaved)+' ahorrado':''}</div>
+    </div>`];
   };
   const buildBudget=()=>{
-    if(!S.budgets.length)return[`<div class="card card-click" onclick="go('budget')"><div class="slbl">Presupuesto del mes</div><div style="color:var(--t3);font-size:13px;text-align:center;padding:8px">Sin presupuestos configurados</div></div>`];
+    if(!S.budgets.length)return[`<div class="card dcard-lg card-click" onclick="go('budget')"><div class="slbl">Presupuesto del mes</div><div style="color:var(--t3);font-size:13px;text-align:center;padding:8px">Sin presupuestos configurados</div></div>`];
     const items=S.budgets.map(b=>{const sp=mtxs.filter(t=>t.type==='expense'&&(t.category===b.category||getCatParent(t.category)===b.category)).reduce((a,t)=>a+M(t.amount),0);const p=Math.min(100,sp/b.limit*100).toFixed(0);return`<div><div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:3px"><span>${getCatIcon(b.category)} ${esc(b.category)}</span><span style="font-family:'DM Mono',monospace;color:${p>90?'var(--red)':p>70?'var(--yel)':'var(--t2)'}">${fmt(sp)}/${fmt(b.limit)}</span></div><div class="pw"><div class="pb" style="width:${p}%;background:${p>90?'var(--redg)':p>70?'var(--yelg)':'var(--acg)'}"></div></div></div>`});
-    return[`<div class="card card-click" onclick="go('budget')"><div class="slbl">Presupuesto del mes</div><div class="g2">${items.join('')}</div></div>`];
+    return[`<div class="card dcard-lg card-click" onclick="go('budget')"><div class="slbl">Presupuesto del mes</div><div class="g2">${items.join('')}</div></div>`];
   };
   // Próximos pagos: suscripciones y préstamos (que yo debo) con fecha
   // dentro de los próximos 30 días.
@@ -3497,7 +3524,7 @@ function renderDash(){
     });
     up.sort((a,b)=>a.days-b.days);
     const shown=up.slice(0,5);
-    return[`<div class="card"><div class="slbl">Próximos pagos</div>${shown.length?shown.map(i=>`<div style="display:flex;justify-content:space-between;align-items:center;padding:8px 0;border-bottom:1px solid var(--bdr)"><div style="display:flex;align-items:center;gap:9px"><div style="width:28px;height:28px;border-radius:50%;background:var(--bg4);display:flex;align-items:center;justify-content:center;font-size:12px">${i.icon}</div><div><div style="font-size:13px">${esc(i.label)}</div><div style="font-size:11px;color:var(--t3)">${esc(i.kind)} · ${fmtDate(i.date)}${i.days===0?' · Hoy':i.days===1?' · Mañana':' · en '+i.days+' días'}</div></div></div><div style="font-family:'DM Mono',monospace;font-size:13px;color:var(--exp)">${fmt(i.amount)}</div></div>`).join(''):emptyState('📅','Sin pagos próximos','No tienes suscripciones ni préstamos con vencimiento en los próximos 30 días.')}</div>`];
+    return[`<div class="card dcard-lg"><div class="slbl">Próximos pagos</div>${shown.length?shown.map(i=>`<div style="display:flex;justify-content:space-between;align-items:center;padding:8px 0;border-bottom:1px solid var(--bdr)"><div style="display:flex;align-items:center;gap:9px"><div style="width:28px;height:28px;border-radius:50%;background:var(--bg4);display:flex;align-items:center;justify-content:center;font-size:12px">${i.icon}</div><div><div style="font-size:13px">${esc(i.label)}</div><div style="font-size:11px;color:var(--t3)">${esc(i.kind)} · ${fmtDate(i.date)}${i.days===0?' · Hoy':i.days===1?' · Mañana':' · en '+i.days+' días'}</div></div></div><div style="font-family:'DM Mono',monospace;font-size:13px;color:var(--exp)">${fmt(i.amount)}</div></div>`).join(''):emptyState('📅','Sin pagos próximos','No tienes suscripciones ni préstamos con vencimiento en los próximos 30 días.')}</div>`];
   };
   const widgetBuilders={txs:buildTxs,cats:buildCats,accs:buildAccs,subs:buildSubs,debts:buildDebts,goals:buildGoals,budget:buildBudget,upcoming:buildUpcoming};
   const allParts=[];
@@ -5150,11 +5177,31 @@ function openDebtHistory(k,id){
     <div class="m_ m_-inc" style="flex:1"><div class="ml">Total</div><div class="mv" style="font-size:14px">${fmt(d.amount)}</div></div>
     <div class="m_ m_-exp" style="flex:1"><div class="ml">Restante</div><div class="mv" style="font-size:14px">${fmt(rem)}</div></div>
     <div class="m_ m_-sav" style="flex:1"><div class="ml">Movimientos</div><div class="mv" style="font-size:14px">${hist.length}</div></div>`;
+  // BUG REAL ENCONTRADO: este historial era de solo lectura — a
+  // diferencia de vehículos (donde un registro se puede editar/borrar y
+  // eso ya se refleja en Transacciones), aquí no había forma de editar o
+  // borrar un pago desde la propia deuda. Como cada fila YA ES la
+  // transacción real (no una copia), editar/borrar aquí simplemente abre
+  // el mismo modal de "editar transacción" / llama a la misma función de
+  // borrado que usa Transacciones — así queda con el mismo nivel de
+  // sincronización que vehículos.
   $('debt-hist-tb').innerHTML=hist.length?hist.map(t=>{
     const a=Store.getAccountById(t.accountId);
-    return`<tr><td style="color:var(--t2)">${fmtDate(t.date)}</td><td>${esc(t.description)}</td><td style="font-family:'DM Mono',monospace;color:${t.type==='expense'?'var(--exp)':'var(--inc)'}">${t.type==='expense'?'-':'+'}${fmt(t.amount)}</td><td style="color:var(--t2)">${a?esc(a.name):'Sin cuenta'}</td></tr>`;
-  }).join(''):'<tr><td colspan="4" style="text-align:center;color:var(--t3);padding:18px">Sin movimientos todavía</td></tr>';
+    return`<tr><td style="color:var(--t2)">${fmtDate(t.date)}</td><td>${esc(t.description)}</td><td style="font-family:'DM Mono',monospace;color:${t.type==='expense'?'var(--exp)':'var(--inc)'}">${t.type==='expense'?'-':'+'}${fmt(t.amount)}</td><td style="color:var(--t2)">${a?esc(a.name):'Sin cuenta'}</td><td style="white-space:nowrap"><button class="btn bg_ ico sm" title="Editar" onclick="editDebtHistTx('${t.id}')">✎</button> <button class="btn bg_ ico sm" title="Eliminar" onclick="delDebtHistTx('${k}','${id}','${t.id}')">✕</button></td></tr>`;
+  }).join(''):'<tr><td colspan="5" style="text-align:center;color:var(--t3);padding:18px">Sin movimientos todavía</td></tr>';
   oM('mo-debt-hist');
+}
+// Editar un movimiento desde el historial de la deuda: se cierra este
+// modal y se abre el editor normal de transacciones — es la MISMA
+// transacción (no una copia), así que guardar ahí ya recalcula "pagado"
+// solo (ver Store.updateTransaction → recalcDebtPaid).
+function editDebtHistTx(txId){ cM('mo-debt-hist'); openTxM(txId); }
+async function delDebtHistTx(k,id,txId){
+  const ok=await confirm_('¿Eliminar este movimiento?','Esto también actualizará el total pagado de la deuda.','Eliminar');
+  if(!ok)return;
+  Store.deleteTransaction(txId);
+  openDebtHistory(k,id); // re-dibuja el mismo modal con el total ya recalculado
+  renderDebts(k);toast('Eliminado');
 }
 function addDP(k,id){const d=Store.getDebtById(k,id);if(!d)return;$('dpay-k').value=k;$('dpay-id').value=id;$('dpay-info').textContent=d.person+' — Restante: '+fmt(Math.max(0,d.amount-(d.paid||0)));$('dpay-amt').value='';oM('mo-dpay')}
 async function delD(k,id){const ok=await confirm_('¿Eliminar deuda?','');if(!ok)return;Store.deleteDebt(k,id);renderDebts(k);toast('Eliminado')}
@@ -5234,11 +5281,22 @@ function openGoalHistory(id){
     <div class="m_ m_-inc" style="flex:1"><div class="ml">Ahorrado</div><div class="mv" style="font-size:14px">${fmt(g.saved||0)}</div></div>
     <div class="m_ m_-bal" style="flex:1"><div class="ml">Objetivo</div><div class="mv" style="font-size:14px">${fmt(g.target)}</div></div>
     <div class="m_ m_-sav" style="flex:1"><div class="ml">Abonos</div><div class="mv" style="font-size:14px">${hist.length}</div></div>`;
+  // Mismo arreglo que en Deudas (ver comentario en openDebtHistory): antes
+  // era de solo lectura, sin ninguna forma de editar/borrar un abono
+  // desde la propia meta.
   $('goal-hist-tb').innerHTML=hist.length?hist.map(t=>{
     const a=Store.getAccountById(t.accountId);
-    return`<tr><td style="color:var(--t2)">${fmtDate(t.date)}</td><td style="font-family:'DM Mono',monospace;color:var(--inc)">${fmt(t.amount)}</td><td style="color:var(--t2)">${a?esc(a.name):'Sin cuenta'}</td></tr>`;
-  }).join(''):'<tr><td colspan="3" style="text-align:center;color:var(--t3);padding:18px">Sin abonos registrados todavía (los abonos sin cuenta ligada también cuentan aquí)</td></tr>';
+    return`<tr><td style="color:var(--t2)">${fmtDate(t.date)}</td><td style="font-family:'DM Mono',monospace;color:var(--inc)">${fmt(t.amount)}</td><td style="color:var(--t2)">${a?esc(a.name):'Sin cuenta'}</td><td style="white-space:nowrap"><button class="btn bg_ ico sm" title="Editar" onclick="editGoalHistTx('${t.id}')">✎</button> <button class="btn bg_ ico sm" title="Eliminar" onclick="delGoalHistTx('${id}','${t.id}')">✕</button></td></tr>`;
+  }).join(''):'<tr><td colspan="4" style="text-align:center;color:var(--t3);padding:18px">Sin abonos registrados todavía (los abonos sin cuenta ligada también cuentan aquí)</td></tr>';
   oM('mo-goal-hist');
+}
+function editGoalHistTx(txId){ cM('mo-goal-hist'); openTxM(txId); }
+async function delGoalHistTx(goalId,txId){
+  const ok=await confirm_('¿Eliminar este abono?','Esto también actualizará el total ahorrado de la meta.','Eliminar');
+  if(!ok)return;
+  Store.deleteTransaction(txId);
+  openGoalHistory(goalId);
+  renderGoals();toast('Eliminado');
 }
 async function finalizeGoal(id){
   const ok=await confirm_('¿Finalizar objetivo?','Se moverá a tu lista de objetivos finalizados. Puedes reabrirlo cuando quieras desde el menú.','Finalizar');
