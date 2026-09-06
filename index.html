@@ -1737,6 +1737,7 @@ async function pullFromSupabase(){
       capital:d.extra?.capital_cents!=null?centsToAmt(d.extra.capital_cents):undefined,
       interest:d.extra?.interest_cents!=null?centsToAmt(d.extra.interest_cents):undefined,
       installments:d.extra?.installments||undefined,
+      paidBaseline:d.extra?.paid_baseline_cents!=null?centsToAmt(d.extra.paid_baseline_cents):0,
     }));
     const newDebtsIowe=results.debts.filter(d=>d.direction==='i_owe').map(d=>({
       id:d.id,person:d.person,amount:centsToAmt(d.amount_cents),paid:centsToAmt(d.paid_cents),
@@ -1744,11 +1745,13 @@ async function pullFromSupabase(){
       capital:d.extra?.capital_cents!=null?centsToAmt(d.extra.capital_cents):undefined,
       interest:d.extra?.interest_cents!=null?centsToAmt(d.extra.interest_cents):undefined,
       installments:d.extra?.installments||undefined,
+      paidBaseline:d.extra?.paid_baseline_cents!=null?centsToAmt(d.extra.paid_baseline_cents):0,
     }));
 
     // --- goals ---
     const newGoals=results.goals.map(g=>({
       id:g.id,name:g.name,target:centsToAmt(g.target_cents),saved:centsToAmt(g.saved_cents),
+      savedBaseline:g.saved_baseline_cents!=null?centsToAmt(g.saved_baseline_cents):0,
       due:g.due_date||'',icon:g.icon||'🎯',finalized:!!g.finalized,
     }));
 
@@ -1895,14 +1898,16 @@ function transactionToCloud(t,catId,subcatId){
     transfer_direction:t.transferDirection||null,linked_tx_id:t.linkedTxId||null};
 }
 function debtToCloud(d,direction){
-  // extra: columna jsonb nueva para el desglose opcional de capital+intereses
-  // y el plan de mensualidades fijas — null si no se usó ninguno de los dos,
-  // para no llenar de basura las deudas simples de siempre.
-  const hasExtra=d.capital!=null||d.interest!=null||d.installments;
+  // extra: columna jsonb ya existente para el desglose opcional de capital+
+  // intereses y el plan de mensualidades fijas, y ahora también el ajuste
+  // manual de "pagado" (paidBaseline) — null si nada de eso se usó, para
+  // no llenar de basura las deudas simples de siempre.
+  const hasExtra=d.capital!=null||d.interest!=null||d.installments||!!d.paidBaseline;
   const extra=hasExtra?{
     capital_cents:d.capital!=null?amtToCents(d.capital):null,
     interest_cents:d.interest!=null?amtToCents(d.interest):null,
     installments:d.installments||null,
+    paid_baseline_cents:d.paidBaseline?amtToCents(d.paidBaseline):null,
   }:null;
   return{id:d.id,user_id:currentUserId,direction,person:d.person,amount_cents:amtToCents(d.amount),
     paid_cents:amtToCents(d.paid||0),description:d.desc||null,start_date:d.start||null,
@@ -1910,7 +1915,7 @@ function debtToCloud(d,direction){
 }
 function goalToCloud(g){
   return{id:g.id,user_id:currentUserId,name:g.name,icon:g.icon||null,target_cents:amtToCents(g.target),
-    saved_cents:amtToCents(g.saved||0),due_date:g.due||null,finalized:!!g.finalized};
+    saved_cents:amtToCents(g.saved||0),saved_baseline_cents:amtToCents(g.savedBaseline||0),due_date:g.due||null,finalized:!!g.finalized};
 }
 function subscriptionToCloud(s,catId){
   return{id:s.id,user_id:currentUserId,name:s.name,icon:s.icon||null,cost_cents:amtToCents(s.cost),
@@ -2849,21 +2854,27 @@ const Store = {
     // contrario a un pago real (income si debo, expense si me deben) —
     // por eso se filtra por tipo, para no contarla como "ya pagado".
     const repayType=k==='iowe'?'expense':'income';
-    const paid=this.getDebtHistory(debtId).filter(t=>t.type===repayType).reduce((s,t)=>s+M(t.amount),0);
+    const txSum=this.getDebtHistory(debtId).filter(t=>t.type===repayType).reduce((s,t)=>s+M(t.amount),0);
+    // paidBaseline: lo que la persona escribió a mano en "Pagado" al
+    // editar la deuda, MENOS lo que ya sumaban las transacciones reales en
+    // ese momento — así el ajuste manual no se pierde: cada vez que se
+    // agrega/edita/borra un pago real, se le suma ese mismo ajuste fijo.
+    const paid=Math.max(0,M(d.paidBaseline||0)+txSum);
     if(M(d.paid||0)===paid)return;
     this.updateDebt(k,debtId,{paid});
   },
   recalcGoalSaved(goalId){
     const g=this.getGoalById(goalId);if(!g)return;
-    const saved=this.getGoalHistory(goalId).reduce((s,t)=>{
+    const txSum=this.getGoalHistory(goalId).reduce((s,t)=>{
       if(t.type==='expense')return s+M(t.amount);
       if(t.type==='transfer'&&t.accountId2)return s+M(t.amount); // formato viejo de abono con cuenta destino
       if(t.type==='transfer'&&t.transferDirection==='in')return s+M(t.amount);
       return s;
     },0);
-    const clamped=Math.max(0,Math.min(g.target,saved));
-    if(M(g.saved||0)===clamped)return;
-    this.updateGoal(goalId,{saved:clamped});
+    // Mismo ajuste manual que en deudas — ver comentario en recalcDebtPaid.
+    const saved=Math.max(0,Math.min(g.target,M(g.savedBaseline||0)+txSum));
+    if(M(g.saved||0)===saved)return;
+    this.updateGoal(goalId,{saved});
   },
   addVehicle(data){
     const v={id:uid(),records:[],...data};
@@ -4997,7 +5008,19 @@ async function saveDebt(){
   // Si ya existía la deuda y ya tenía mensualidades pagadas, preservamos ese
   // conteo — editar la deuda no debe reiniciar el progreso de mensualidades.
   const prevInstallments=eid?Store.getDebtById(k,eid)?.installments:null;
-  const obj={person,amount:amt,paid:M($('d-paid').value)||0,desc:$('d-desc').value,start:$('d-start').value,due:$('d-due').value,accountId:accId,
+  // BUG REAL ENCONTRADO Y CORREGIDO: "Pagado" era un campo suelto — se
+  // guardaba tal cual, y cualquier pago real que se agregara/editara/
+  // borrara después lo recalculaba desde cero SIN este número, borrando
+  // el ajuste manual. Ahora se guarda como "paidBaseline": la diferencia
+  // entre lo que escribiste aquí y lo que ya suman los pagos reales en
+  // este momento. Así, el total que ves ahora se preserva exactamente, y
+  // cada pago real que agregues/edites/borres después se sigue sumando
+  // encima de ese mismo ajuste — nunca lo pisa.
+  const manualPaid=M($('d-paid').value)||0;
+  const repayType=k==='iowe'?'expense':'income';
+  const txSum=eid?Store.getDebtHistory(eid).filter(t=>t.type===repayType).reduce((s,t)=>s+M(t.amount),0):0;
+  const paidBaseline=manualPaid-txSum;
+  const obj={person,amount:amt,paid:manualPaid,paidBaseline,desc:$('d-desc').value,start:$('d-start').value,due:$('d-due').value,accountId:accId,
     capital:hasInterest?(M($('d-capital').value)||0):undefined,
     interest:hasInterest?(M($('d-interest').value)||0):undefined,
     installments:hasInstallments?{months:parseInt($('d-inst-months').value)||0,paid:prevInstallments?.paid||0}:undefined,
@@ -5109,7 +5132,18 @@ async function saveGoal(){
   const n=$('g-name').value.trim();const t=M($('g-tgt').value)||0;
   if(!n||!isValidAmount(t)){toast('Nombre y meta requeridos (mayor a 0)',false);return}
   const eid=$('g-eid').value;
-  const obj={name:n,target:t,saved:M($('g-sav').value)||0,due:$('g-due').value,icon:$('g-icon').value||'🎯'};
+  // Mismo arreglo que en Deudas (ver comentario en saveDebt): "Ahorrado" se
+  // guarda como ajuste (savedBaseline) en vez de un número suelto, para
+  // que un abono real que agregues/edites/borres después no lo borre.
+  const manualSaved=M($('g-sav').value)||0;
+  const txSum=eid?Store.getGoalHistory(eid).reduce((s,t2)=>{
+    if(t2.type==='expense')return s+M(t2.amount);
+    if(t2.type==='transfer'&&t2.accountId2)return s+M(t2.amount);
+    if(t2.type==='transfer'&&t2.transferDirection==='in')return s+M(t2.amount);
+    return s;
+  },0):0;
+  const savedBaseline=manualSaved-txSum;
+  const obj={name:n,target:t,saved:manualSaved,savedBaseline,due:$('g-due').value,icon:$('g-icon').value||'🎯'};
   if(eid){
     const ok=await confirm_('¿Guardar cambios?','Se actualizará este objetivo.','Guardar');
     if(!ok)return;
@@ -5603,15 +5637,23 @@ function openVRec(vid,editId=null){
     const r=v.records?.find(x=>x.id===editId);if(!r)return;
     $('vr-dt').value=r.dt;$('vr-type').value=r.type;$('vr-qty').value=r.qty||'';
     $('vr-cost').value=r.cost;$('vr-km').value=r.km||'';$('vr-notes').value=r.notes||'';
+    // BUG REAL ENCONTRADO: esto SIEMPRE arrancaba destildado, sin
+    // importar si el registro ya tenía una transacción ligada (r.txId).
+    // Como saveVRec() interpreta "destildado + ya había transacción" como
+    // "quita la transacción", el simple hecho de abrir un registro para
+    // editarlo y guardar (sin tocar nada del checkbox) BORRABA la
+    // transacción ligada cada vez — por eso nunca se veía sincronizado.
+    // Ahora se precarga tildado (y con la cuenta/categoría de esa misma
+    // transacción) cuando sí existe un vínculo.
+    const linkedTx=r.txId?Store.getTransactionById(r.txId):null;
+    $('vr-autotx').checked=!!linkedTx;
+    if(linkedTx){$('vr-acc').value=linkedTx.accountId;$('vr-cat').value=linkedTx.category||'';}
   } else {
     $('vr-dt').value=td_();$('vr-qty').value='';$('vr-cost').value='';$('vr-km').value='';$('vr-notes').value='';
     $('vr-type').value='charge';
+    $('vr-autotx').checked=false;
   }
-  // El toggle de "generar transacción" siempre arranca apagado — un registro
-  // de vehículo editado no recuerda si generó una transacción antes (no se
-  // guarda ese vínculo), así que editar un registro nunca vuelve a tocar
-  // ninguna transacción existente, solo el registro del vehículo en sí.
-  $('vr-autotx').checked=false;togVrAutotx();
+  togVrAutotx();
   onVrTypeChange();
   oM('mo-vrec');
 }
