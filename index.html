@@ -1013,8 +1013,18 @@ body.modal-open #bottom-nav{display:none !important}
         <input class="fc" type="date" id="bpay-date">
       </div>
       <div class="fg">
+        <label class="fl">Método de pago</label>
+        <div style="display:flex;gap:8px;margin-bottom:2px">
+          <button class="btn bg_ sm" id="bpay-method-acc" style="flex:1;padding:9px;border:2px solid var(--ac)" onclick="setBPayMethod('account')">🏦 Desde una cuenta</button>
+          <button class="btn bg_ sm" id="bpay-method-pts" style="flex:1;padding:9px;border:2px solid var(--bdr2)" onclick="setBPayMethod('points')">⭐ Con puntos</button>
+        </div>
+      </div>
+      <div class="fg" id="bpay-src-g">
         <label class="fl">Cuenta origen</label>
         <select class="fc" id="bpay-src"></select>
+      </div>
+      <div class="fg" id="bpay-pts-note" style="display:none">
+        <div style="font-size:12px;color:var(--t3);background:var(--bg4);border-radius:var(--r2);padding:10px 12px">⭐ No sale dinero de ninguna cuenta tuya — se registra como ingreso en la tarjeta (los puntos son valor nuevo, no dinero que ya tuvieras en otro lado) y baja tu factura pendiente igual que un pago normal.</div>
       </div>
     </div>
     <div class="mfoot">
@@ -3274,9 +3284,14 @@ function openBillingPay(accId,prefillAmt=null){
     if(lastCut>now)lastCut=new Date(now.getFullYear(),now.getMonth()-1,a.cutDay);
     const prevCut=new Date(lastCut.getFullYear(),lastCut.getMonth()-1,a.cutDay);
     invoiceAmt=S.transactions.filter(t=>t.type==='expense'&&t.accountId===accId&&t.date>toLocal(prevCut)&&t.date<=toLocal(lastCut)).reduce((s,t)=>s+M(t.amount),0);
+    // BUG REAL ENCONTRADO: a esta función en particular se me había
+    // pasado restarle los pagos ya hechos — mostraba/precargaba siempre
+    // el monto completo del periodo, sin importar cuánto ya se hubiera
+    // pagado. Mismo arreglo que en Facturación y en la tarjeta de Cuentas.
+    invoiceAmt=Math.max(0,invoiceAmt-tdcPaidSince(accId,toLocal(lastCut)));
   }
   $('bpay-invoice-amt').textContent=fmt(invoiceAmt);
-  $('bpay-period-lbl').textContent=a.cutDay?`Ciclo cerrado antes del corte (día ${a.cutDay})`:'Configure día de corte para cálculo automático';
+  $('bpay-period-lbl').textContent=a.cutDay?`Pendiente del ciclo cerrado en el corte (día ${a.cutDay})`:'Configure día de corte para cálculo automático';
   // Fill source accounts (non-credit)
   const srcSel=$('bpay-src');
   srcSel.innerHTML=selectableAccounts(accId).map(x=>`<option value="${x.id}">${esc(x.name)} (${accBalanceLabel(x)})</option>`).join('');
@@ -3289,7 +3304,22 @@ function openBillingPay(accId,prefillAmt=null){
   $('bpay-btn-total').style.border='2px solid var(--ac)';
   $('bpay-btn-total').dataset.inv=invoiceAmt;
   $('bpay-btn-min').dataset.inv=invoiceAmt;
+  // Reinicia siempre a "desde una cuenta" al abrir — evita que quede
+  // pegado "con puntos" de la vez anterior por accidente.
+  setBPayMethod('account');
   oM('mo-billing-pay');
+}
+
+// "Desde una cuenta" mueve dinero real (transferencia); "Con puntos" no
+// descuenta ninguna cuenta — se registra como ingreso directo en la
+// tarjeta (ver comentario en execBillingPay).
+let _bpayMethod='account';
+function setBPayMethod(m){
+  _bpayMethod=m;
+  $('bpay-method-acc').style.border=m==='account'?'2px solid var(--ac)':'2px solid var(--bdr2)';
+  $('bpay-method-pts').style.border=m==='points'?'2px solid var(--ac)':'2px solid var(--bdr2)';
+  $('bpay-src-g').style.display=m==='account'?'block':'none';
+  $('bpay-pts-note').style.display=m==='points'?'block':'none';
 }
 
 function setBPayType(type){
@@ -3304,13 +3334,27 @@ function setBPayType(type){
 
 function execBillingPay(){
   const accId=$('bpay-accid').value;
-  const srcId=$('bpay-src').value;
   const amt=M($('bpay-amt').value)||0;
   const date=$('bpay-date').value;
-  if(!isValidAmount(amt)||!srcId||!date){toast('Completa todos los campos con un monto válido',false);return}
   const tdc=S.accounts.find(a=>a.id===accId);
+  if(!tdc){toast('Cuenta no encontrada',false);return}
+  if(!isValidAmount(amt)||!date){toast('Completa todos los campos con un monto válido',false);return}
+  // Pago con puntos/recompensas: no sale dinero de ninguna cuenta tuya —
+  // los puntos son valor NUEVO que te da el programa de recompensas, no
+  // dinero que ya tuvieras en otro lado (por eso aquí SÍ es correcto
+  // registrarlo como Ingreso, a diferencia de pagar desde una cuenta).
+  // tdcPaidSince() ya cuenta los ingresos directos en la tarjeta como
+  // pago, así que esto también baja "Factura pendiente" igual que un
+  // pago normal.
+  if(_bpayMethod==='points'){
+    const rewardsCat=ensureCategory('Recompensas','income');
+    Store.addTransaction({type:'income',amount:amt,date,time:tnow_(),description:`Pago con puntos: ${tdc.name}`,category:rewardsCat.name,accountId:accId,notes:'Pago de tarjeta con puntos/recompensas'});
+    cM('mo-billing-pay');renderBilling();renderAccounts();renderDash();toast('Pago con puntos registrado');
+    return;
+  }
+  const srcId=$('bpay-src').value;
   const src=S.accounts.find(a=>a.id===srcId);
-  if(!tdc||!src){toast('Cuenta no encontrada',false);return}
+  if(!srcId||!src){toast('Selecciona la cuenta de origen',false);return}
   // BUG REAL ENCONTRADO: esto registraba el pago como un INGRESO en la
   // tarjeta y un GASTO suelto en la cuenta de origen — dos transacciones
   // sin ninguna relación entre sí. Eso causaba DOS problemas a la vez:
@@ -4228,9 +4272,9 @@ function tdcPeriodSpend(a){
 // nada. Este helper centraliza "cuánto se ha pagado a esta tarjeta desde
 // tal fecha" (normalmente el último corte), para poder restarlo.
 function tdcPaidSince(accountId,sinceDateStr){
-  return S.transactions.filter(t=>t.type==='transfer'&&t.date>sinceDateStr&&(
-    (t.accountId===accountId&&t.transferDirection==='in')|| // formato nuevo: esta mitad ES el destino
-    (t.accountId2===accountId) // formato viejo: una sola tx con las dos cuentas
+  return S.transactions.filter(t=>t.date>sinceDateStr&&(
+    (t.type==='transfer'&&((t.accountId===accountId&&t.transferDirection==='in')||(t.accountId2===accountId)))|| // pago con transferencia (formato nuevo y viejo)
+    (t.type==='income'&&t.accountId===accountId) // ingreso directo en la tarjeta (ej. pago con puntos, cashback, reembolso) — también reduce lo pendiente
   )).reduce((s,t)=>s+M(t.amount),0);
 }
 function accountCardHTML(a){
