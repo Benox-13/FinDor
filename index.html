@@ -98,18 +98,15 @@ body{background:var(--bg);color:var(--txt);font-family:'Sora',sans-serif;font-si
    .dgrid>.card) para poder reordenarlos libremente sin que uno quede
    gigante y otro chiquito. El contenido que no cabe se desplaza con
    scroll interno en vez de estirar la tarjeta. */
-/* Cuadrícula de widgets del Dashboard, en 6 columnas para poder mezclar
-   tamaños: las tarjetas con más contenido (Transacciones, Categorías,
-   Presupuesto, Próximos pagos) ocupan la MITAD del ancho (3/6); las que
-   solo muestran un par de números clave (Cuentas, Tarjetas, Préstamos,
-   Objetivos, Suscripciones) ocupan un TERCIO (2/6) y bastante menos alto
-   — no necesitan tanto espacio porque su detalle completo vive en su
-   propia sección, a la que ya mandan al tocarlas. */
-.dgrid{display:grid;grid-template-columns:repeat(6,1fr);gap:14px;align-items:stretch}
-.dgrid>.card{overflow-y:auto;box-sizing:border-box;margin-top:0!important}
-.dgrid>.card.dcard-lg{grid-column:span 3;height:300px}
-.dgrid>.card.dcard-sm{grid-column:span 2;height:110px;padding:14px 16px}
-.dgrid>.card.dcard-sm .slbl{margin-bottom:6px}
+/* Cuadrícula de widgets del Dashboard — todas las tarjetas del MISMO
+   tamaño (así se pueden reordenar todas sin que ninguna quede "fuera de
+   lugar" al moverla), con su información COMPLETA adentro; si el
+   contenido no cabe, se desplaza con scroll interno en vez de cortarse.
+   Un hover sutil dejar claro que son tocables (todas mandan a su sección
+   al hacer click). */
+.dgrid{display:grid;grid-template-columns:1fr 1fr;gap:16px;align-items:stretch}
+.dgrid>.card{height:320px;overflow-y:auto;box-sizing:border-box;margin-top:0!important;transition:border-color .15s,transform .15s}
+.dgrid>.card.card-click:hover{border-color:var(--bdr2);transform:translateY(-1px)}
 .g3{display:grid;grid-template-columns:repeat(3,1fr);gap:16px}
 .g4{display:grid;grid-template-columns:repeat(4,1fr);gap:14px}
 
@@ -325,12 +322,8 @@ body.modal-open #bottom-nav{display:none !important}
   #mob-menu-btn{display:none}
   /* Una sola columna en móvil — con 2 columnas los widgets del dashboard
      quedarían demasiado angostos para leerse cómodo. */
-  /* En móvil: 2 columnas base — las grandes ocupan la fila completa, las
-     compactas quedan 2 por fila (ya no caben 3 cómodas en una pantalla
-     angosta). */
-  .dgrid{grid-template-columns:repeat(2,1fr)}
-  .dgrid>.card.dcard-lg{grid-column:span 2;height:280px}
-  .dgrid>.card.dcard-sm{grid-column:span 1;height:100px;padding:14px 16px}
+  .dgrid{grid-template-columns:1fr}
+  .dgrid>.card{height:300px}
   /* El menú pasa de ocupar espacio fijo en el layout a flotar por encima,
      oculto fuera de la pantalla hasta que se abre. */
   #sb{position:fixed;top:0;left:0;transform:translateX(-100%);transition:transform .25s ease;z-index:180;box-shadow:0 0 40px rgba(0,0,0,.5)}
@@ -3434,38 +3427,52 @@ function renderDash(){
   // uno quede gigante y otro chiquito.
   const buildTxs=()=>{
     const r=[...S.transactions].sort((a,b)=>new Date(b.date)-new Date(a.date)).slice(0,6);
-    return[`<div class="card dcard-lg"><div class="slbl">Últimas transacciones</div>${r.length?r.map(t=>`<div style="display:flex;align-items:center;justify-content:space-between;padding:7px 0;border-bottom:1px solid var(--bdr)"><div style="display:flex;align-items:center;gap:9px"><div style="width:28px;height:28px;border-radius:50%;background:var(--bg4);display:flex;align-items:center;justify-content:center;font-size:12px">${getCatIcon(t.category)}</div><div><div style="font-size:13px">${esc(t.description)}</div><div style="font-size:11px;color:var(--t3)">${fmtDate(t.date)} · ${esc(t.category)||'—'}</div></div></div><div style="font-family:'DM Mono',monospace;font-size:13px;color:${t.type==='income'?'var(--inc)':t.type==='expense'?'var(--exp)':'var(--blu)'};">${t.type==='expense'?'-':''}${fmt(t.amount)}</div></div>`).join(''):emptyState('💸','Aún no hay movimientos','Tu actividad reciente va a aparecer aquí en cuanto registres tu primera transacción.','+ Nueva transacción',"openTxM()")}</div>`];
+    return[`<div class="card"><div class="slbl">Últimas transacciones</div>${r.length?r.map(t=>`<div style="display:flex;align-items:center;justify-content:space-between;padding:7px 0;border-bottom:1px solid var(--bdr)"><div style="display:flex;align-items:center;gap:9px"><div style="width:28px;height:28px;border-radius:50%;background:var(--bg4);display:flex;align-items:center;justify-content:center;font-size:12px">${getCatIcon(t.category)}</div><div><div style="font-size:13px">${esc(t.description)}</div><div style="font-size:11px;color:var(--t3)">${fmtDate(t.date)} · ${esc(t.category)||'—'}</div></div></div><div style="font-family:'DM Mono',monospace;font-size:13px;color:${t.type==='income'?'var(--inc)':t.type==='expense'?'var(--exp)':'var(--blu)'};">${t.type==='expense'?'-':''}${fmt(t.amount)}</div></div>`).join(''):emptyState('💸','Aún no hay movimientos','Tu actividad reciente va a aparecer aquí en cuanto registres tu primera transacción.','+ Nueva transacción',"openTxM()")}</div>`];
   };
   const buildCats=()=>{
     const ce={};mtxs.filter(t=>t.type==='expense').forEach(t=>{ce[t.category]=(ce[t.category]||0)+M(t.amount)});
     const srt=Object.entries(ce).sort((a,b)=>b[1]-a[1]).slice(0,5);const mx=srt[0]?.[1]||1;
-    return[`<div class="card dcard-lg"><div class="slbl">Gastos por categoría</div>${srt.length?srt.map(([c,v])=>`<div style="margin-bottom:9px"><div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:3px"><span>${getCatIcon(c)} ${c}</span><span style="color:var(--t2);font-family:'DM Mono',monospace">${fmt(v)}</span></div><div class="pw"><div class="pb" style="width:${(v/mx*100).toFixed(0)}%;background:var(--red)"></div></div></div>`).join(''):'<div style="color:var(--t3);font-size:13px;text-align:center;padding:8px">Sin gastos</div>'}</div>`];
+    return[`<div class="card"><div class="slbl">Gastos por categoría</div>${srt.length?srt.map(([c,v])=>`<div style="margin-bottom:9px"><div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:3px"><span>${getCatIcon(c)} ${c}</span><span style="color:var(--t2);font-family:'DM Mono',monospace">${fmt(v)}</span></div><div class="pw"><div class="pb" style="width:${(v/mx*100).toFixed(0)}%;background:var(--red)"></div></div></div>`).join(''):'<div style="color:var(--t3);font-size:13px;text-align:center;padding:8px">Sin gastos</div>'}</div>`];
   };
-  // Cuentas/Tarjetas/Suscripciones/Préstamos/Objetivos: antes mostraban
-  // una lista completa (una fila por cuenta/suscripción/etc.) a la misma
-  // altura que las tarjetas grandes — mucho espacio para poca información
-  // realmente nueva (el detalle ya vive en su propia sección). Ahora son
-  // tarjetas compactas ("dcard-sm", 1/3 del ancho — ver CSS) con solo el
-  // o los números clave de un vistazo; tocarlas manda a la sección
-  // completa (ya tenían el onclick, eso no cambió).
+  // Cuentas/Tarjetas/Préstamos/Objetivos/Suscripciones: se había recortado
+  // esto a un solo número por tarjeta para que ocuparan menos espacio —
+  // pero se perdió el detalle fila-por-fila que sí quieres ver de un
+  // vistazo, y quedó feo. Ahora todas las tarjetas del dashboard son del
+  // MISMO tamaño (ver .dgrid en el CSS, como se pidió desde el principio
+  // para poder reordenarlas todas) y muestran su información COMPLETA;
+  // si una lista es más larga que la tarjeta, se desplaza con scroll
+  // interno en vez de cortarse.
   const buildAccs=()=>{
     const out=[];
     const cashDebit=S.accounts.filter(a=>!a.archived&&(a.type==='cash'||a.type==='debit'));
     const creditAccs=S.accounts.filter(a=>!a.archived&&a.type==='credit');
     const cashDebitTotal=cashDebit.reduce((s,a)=>s+(a.balanceHidden?0:M(a.balance)),0);
     const anyHidden=cashDebit.some(a=>a.balanceHidden);
-    out.push(`<div class="card dcard-sm card-click" onclick="go('accounts')">
+    out.push(`<div class="card card-click" onclick="go('accounts')">
       <div class="slbl">🏦 Cuentas</div>
-      <div style="font-family:'DM Mono',monospace;font-size:19px;font-weight:700;color:${anyHidden?'var(--t3)':cashDebitTotal>=0?'var(--inc)':'var(--exp)'}">${anyHidden?'••••••':fmt(cashDebitTotal)}</div>
-      <div style="font-size:11px;color:var(--t3);margin-top:2px">${cashDebit.length} cuenta${cashDebit.length===1?'':'s'}</div>
+      ${cashDebit.length?cashDebit.map(a=>`<div style="display:flex;justify-content:space-between;align-items:center;padding:7px 0;border-bottom:1px solid var(--bdr)"><div style="display:flex;align-items:center;gap:8px"><div style="width:8px;height:8px;border-radius:50%;background:${a.color||'var(--ac)'};flex-shrink:0"></div><span style="font-size:13px">${esc(a.name)}${a.locked?' 🔒':''}</span></div><span style="font-family:'DM Mono',monospace;font-size:13px;color:${a.balanceHidden?'var(--t3)':M(a.balance)>=0?'var(--inc)':'var(--exp)'}">${accBalanceLabel(a)}</span></div>`).join(''):'<div style="color:var(--t3);font-size:13px;padding:8px 0">Sin cuentas de efectivo/débito</div>'}
+      ${cashDebit.length?`<div style="display:flex;justify-content:space-between;padding-top:9px;margin-top:3px;font-weight:600"><span style="font-size:13px">Total</span><span style="font-family:'DM Mono',monospace;font-size:13px;color:${cashDebitTotal>=0?'var(--inc)':'var(--exp)'}">${anyHidden?'••••••':fmt(cashDebitTotal)}</span></div>`:''}
     </div>`);
+    // Tarjetas de crédito en su propia tarjeta — mezclarlas con
+    // efectivo/débito en el mismo total no tiene sentido (es deuda
+    // disponible, no dinero tuyo).
     if(creditAccs.length){
-      const totalAvail=creditAccs.reduce((s,a)=>s+(a.balanceHidden?0:M(a.balance||0)),0);
-      const anyHiddenC=creditAccs.some(a=>a.balanceHidden);
-      out.push(`<div class="card dcard-sm card-click" onclick="go('accounts')">
-        <div class="slbl">💳 Tarjetas</div>
-        <div style="font-family:'DM Mono',monospace;font-size:19px;font-weight:700;color:var(--t2)">${anyHiddenC?'••••••':fmt(totalAvail)}</div>
-        <div style="font-size:11px;color:var(--t3);margin-top:2px">${creditAccs.length} tarjeta${creditAccs.length===1?'':'s'} · disponible</div>
+      out.push(`<div class="card card-click" onclick="go('accounts')">
+        <div class="slbl">💳 Tarjetas de crédito</div>
+        ${creditAccs.map(a=>{
+          const available=M(a.balance||0);
+          const periodSpend=tdcPeriodSpend(a);
+          return`<div style="padding:8px 0;border-bottom:1px solid var(--bdr)">
+            <div style="display:flex;justify-content:space-between;align-items:center">
+              <div style="display:flex;align-items:center;gap:8px"><div style="width:8px;height:8px;border-radius:50%;background:${a.color||'var(--pur)'};flex-shrink:0"></div><span style="font-size:13px">${esc(a.name)}${a.locked?' 🔒':''}</span></div>
+              <span style="font-size:11px;color:var(--t3)">${a.limit?'Límite: '+fmt(a.limit):''}</span>
+            </div>
+            <div style="display:flex;justify-content:space-between;margin-top:4px">
+              <span style="font-size:11px;color:var(--t3)">Gasto del periodo: <span style="font-family:'DM Mono',monospace;color:var(--red)">${a.balanceHidden?'••••':periodSpend!==null?fmt(periodSpend):'—'}</span></span>
+              <span style="font-size:11px;color:var(--t3)">Disponible: <span style="font-family:'DM Mono',monospace;color:var(--t2)">${a.balanceHidden?'••••':fmt(available)}</span></span>
+            </div>
+          </div>`;
+        }).join('')}
       </div>`);
     }
     return out;
@@ -3473,38 +3480,39 @@ function renderDash(){
   const buildSubs=()=>{
     const activeSubs=S.subscriptions.filter(s=>(s.status||'active')==='active');
     const monthlyTotal=activeSubs.reduce((a,s)=>a+(s.freq==='monthly'?s.cost:s.freq==='annual'?s.cost/12:s.cost*4.33),0);
-    return[`<div class="card dcard-sm card-click" onclick="go('subscriptions')">
+    const sorted=[...activeSubs].sort((a,b)=>new Date(a.nextDate)-new Date(b.nextDate));
+    return[`<div class="card card-click" onclick="go('subscriptions')">
       <div class="slbl">↻ Suscripciones</div>
-      <div style="font-family:'DM Mono',monospace;font-size:19px;font-weight:700">${fmt(monthlyTotal)}</div>
-      <div style="font-size:11px;color:var(--t3);margin-top:2px">${activeSubs.length} activa${activeSubs.length===1?'':'s'} · por mes</div>
+      ${sorted.length?sorted.map(s=>`<div style="display:flex;justify-content:space-between;align-items:center;padding:7px 0;border-bottom:1px solid var(--bdr)"><span style="font-size:13px">${esc(s.icon)} ${esc(s.name)}</span><span style="font-family:'DM Mono',monospace;font-size:13px;color:var(--t2)">${fmt(s.cost)}</span></div>`).join(''):'<div style="color:var(--t3);font-size:13px;padding:8px 0">Sin suscripciones activas</div>'}
+      ${activeSubs.length?`<div style="display:flex;justify-content:space-between;padding-top:9px;margin-top:3px;font-weight:600"><span style="font-size:13px">Total/mes</span><span style="font-family:'DM Mono',monospace;font-size:13px">${fmt(monthlyTotal)}</span></div>`:''}
     </div>`];
   };
   const buildDebts=()=>{
     const owedTotal=S.debts_owed.reduce((a,d)=>a+Math.max(0,d.amount-(d.paid||0)),0);
     const ioweTotal=S.debts_iowe.reduce((a,d)=>a+Math.max(0,d.amount-(d.paid||0)),0);
-    return[`<div class="card dcard-sm card-click" onclick="go('loans')">
+    const rows=(list,color)=>list.map(d=>{const rem=Math.max(0,d.amount-(d.paid||0));return`<div style="display:flex;justify-content:space-between;align-items:center;padding:6px 0;border-bottom:1px solid var(--bdr)"><span style="font-size:13px">${esc(d.person)}</span><span style="font-family:'DM Mono',monospace;font-size:13px;color:${color}">${fmt(rem)}</span></div>`}).join('');
+    return[`<div class="card card-click" onclick="go('loans')">
       <div class="slbl">⇅ Préstamos</div>
-      <div style="display:flex;gap:16px;margin-top:1px">
-        <div><div style="font-family:'DM Mono',monospace;font-size:15px;font-weight:700;color:var(--inc)">${fmt(owedTotal)}</div><div style="font-size:10px;color:var(--t3)">Me deben</div></div>
-        <div><div style="font-family:'DM Mono',monospace;font-size:15px;font-weight:700;color:var(--exp)">${fmt(ioweTotal)}</div><div style="font-size:10px;color:var(--t3)">Debo</div></div>
+      ${S.debts_owed.length?`<div style="font-size:11px;color:var(--t3);margin:4px 0 2px">Me deben</div>${rows(S.debts_owed,'var(--inc)')}`:''}
+      ${S.debts_iowe.length?`<div style="font-size:11px;color:var(--t3);margin:8px 0 2px">Debo</div>${rows(S.debts_iowe,'var(--exp)')}`:''}
+      ${!S.debts_owed.length&&!S.debts_iowe.length?'<div style="color:var(--t3);font-size:13px;padding:8px 0">Sin préstamos registrados</div>':''}
+      <div style="display:flex;justify-content:space-between;padding-top:9px;margin-top:3px;font-weight:600">
+        <span style="font-size:12px">Me deben: <span style="font-family:'DM Mono',monospace;color:var(--inc)">${fmt(owedTotal)}</span></span>
+        <span style="font-size:12px">Debo: <span style="font-family:'DM Mono',monospace;color:var(--exp)">${fmt(ioweTotal)}</span></span>
       </div>
     </div>`];
   };
   const buildGoals=()=>{
     const ag=S.goals.filter(g=>g.saved<g.target);
-    const totalSaved=ag.reduce((s,g)=>s+M(g.saved||0),0);
-    const totalTarget=ag.reduce((s,g)=>s+M(g.target||0),0);
-    const pct=totalTarget>0?Math.round(totalSaved/totalTarget*100):0;
-    return[`<div class="card dcard-sm card-click" onclick="go('goals')">
+    return[`<div class="card card-click" onclick="go('goals')">
       <div class="slbl">🎯 Objetivos</div>
-      <div style="font-family:'DM Mono',monospace;font-size:19px;font-weight:700">${ag.length?pct+'%':'—'}</div>
-      <div style="font-size:11px;color:var(--t3);margin-top:2px">${ag.length} activo${ag.length===1?'':'s'}${ag.length?' · '+fmt(totalSaved)+' ahorrado':''}</div>
+      ${ag.length?ag.map(g=>{const p=Math.min(100,g.saved/g.target*100).toFixed(0);return`<div style="margin-bottom:10px"><div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:3px"><span>${g.icon} ${esc(g.name)}</span><span style="font-family:'DM Mono',monospace;color:var(--t2)">${p}%</span></div><div class="pw"><div class="pb" style="width:${p}%;background:var(--ac)"></div></div></div>`}).join(''):'<div style="color:var(--t3);font-size:13px;padding:8px 0">Sin objetivos activos</div>'}
     </div>`];
   };
   const buildBudget=()=>{
-    if(!S.budgets.length)return[`<div class="card dcard-lg card-click" onclick="go('budget')"><div class="slbl">Presupuesto del mes</div><div style="color:var(--t3);font-size:13px;text-align:center;padding:8px">Sin presupuestos configurados</div></div>`];
+    if(!S.budgets.length)return[`<div class="card card-click" onclick="go('budget')"><div class="slbl">Presupuesto del mes</div><div style="color:var(--t3);font-size:13px;text-align:center;padding:8px">Sin presupuestos configurados</div></div>`];
     const items=S.budgets.map(b=>{const sp=mtxs.filter(t=>t.type==='expense'&&(t.category===b.category||getCatParent(t.category)===b.category)).reduce((a,t)=>a+M(t.amount),0);const p=Math.min(100,sp/b.limit*100).toFixed(0);return`<div><div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:3px"><span>${getCatIcon(b.category)} ${esc(b.category)}</span><span style="font-family:'DM Mono',monospace;color:${p>90?'var(--red)':p>70?'var(--yel)':'var(--t2)'}">${fmt(sp)}/${fmt(b.limit)}</span></div><div class="pw"><div class="pb" style="width:${p}%;background:${p>90?'var(--redg)':p>70?'var(--yelg)':'var(--acg)'}"></div></div></div>`});
-    return[`<div class="card dcard-lg card-click" onclick="go('budget')"><div class="slbl">Presupuesto del mes</div><div class="g2">${items.join('')}</div></div>`];
+    return[`<div class="card card-click" onclick="go('budget')"><div class="slbl">Presupuesto del mes</div><div class="g2">${items.join('')}</div></div>`];
   };
   // Próximos pagos: suscripciones y préstamos (que yo debo) con fecha
   // dentro de los próximos 30 días.
@@ -3524,7 +3532,7 @@ function renderDash(){
     });
     up.sort((a,b)=>a.days-b.days);
     const shown=up.slice(0,5);
-    return[`<div class="card dcard-lg"><div class="slbl">Próximos pagos</div>${shown.length?shown.map(i=>`<div style="display:flex;justify-content:space-between;align-items:center;padding:8px 0;border-bottom:1px solid var(--bdr)"><div style="display:flex;align-items:center;gap:9px"><div style="width:28px;height:28px;border-radius:50%;background:var(--bg4);display:flex;align-items:center;justify-content:center;font-size:12px">${i.icon}</div><div><div style="font-size:13px">${esc(i.label)}</div><div style="font-size:11px;color:var(--t3)">${esc(i.kind)} · ${fmtDate(i.date)}${i.days===0?' · Hoy':i.days===1?' · Mañana':' · en '+i.days+' días'}</div></div></div><div style="font-family:'DM Mono',monospace;font-size:13px;color:var(--exp)">${fmt(i.amount)}</div></div>`).join(''):emptyState('📅','Sin pagos próximos','No tienes suscripciones ni préstamos con vencimiento en los próximos 30 días.')}</div>`];
+    return[`<div class="card"><div class="slbl">Próximos pagos</div>${shown.length?shown.map(i=>`<div style="display:flex;justify-content:space-between;align-items:center;padding:8px 0;border-bottom:1px solid var(--bdr)"><div style="display:flex;align-items:center;gap:9px"><div style="width:28px;height:28px;border-radius:50%;background:var(--bg4);display:flex;align-items:center;justify-content:center;font-size:12px">${i.icon}</div><div><div style="font-size:13px">${esc(i.label)}</div><div style="font-size:11px;color:var(--t3)">${esc(i.kind)} · ${fmtDate(i.date)}${i.days===0?' · Hoy':i.days===1?' · Mañana':' · en '+i.days+' días'}</div></div></div><div style="font-family:'DM Mono',monospace;font-size:13px;color:var(--exp)">${fmt(i.amount)}</div></div>`).join(''):emptyState('📅','Sin pagos próximos','No tienes suscripciones ni préstamos con vencimiento en los próximos 30 días.')}</div>`];
   };
   const widgetBuilders={txs:buildTxs,cats:buildCats,accs:buildAccs,subs:buildSubs,debts:buildDebts,goals:buildGoals,budget:buildBudget,upcoming:buildUpcoming};
   const allParts=[];
