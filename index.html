@@ -107,6 +107,12 @@ body{background:var(--bg);color:var(--txt);font-family:'Sora',sans-serif;font-si
 .dgrid{display:grid;grid-template-columns:1fr 1fr;gap:16px;align-items:stretch}
 .dgrid>.card{height:320px;overflow-y:auto;box-sizing:border-box;margin-top:0!important;transition:border-color .15s,transform .15s}
 .dgrid>.card.card-click:hover{border-color:var(--bdr2);transform:translateY(-1px)}
+/* Cuentas/Tarjetas de crédito/Préstamos/Objetivos: mismo ANCHO que el
+   resto (siguen en la misma cuadrícula de 2 columnas), pero la MITAD de
+   alto — su contenido normalmente es corto y se veían con demasiado
+   espacio vacío. Si el contenido no cabe en esta altura, se desplaza con
+   scroll interno en vez de cortarse. */
+.dgrid>.card.dcard-half{height:160px}
 .g3{display:grid;grid-template-columns:repeat(3,1fr);gap:16px}
 .g4{display:grid;grid-template-columns:repeat(4,1fr);gap:14px}
 
@@ -324,6 +330,7 @@ body.modal-open #bottom-nav{display:none !important}
      quedarían demasiado angostos para leerse cómodo. */
   .dgrid{grid-template-columns:1fr}
   .dgrid>.card{height:300px}
+  .dgrid>.card.dcard-half{height:150px}
   /* El menú pasa de ocupar espacio fijo en el layout a flotar por encima,
      oculto fuera de la pantalla hasta que se abre. */
   #sb{position:fixed;top:0;left:0;transform:translateX(-100%);transition:transform .25s ease;z-index:180;box-shadow:0 0 40px rgba(0,0,0,.5)}
@@ -3448,7 +3455,7 @@ function renderDash(){
     const creditAccs=S.accounts.filter(a=>!a.archived&&a.type==='credit');
     const cashDebitTotal=cashDebit.reduce((s,a)=>s+(a.balanceHidden?0:M(a.balance)),0);
     const anyHidden=cashDebit.some(a=>a.balanceHidden);
-    out.push(`<div class="card card-click" onclick="go('accounts')">
+    out.push(`<div class="card dcard-half card-click" onclick="go('accounts')">
       <div class="slbl">🏦 Cuentas</div>
       ${cashDebit.length?cashDebit.map(a=>`<div style="display:flex;justify-content:space-between;align-items:center;padding:7px 0;border-bottom:1px solid var(--bdr)"><div style="display:flex;align-items:center;gap:8px"><div style="width:8px;height:8px;border-radius:50%;background:${a.color||'var(--ac)'};flex-shrink:0"></div><span style="font-size:13px">${esc(a.name)}${a.locked?' 🔒':''}</span></div><span style="font-family:'DM Mono',monospace;font-size:13px;color:${a.balanceHidden?'var(--t3)':M(a.balance)>=0?'var(--inc)':'var(--exp)'}">${accBalanceLabel(a)}</span></div>`).join(''):'<div style="color:var(--t3);font-size:13px;padding:8px 0">Sin cuentas de efectivo/débito</div>'}
       ${cashDebit.length?`<div style="display:flex;justify-content:space-between;padding-top:9px;margin-top:3px;font-weight:600"><span style="font-size:13px">Total</span><span style="font-family:'DM Mono',monospace;font-size:13px;color:${cashDebitTotal>=0?'var(--inc)':'var(--exp)'}">${anyHidden?'••••••':fmt(cashDebitTotal)}</span></div>`:''}
@@ -3457,7 +3464,7 @@ function renderDash(){
     // efectivo/débito en el mismo total no tiene sentido (es deuda
     // disponible, no dinero tuyo).
     if(creditAccs.length){
-      out.push(`<div class="card card-click" onclick="go('accounts')">
+      out.push(`<div class="card dcard-half card-click" onclick="go('accounts')">
         <div class="slbl">💳 Tarjetas de crédito</div>
         ${creditAccs.map(a=>{
           const available=M(a.balance||0);
@@ -3490,21 +3497,19 @@ function renderDash(){
   const buildDebts=()=>{
     const owedTotal=S.debts_owed.reduce((a,d)=>a+Math.max(0,d.amount-(d.paid||0)),0);
     const ioweTotal=S.debts_iowe.reduce((a,d)=>a+Math.max(0,d.amount-(d.paid||0)),0);
-    const rows=(list,color)=>list.map(d=>{const rem=Math.max(0,d.amount-(d.paid||0));return`<div style="display:flex;justify-content:space-between;align-items:center;padding:6px 0;border-bottom:1px solid var(--bdr)"><span style="font-size:13px">${esc(d.person)}</span><span style="font-family:'DM Mono',monospace;font-size:13px;color:${color}">${fmt(rem)}</span></div>`}).join('');
-    return[`<div class="card card-click" onclick="go('loans')">
+    // Solo los 2 totales, sin desglose por persona — el detalle completo
+    // ya vive en Préstamos, a donde manda esta misma tarjeta al tocarla.
+    return[`<div class="card dcard-half card-click" onclick="go('loans')">
       <div class="slbl">⇅ Préstamos</div>
-      ${S.debts_owed.length?`<div style="font-size:11px;color:var(--t3);margin:4px 0 2px">Me deben</div>${rows(S.debts_owed,'var(--inc)')}`:''}
-      ${S.debts_iowe.length?`<div style="font-size:11px;color:var(--t3);margin:8px 0 2px">Debo</div>${rows(S.debts_iowe,'var(--exp)')}`:''}
-      ${!S.debts_owed.length&&!S.debts_iowe.length?'<div style="color:var(--t3);font-size:13px;padding:8px 0">Sin préstamos registrados</div>':''}
-      <div style="display:flex;justify-content:space-between;padding-top:9px;margin-top:3px;font-weight:600">
-        <span style="font-size:12px">Me deben: <span style="font-family:'DM Mono',monospace;color:var(--inc)">${fmt(owedTotal)}</span></span>
-        <span style="font-size:12px">Debo: <span style="font-family:'DM Mono',monospace;color:var(--exp)">${fmt(ioweTotal)}</span></span>
+      <div style="display:flex;gap:24px;align-items:baseline;margin-top:4px">
+        <div><div style="font-family:'DM Mono',monospace;font-size:20px;font-weight:700;color:var(--inc)">${fmt(owedTotal)}</div><div style="font-size:11px;color:var(--t3);margin-top:2px">Me deben</div></div>
+        <div><div style="font-family:'DM Mono',monospace;font-size:20px;font-weight:700;color:var(--exp)">${fmt(ioweTotal)}</div><div style="font-size:11px;color:var(--t3);margin-top:2px">Debo</div></div>
       </div>
     </div>`];
   };
   const buildGoals=()=>{
     const ag=S.goals.filter(g=>g.saved<g.target);
-    return[`<div class="card card-click" onclick="go('goals')">
+    return[`<div class="card dcard-half card-click" onclick="go('goals')">
       <div class="slbl">🎯 Objetivos</div>
       ${ag.length?ag.map(g=>{const p=Math.min(100,g.saved/g.target*100).toFixed(0);return`<div style="margin-bottom:10px"><div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:3px"><span>${g.icon} ${esc(g.name)}</span><span style="font-family:'DM Mono',monospace;color:var(--t2)">${p}%</span></div><div class="pw"><div class="pb" style="width:${p}%;background:var(--ac)"></div></div></div>`}).join(''):'<div style="color:var(--t3);font-size:13px;padding:8px 0">Sin objetivos activos</div>'}
     </div>`];
@@ -5460,7 +5465,13 @@ function renderLoansHistory(){
 function applyTheme(){const d=$('cfg-dark').checked;document.documentElement.setAttribute('data-theme',d?'dark':'light');S.settings.theme=d?'dark':'light';save();pushSettings();}
 function setAccent(a,el){document.documentElement.setAttribute('data-accent',a==='green'?'':a);document.querySelectorAll('.swatch[data-a]').forEach(s=>s.classList.remove('sel'));el.classList.add('sel');S.settings.accent=a;save();pushSettings();}
 const DASH_ORDER_LABELS={txs:'Últimas transacciones',cats:'Gastos por categoría',accs:'Resumen de cuentas',subs:'Suscripciones',debts:'Préstamos',goals:'Objetivos',budget:'Presupuesto del mes',upcoming:'Próximos pagos'};
-const DASH_ORDER_DEFAULT=['txs','cats','accs','subs','debts','goals','budget','upcoming'];
+// Orden por defecto: primero las tarjetas grandes (altura completa), y al
+// final las de media altura (accs=Cuentas+Tarjetas, debts, goals) — así
+// quedan pareadas de 2 en 2 en vez de intercaladas con una grande al lado
+// (que dejaría un hueco visual, ya que la fila toma la altura de la
+// tarjeta más alta). Esto solo es el punto de partida — se puede
+// reordenar libremente desde Ajustes → Dashboard en cualquier momento.
+const DASH_ORDER_DEFAULT=['txs','cats','subs','budget','upcoming','accs','debts','goals'];
 function getDashOrder(){
   const o=S.dw.order;
   if(!o||!o.length)return[...DASH_ORDER_DEFAULT];
