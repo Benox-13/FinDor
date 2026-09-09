@@ -284,7 +284,15 @@ input:checked+.sl:before{transform:translateX(18px);background:#fff}
    Antes el patrimonio neto solo vivía chico en el sidebar. Es el dato que
    responde "¿cuál es mi situación financiera?" de un vistazo — merece ser
    lo primero y más grande que se ve en el Dashboard. */
-.nw-hero{background:linear-gradient(135deg,var(--bg3),var(--bg2));border:1px solid var(--bdr2);border-radius:var(--r3);padding:24px 28px;margin-bottom:16px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:14px}
+/* Hero de patrimonio neto — inspirado en tarjetas destacadas tipo
+   "PATRIMONIO NETO" con resplandor: un blob de color difuminado detrás
+   (::before) y una mini-gráfica de tendencia a la derecha, para que se
+   sienta como la tarjeta principal del Dashboard sin necesitar Chart.js
+   (es puro SVG, más liviano). */
+.nw-hero{position:relative;overflow:hidden;background:linear-gradient(135deg,var(--bg3),var(--bg2));border:1px solid var(--bdr2);border-radius:var(--r3);padding:24px 28px;margin-bottom:16px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:20px;box-shadow:var(--sha2)}
+.nw-hero-glow{position:absolute;top:50%;right:-60px;transform:translateY(-50%);width:220px;height:220px;border-radius:50%;background:radial-gradient(circle,var(--ac) 0%,transparent 70%);opacity:.14;pointer-events:none;filter:blur(2px)}
+.nw-hero-main{position:relative;z-index:1}
+.nw-hero-chart{flex:1;min-width:140px;max-width:240px;position:relative;z-index:1;opacity:.9}
 .nw-hero-label{font-size:12px;color:var(--t3);text-transform:uppercase;letter-spacing:1px;margin-bottom:6px}
 .nw-hero-val{font-family:'DM Serif Display',serif;font-size:38px;line-height:1.1;color:var(--txt)}
 .nw-hero-delta{font-size:13px;margin-top:6px;font-family:'DM Mono',monospace}
@@ -326,6 +334,9 @@ body.modal-open #bottom-nav{display:none !important}
 
 @media (max-width:680px){
   #mob-menu-btn{display:none}
+  .nw-hero{padding:18px 20px}
+  .nw-hero-val{font-size:28px}
+  .nw-hero-chart{min-width:100px;max-width:130px}
   /* Una sola columna en móvil — con 2 columnas los widgets del dashboard
      quedarían demasiado angostos para leerse cómodo. */
   .dgrid{grid-template-columns:1fr}
@@ -2265,6 +2276,27 @@ const isUUID=s=>typeof s==='string'&&/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a
 const td_=()=>new Date().toISOString().split('T')[0];
 const tnow_=()=>{const d=new Date();return String(d.getHours()).padStart(2,'0')+':'+String(d.getMinutes()).padStart(2,'0')+':'+String(d.getSeconds()).padStart(2,'0')};
 const fmt=n=>M(n||0).toLocaleString('es-MX',{style:'currency',currency:S?.settings?.currency||'MXN',minimumFractionDigits:2,maximumFractionDigits:2});
+// Mini-gráfica de tendencia (área con degradado + línea) en SVG puro —
+// se usa para vistazos rápidos dentro de tarjetas chicas (ej. el hero de
+// patrimonio) sin cargar Chart.js/canvas ahí, que es más pesado para un
+// adorno de este tamaño.
+function sparklineSVG(vals,color,w=180,h=56){
+  if(!vals||vals.length<2)return '';
+  const min=Math.min(...vals),max=Math.max(...vals);
+  const range=(max-min)||1;
+  const pts=vals.map((v,i)=>[(i/(vals.length-1))*w,h-((v-min)/range)*h*0.86-h*0.07]);
+  const line=pts.map((p,i)=>(i===0?'M':'L')+p[0].toFixed(1)+','+p[1].toFixed(1)).join(' ');
+  const area=line+` L${w},${h} L0,${h} Z`;
+  const gid='spk'+Math.random().toString(36).slice(2,9);
+  return`<svg viewBox="0 0 ${w} ${h}" width="100%" height="${h}" preserveAspectRatio="none" style="display:block">
+    <defs><linearGradient id="${gid}" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="${color}" stop-opacity="0.4"/>
+      <stop offset="100%" stop-color="${color}" stop-opacity="0"/>
+    </linearGradient></defs>
+    <path d="${area}" fill="url(#${gid})" stroke="none"/>
+    <path d="${line}" fill="none" stroke="${color}" stroke-width="2.25" stroke-linejoin="round" stroke-linecap="round"/>
+  </svg>`;
+}
 // Antes, en móvil, la barra de navegación inferior (z-index más alto que
 // los modales) podía quedar encima del pie del formulario, tapando el
 // botón "Guardar". Ahora se oculta mientras haya al menos un modal
@@ -2284,7 +2316,7 @@ function emptyAppState(){
     accounts:[],transactions:[],categories:[],
     debts_owed:[],debts_iowe:[],goals:[],ev_records:[],budgets:[],subscriptions:[],
     settings:{name:'',currency:'MXN',theme:'dark',accent:'green'},
-    dw:{metrics:true,txs:true,cats:true,accs:true,tdc:true,goals:true,budget:false,upcoming:true,subs:true,debts:true},
+    dw:{metrics:true,txs:true,cats:true,accs:true,tdc:true,goals:true,budget:false,upcoming:true,subs:true,debts:true,health:true},
     notif:{budget:true,debts:true,subs:true,goals:true},
     vehicles:[],customSections:[],budgetRollover:false,nwHistory:[]
   };
@@ -2307,7 +2339,7 @@ let S = JSON.parse(localStorage.getItem('finance_v4')||'null') || {
   ],
   debts_owed:[],debts_iowe:[],goals:[],ev_records:[],budgets:[],subscriptions:[],
   settings:{name:'',currency:'MXN',theme:'dark',accent:'green'},
-  dw:{metrics:true,txs:true,cats:true,accs:true,tdc:true,goals:true,budget:false,upcoming:true,subs:true,debts:true},
+  dw:{metrics:true,txs:true,cats:true,accs:true,tdc:true,goals:true,budget:false,upcoming:true,subs:true,debts:true,health:true},
   notif:{budget:true,debts:true,subs:true,goals:true},
   vehicles:[],customSections:[],budgetRollover:false,nwHistory:[]
 };
@@ -3388,6 +3420,30 @@ function execBillingPay(){
 }
 
 // ==================== DASHBOARD ====================
+// Paleta fija para la dona de "Gastos por categoría" del Dashboard — igual
+// idea que BUDGET_PALETTE en Presupuesto, pero separada porque cada una
+// vive en un contexto distinto y no tienen por qué coincidir.
+const DASH_DONUT_PALETTE=['#30d693','#4e9eff','#a855f7','#ffb340','#fb923c','#f472b6'];
+let dashCatsChart;
+// Medidor semicircular de "salud financiera" — los 3 tramos de color
+// (rojo/amarillo/verde) son SIEMPRE los mismos, solo la aguja se mueve
+// según el puntaje. Coordenadas calculadas a mano para un viewBox de
+// 160x90, centro en (80,82), radio 64 — así no hay que recalcular
+// trigonometría en cada render, solo la posición de la aguja.
+const HEALTH_GAUGE_SEGS=
+  '<path d="M16,82 A64,64 0 0 1 48,26.6" fill="none" stroke="#ff5f6d" stroke-width="13" stroke-linecap="round"/>'+
+  '<path d="M48,26.6 A64,64 0 0 1 112,26.6" fill="none" stroke="#ffb340" stroke-width="13" stroke-linecap="round"/>'+
+  '<path d="M112,26.6 A64,64 0 0 1 144,82" fill="none" stroke="#30d693" stroke-width="13" stroke-linecap="round"/>';
+function healthGaugeSVG(score){
+  const s=Math.max(0,Math.min(100,score));
+  const angle=Math.PI-(s/100)*Math.PI;
+  const nx=(80+48*Math.cos(angle)).toFixed(1),ny=(82-48*Math.sin(angle)).toFixed(1);
+  return`<svg viewBox="0 0 160 90" width="100%" height="90">
+    ${HEALTH_GAUGE_SEGS}
+    <line x1="80" y1="82" x2="${nx}" y2="${ny}" stroke="var(--txt)" stroke-width="3" stroke-linecap="round"/>
+    <circle cx="80" cy="82" r="5" fill="var(--txt)"/>
+  </svg>`;
+}
 function renderDash(){
   const now=new Date();
   $('ddate').textContent=now.toLocaleDateString('es-MX',{weekday:'long',year:'numeric',month:'long',day:'numeric'});
@@ -3401,6 +3457,8 @@ function renderDash(){
   // mi situación financiera?" de un vistazo, con comparación contra el
   // snapshot del mes pasado si existe.
   const nw=updateNW();
+  const nwSpark=[...(S.nwHistory||[])].sort((a,b)=>a.k.localeCompare(b.k)).slice(-8).map(h=>h.nw);
+  if(!nwSpark.length||nwSpark[nwSpark.length-1]!==nw)nwSpark.push(nw); // el snapshot de hoy puede no estar guardado todavía
   const prevKey=new Date(yr,mo-1).getFullYear()+'-'+String(new Date(yr,mo-1).getMonth()+1).padStart(2,'0');
   const prevSnap=(S.nwHistory||[]).find(h=>h.k===prevKey);
   let deltaHTML='';
@@ -3409,7 +3467,15 @@ function renderDash(){
     const pct=prevSnap.nw!==0?Math.round(delta/Math.abs(prevSnap.nw)*100):0;
     deltaHTML=`<div class="nw-hero-delta" style="color:${delta>=0?'var(--inc)':'var(--exp)'}">${delta>=0?'↑':'↓'} ${fmt(Math.abs(delta))} (${pct>=0?'+':''}${pct}%) vs. mes pasado</div>`;
   }
-  $('d-nw-hero').innerHTML=`<div class="nw-hero"><div><div class="nw-hero-label">Patrimonio neto</div><div class="nw-hero-val">${fmt(nw)}</div>${deltaHTML}</div></div>`;
+  $('d-nw-hero').innerHTML=`<div class="nw-hero">
+    <div class="nw-hero-glow"></div>
+    <div class="nw-hero-main">
+      <div class="nw-hero-label">Patrimonio neto</div>
+      <div class="nw-hero-val">${fmt(nw)}</div>
+      ${deltaHTML}
+    </div>
+    <div class="nw-hero-chart">${sparklineSVG(nwSpark,nwSpark.length>=2&&nwSpark[nwSpark.length-1]>=nwSpark[0]?'#30d693':'#ff5f6d',220,64)}</div>
+  </div>`;
   // Las 4 métricas del mes son fijas — siempre visibles, ya no se pueden
   // ocultar desde Ajustes (antes sí se podía, pero se pidió que fueran
   // permanentes).
@@ -3430,10 +3496,23 @@ function renderDash(){
     const r=[...S.transactions].sort((a,b)=>new Date(b.date)-new Date(a.date)).slice(0,6);
     return[`<div class="card"><div class="slbl">Últimas transacciones</div>${r.length?r.map(t=>`<div style="display:flex;align-items:center;justify-content:space-between;padding:7px 0;border-bottom:1px solid var(--bdr)"><div style="display:flex;align-items:center;gap:9px"><div style="width:28px;height:28px;border-radius:50%;background:var(--bg4);display:flex;align-items:center;justify-content:center;font-size:12px">${getCatIcon(t.category)}</div><div><div style="font-size:13px">${esc(t.description)}</div><div style="font-size:11px;color:var(--t3)">${fmtDate(t.date)} · ${esc(t.category)||'—'}</div></div></div><div style="font-family:'DM Mono',monospace;font-size:13px;color:${t.type==='income'?'var(--inc)':t.type==='expense'?'var(--exp)':'var(--blu)'};">${t.type==='expense'?'-':''}${fmt(t.amount)}</div></div>`).join(''):emptyState('💸','Aún no hay movimientos','Tu actividad reciente va a aparecer aquí en cuanto registres tu primera transacción.','+ Nueva transacción',"openTxM()")}</div>`];
   };
+  let _dashCatsData=null;
   const buildCats=()=>{
     const ce={};mtxs.filter(t=>t.type==='expense').forEach(t=>{ce[t.category]=(ce[t.category]||0)+M(t.amount)});
-    const srt=Object.entries(ce).sort((a,b)=>b[1]-a[1]).slice(0,5);const mx=srt[0]?.[1]||1;
-    return[`<div class="card"><div class="slbl">Gastos por categoría</div>${srt.length?srt.map(([c,v])=>`<div style="margin-bottom:9px"><div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:3px"><span>${getCatIcon(c)} ${c}</span><span style="color:var(--t2);font-family:'DM Mono',monospace">${fmt(v)}</span></div><div class="pw"><div class="pb" style="width:${(v/mx*100).toFixed(0)}%;background:var(--red)"></div></div></div>`).join(''):'<div style="color:var(--t3);font-size:13px;text-align:center;padding:8px">Sin gastos</div>'}</div>`];
+    const srt=Object.entries(ce).sort((a,b)=>b[1]-a[1]);
+    const total=srt.reduce((a,[,v])=>a+v,0);
+    const top=srt.slice(0,6);
+    _dashCatsData=top; // el canvas se llena DESPUÉS de insertar el HTML (ver más abajo) — Chart.js necesita que el <canvas> ya exista en el DOM.
+    const palette=DASH_DONUT_PALETTE;
+    return[`<div class="card">
+      <div class="slbl">Gastos por categoría</div>
+      ${top.length?`<div style="display:flex;align-items:center;gap:16px;height:calc(100% - 30px)">
+        <div style="position:relative;width:112px;height:112px;flex-shrink:0"><canvas id="ch-dash-cats"></canvas></div>
+        <div style="flex:1;min-width:0;overflow-y:auto;max-height:100%">
+          ${top.map(([c,v],i)=>`<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;padding:5px 0"><div style="display:flex;align-items:center;gap:7px;min-width:0"><span style="width:9px;height:9px;border-radius:50%;background:${palette[i%palette.length]};flex-shrink:0"></span><span style="font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${getCatIcon(c)} ${esc(c)}</span></div><span style="font-size:11px;color:var(--t3);flex-shrink:0;font-family:'DM Mono',monospace">${total>0?Math.round(v/total*100):0}%</span></div>`).join('')}
+        </div>
+      </div>`:'<div style="color:var(--t3);font-size:13px;text-align:center;padding:24px 8px">Sin gastos este mes</div>'}
+    </div>`];
   };
   // Cuentas/Tarjetas/Préstamos/Objetivos/Suscripciones: se había recortado
   // esto a un solo número por tarjeta para que ocuparan menos espacio —
@@ -3503,6 +3582,40 @@ function renderDash(){
       </div>
     </div>`];
   };
+  // Salud financiera: un puntaje 0-100 que combina tres cosas simples y
+  // transparentes (no es una fórmula mágica, se puede recalcular a mano):
+  // 1) tu tasa de ahorro de este mes,
+  // 2) qué % de tus categorías presupuestadas están dentro de su límite,
+  // 3) cuánto debes comparado con ~3 meses de tu ingreso promedio.
+  const buildHealth=()=>{
+    const savScore=Math.max(0,Math.min(100,sav));
+    let budgetScore=70; // neutral si no hay presupuestos configurados todavía
+    if(S.budgets.length){
+      const within=S.budgets.filter(b=>{
+        const sp=mtxs.filter(t=>t.type==='expense'&&(t.category===b.category||getCatParent(t.category)===b.category)).reduce((a,t)=>a+M(t.amount),0);
+        return sp<=b.limit;
+      }).length;
+      budgetScore=Math.round(within/S.budgets.length*100);
+    }
+    const last3Inc=[0,1,2].map(i=>{
+      const d=new Date(yr,mo-i,1);
+      return S.transactions.filter(t=>t.type==='income'&&dateLocal(t.date).getMonth()===d.getMonth()&&dateLocal(t.date).getFullYear()===d.getFullYear()).reduce((a,t)=>a+M(t.amount),0);
+    });
+    const avgInc=(last3Inc.reduce((a,v)=>a+v,0)/3)||inc||0;
+    const ioweTotal=S.debts_iowe.reduce((a,d)=>a+Math.max(0,d.amount-(d.paid||0)),0);
+    const debtScore=avgInc>0?Math.max(0,Math.min(100,100-(ioweTotal/(avgInc*3))*100)):(ioweTotal>0?0:100);
+    const health=Math.round((savScore+budgetScore+debtScore)/3);
+    const healthLabel=health>=80?'Excelente':health>=60?'Buena':health>=40?'Regular':'Necesita atención';
+    const healthColor=health>=80?'var(--inc)':health>=60?'#ffb340':health>=40?'#fb923c':'var(--exp)';
+    return[`<div class="card dcard-half" style="display:flex;align-items:center;justify-content:space-between;gap:8px">
+      <div style="flex-shrink:0">
+        <div class="slbl">💚 Salud financiera</div>
+        <div style="font-family:'DM Mono',monospace;font-size:26px;font-weight:700;color:${healthColor}">${health}</div>
+        <div style="font-size:12px;color:var(--t3)">${healthLabel}</div>
+      </div>
+      <div style="width:135px;flex-shrink:0">${healthGaugeSVG(health)}</div>
+    </div>`];
+  };
   const buildGoals=()=>{
     const ag=S.goals.filter(g=>g.saved<g.target);
     return[`<div class="card dcard-half card-click" onclick="go('goals')">
@@ -3535,7 +3648,7 @@ function renderDash(){
     const shown=up.slice(0,5);
     return[`<div class="card"><div class="slbl">Próximos pagos</div>${shown.length?shown.map(i=>`<div style="display:flex;justify-content:space-between;align-items:center;padding:8px 0;border-bottom:1px solid var(--bdr)"><div style="display:flex;align-items:center;gap:9px"><div style="width:28px;height:28px;border-radius:50%;background:var(--bg4);display:flex;align-items:center;justify-content:center;font-size:12px">${i.icon}</div><div><div style="font-size:13px">${esc(i.label)}</div><div style="font-size:11px;color:var(--t3)">${esc(i.kind)} · ${fmtDate(i.date)}${i.days===0?' · Hoy':i.days===1?' · Mañana':' · en '+i.days+' días'}</div></div></div><div style="font-family:'DM Mono',monospace;font-size:13px;color:var(--exp)">${fmt(i.amount)}</div></div>`).join(''):emptyState('📅','Sin pagos próximos','No tienes suscripciones ni préstamos con vencimiento en los próximos 30 días.')}</div>`];
   };
-  const widgetBuilders={txs:buildTxs,cats:buildCats,accs:buildAccs,tdc:buildTdc,subs:buildSubs,debts:buildDebts,goals:buildGoals,budget:buildBudget,upcoming:buildUpcoming};
+  const widgetBuilders={txs:buildTxs,cats:buildCats,accs:buildAccs,tdc:buildTdc,subs:buildSubs,debts:buildDebts,goals:buildGoals,budget:buildBudget,upcoming:buildUpcoming,health:buildHealth};
   const allParts=[];
   // dw[k]===undefined (widget nuevo agregado después de que ya existía tu
   // configuración guardada, como "tdc" hoy) se trata como visible por
@@ -3543,6 +3656,12 @@ function renderDash(){
   // Ajustes guardados, aunque nunca lo haya apagado a propósito.
   getDashOrder().forEach(k=>{if(dw[k]!==false&&widgetBuilders[k])allParts.push(...widgetBuilders[k]())});
   $('d-grid').innerHTML=allParts.join('');
+  // El <canvas> de la dona de categorías recién se insertó arriba — Chart.js
+  // necesita que ya exista en el DOM antes de poder dibujar en él.
+  if($('ch-dash-cats')&&_dashCatsData&&_dashCatsData.length){
+    if(dashCatsChart)dashCatsChart.destroy();
+    dashCatsChart=new Chart($('ch-dash-cats'),{type:'doughnut',data:{labels:_dashCatsData.map(c=>c[0]),datasets:[{data:_dashCatsData.map(c=>c[1]),backgroundColor:DASH_DONUT_PALETTE,borderWidth:0,hoverOffset:4}]},options:{responsive:true,maintainAspectRatio:false,cutout:'68%',plugins:{legend:{display:false}}}});
+  }
 }
 
 // Estado vacío reutilizable — ícono + título + mensaje explicando qué
@@ -5464,14 +5583,14 @@ function renderLoansHistory(){
 }
 function applyTheme(){const d=$('cfg-dark').checked;document.documentElement.setAttribute('data-theme',d?'dark':'light');S.settings.theme=d?'dark':'light';save();pushSettings();}
 function setAccent(a,el){document.documentElement.setAttribute('data-accent',a==='green'?'':a);document.querySelectorAll('.swatch[data-a]').forEach(s=>s.classList.remove('sel'));el.classList.add('sel');S.settings.accent=a;save();pushSettings();}
-const DASH_ORDER_LABELS={txs:'Últimas transacciones',cats:'Gastos por categoría',accs:'Cuentas',tdc:'Tarjetas de crédito',subs:'Suscripciones',debts:'Préstamos',goals:'Objetivos',budget:'Presupuesto del mes',upcoming:'Próximos pagos'};
+const DASH_ORDER_LABELS={txs:'Últimas transacciones',cats:'Gastos por categoría',accs:'Cuentas',tdc:'Tarjetas de crédito',subs:'Suscripciones',debts:'Préstamos',goals:'Objetivos',budget:'Presupuesto del mes',upcoming:'Próximos pagos',health:'Salud financiera'};
 // Orden por defecto: primero las tarjetas grandes (altura completa), y al
 // final las de media altura (accs=Cuentas+Tarjetas, debts, goals) — así
 // quedan pareadas de 2 en 2 en vez de intercaladas con una grande al lado
 // (que dejaría un hueco visual, ya que la fila toma la altura de la
 // tarjeta más alta). Esto solo es el punto de partida — se puede
 // reordenar libremente desde Ajustes → Dashboard en cualquier momento.
-const DASH_ORDER_DEFAULT=['txs','cats','subs','budget','upcoming','accs','tdc','debts','goals'];
+const DASH_ORDER_DEFAULT=['txs','cats','subs','budget','upcoming','accs','tdc','health','debts','goals'];
 function getDashOrder(){
   const o=S.dw.order;
   if(!o||!o.length)return[...DASH_ORDER_DEFAULT];
@@ -5494,7 +5613,7 @@ function moveDashWidget(key,dir){
   S.dw.order=order;save();pushSettings();
   renderDashOrderList();renderDash();
 }
-function saveDW(){['txs','cats','accs','tdc','goals','budget','upcoming','subs','debts'].forEach(k=>{const el=$('w-'+k);if(el)S.dw[k]=el.checked});save();pushSettings();renderDash();toast('Dashboard actualizado')}
+function saveDW(){['txs','cats','accs','tdc','goals','budget','upcoming','subs','debts','health'].forEach(k=>{const el=$('w-'+k);if(el)S.dw[k]=el.checked});save();pushSettings();renderDash();toast('Dashboard actualizado')}
 function saveNotif(){if(!S.notif)S.notif={};['bgt','dbt','sub','gol'].forEach(k=>{const el=$('n-'+k);if(el)S.notif[k]=el.checked});save();toast('Preferencias guardadas')}
 function exportData(){const a=document.createElement('a');a.href='data:application/json,'+encodeURIComponent(JSON.stringify(S,null,2));a.download='finance-backup.json';a.click();toast('Datos exportados')}
 function importData(e){const f=e.target.files[0];if(!f)return;const r=new FileReader();r.onload=ev=>{try{S=JSON.parse(ev.target.result);save();renderDash();toast('Datos importados')}catch{toast('Archivo inválido',false)}};r.readAsText(f)}
