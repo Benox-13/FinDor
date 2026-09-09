@@ -2286,6 +2286,12 @@ const isUUID=s=>typeof s==='string'&&/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a
 const td_=()=>new Date().toISOString().split('T')[0];
 const tnow_=()=>{const d=new Date();return String(d.getHours()).padStart(2,'0')+':'+String(d.getMinutes()).padStart(2,'0')+':'+String(d.getSeconds()).padStart(2,'0')};
 const fmt=n=>M(n||0).toLocaleString('es-MX',{style:'currency',currency:S?.settings?.currency||'MXN',minimumFractionDigits:2,maximumFractionDigits:2});
+// Insignia de color detrás del ícono de cada tarjeta del Dashboard —
+// mismo recurso que los íconos de categoría con círculo de color de la
+// referencia (Housing/Food/Shopping cada uno con su propio tono).
+function slblBadge(icon,color){
+  return`<span style="display:inline-flex;align-items:center;justify-content:center;width:22px;height:22px;border-radius:7px;background:${color}1f;font-size:12px;flex-shrink:0">${icon}</span>`;
+}
 // Mini-gráfica de tendencia (área con degradado + línea) en SVG puro —
 // se usa para vistazos rápidos dentro de tarjetas chicas (ej. el hero de
 // patrimonio) sin cargar Chart.js/canvas ahí, que es más pesado para un
@@ -3517,7 +3523,7 @@ function renderDash(){
   // uno quede gigante y otro chiquito.
   const buildTxs=()=>{
     const r=[...S.transactions].sort((a,b)=>new Date(b.date)-new Date(a.date)).slice(0,6);
-    return[`<div class="card"><div class="slbl">Últimas transacciones</div>${r.length?r.map(t=>`<div style="display:flex;align-items:center;justify-content:space-between;padding:7px 0;border-bottom:1px solid var(--bdr)"><div style="display:flex;align-items:center;gap:9px"><div style="width:28px;height:28px;border-radius:50%;background:var(--bg4);display:flex;align-items:center;justify-content:center;font-size:12px">${getCatIcon(t.category)}</div><div><div style="font-size:13px">${esc(t.description)}</div><div style="font-size:11px;color:var(--t3)">${fmtDate(t.date)} · ${esc(t.category)||'—'}</div></div></div><div style="font-family:'DM Mono',monospace;font-size:13px;color:${t.type==='income'?'var(--inc)':t.type==='expense'?'var(--exp)':'var(--blu)'};">${t.type==='expense'?'-':''}${fmt(t.amount)}</div></div>`).join(''):emptyState('💸','Aún no hay movimientos','Tu actividad reciente va a aparecer aquí en cuanto registres tu primera transacción.','+ Nueva transacción',"openTxM()")}</div>`];
+    return[`<div class="card"><div class="slbl">${slblBadge('💸','#4e9eff')} Últimas transacciones</div>${r.length?r.map(t=>`<div style="display:flex;align-items:center;justify-content:space-between;padding:7px 0;border-bottom:1px solid var(--bdr)"><div style="display:flex;align-items:center;gap:9px"><div style="width:28px;height:28px;border-radius:50%;background:var(--bg4);display:flex;align-items:center;justify-content:center;font-size:12px">${getCatIcon(t.category)}</div><div><div style="font-size:13px">${esc(t.description)}</div><div style="font-size:11px;color:var(--t3)">${fmtDate(t.date)} · ${esc(t.category)||'—'}</div></div></div><div style="font-family:'DM Mono',monospace;font-size:13px;color:${t.type==='income'?'var(--inc)':t.type==='expense'?'var(--exp)':'var(--blu)'};">${t.type==='expense'?'-':''}${fmt(t.amount)}</div></div>`).join(''):emptyState('💸','Aún no hay movimientos','Tu actividad reciente va a aparecer aquí en cuanto registres tu primera transacción.','+ Nueva transacción',"openTxM()")}</div>`];
   };
   let _dashCatsData=null;
   const buildCats=()=>{
@@ -3528,7 +3534,7 @@ function renderDash(){
     _dashCatsData=top; // el canvas se llena DESPUÉS de insertar el HTML (ver más abajo) — Chart.js necesita que el <canvas> ya exista en el DOM.
     const palette=DASH_DONUT_PALETTE;
     return[`<div class="card">
-      <div class="slbl">Gastos por categoría</div>
+      <div class="slbl">${slblBadge('📊','#ff5f6d')} Gastos por categoría</div>
       ${top.length?`<div style="display:flex;align-items:center;gap:16px;height:calc(100% - 30px)">
         <div style="position:relative;width:112px;height:112px;flex-shrink:0"><canvas id="ch-dash-cats"></canvas></div>
         <div style="flex:1;min-width:0;overflow-y:auto;max-height:100%">
@@ -3555,16 +3561,16 @@ function renderDash(){
     const cashDebitTotal=cashDebit.reduce((s,a)=>s+(a.balanceHidden?0:M(a.balance)),0);
     const anyHidden=cashDebit.some(a=>a.balanceHidden);
     return[`<div class="card dcard-half card-click" onclick="go('accounts')">
-      <div class="slbl">🏦 Cuentas</div>
+      <div class="slbl">${slblBadge('🏦','#30d693')} Cuentas</div>
       ${cashDebit.length?cashDebit.map(a=>`<div style="display:flex;justify-content:space-between;align-items:center;padding:7px 0;border-bottom:1px solid var(--bdr)"><div style="display:flex;align-items:center;gap:8px"><div style="width:8px;height:8px;border-radius:50%;background:${a.color||'var(--ac)'};flex-shrink:0"></div><span style="font-size:13px">${esc(a.name)}${a.locked?' 🔒':''}</span></div><span style="font-family:'DM Mono',monospace;font-size:13px;color:${a.balanceHidden?'var(--t3)':M(a.balance)>=0?'var(--inc)':'var(--exp)'}">${accBalanceLabel(a)}</span></div>`).join(''):'<div style="color:var(--t3);font-size:13px;padding:8px 0">Sin cuentas de efectivo/débito</div>'}
       ${cashDebit.length?`<div style="display:flex;justify-content:space-between;padding-top:9px;margin-top:3px;font-weight:600"><span style="font-size:13px">Total</span><span style="font-family:'DM Mono',monospace;font-size:13px;color:${cashDebitTotal>=0?'var(--inc)':'var(--exp)'}">${anyHidden?'••••••':fmt(cashDebitTotal)}</span></div>`:''}
     </div>`];
   };
   const buildTdc=()=>{
     const creditAccs=S.accounts.filter(a=>!a.archived&&a.type==='credit');
-    if(!creditAccs.length)return[`<div class="card dcard-half card-click" onclick="go('accounts')"><div class="slbl">💳 Tarjetas de crédito</div><div style="color:var(--t3);font-size:13px;padding:8px 0">Sin tarjetas de crédito</div></div>`];
+    if(!creditAccs.length)return[`<div class="card dcard-half card-click" onclick="go('accounts')"><div class="slbl">${slblBadge('💳','#a855f7')} Tarjetas de crédito</div><div style="color:var(--t3);font-size:13px;padding:8px 0">Sin tarjetas de crédito</div></div>`];
     return[`<div class="card dcard-half card-click" onclick="go('accounts')">
-      <div class="slbl">💳 Tarjetas de crédito</div>
+      <div class="slbl">${slblBadge('💳','#a855f7')} Tarjetas de crédito</div>
       ${creditAccs.map(a=>{
         const available=M(a.balance||0);
         const periodSpend=tdcPeriodSpend(a);
@@ -3587,7 +3593,7 @@ function renderDash(){
     const monthlyTotal=activeSubs.reduce((a,s)=>a+(s.freq==='monthly'?s.cost:s.freq==='annual'?s.cost/12:s.cost*4.33),0);
     const sorted=[...activeSubs].sort((a,b)=>new Date(a.nextDate)-new Date(b.nextDate));
     return[`<div class="card card-click" onclick="go('subscriptions')">
-      <div class="slbl">↻ Suscripciones</div>
+      <div class="slbl">${slblBadge('↻','#fb923c')} Suscripciones</div>
       ${sorted.length?sorted.map(s=>`<div style="display:flex;justify-content:space-between;align-items:center;padding:7px 0;border-bottom:1px solid var(--bdr)"><span style="font-size:13px">${esc(s.icon)} ${esc(s.name)}</span><span style="font-family:'DM Mono',monospace;font-size:13px;color:var(--t2)">${fmt(s.cost)}</span></div>`).join(''):'<div style="color:var(--t3);font-size:13px;padding:8px 0">Sin suscripciones activas</div>'}
       ${activeSubs.length?`<div style="display:flex;justify-content:space-between;padding-top:9px;margin-top:3px;font-weight:600"><span style="font-size:13px">Total/mes</span><span style="font-family:'DM Mono',monospace;font-size:13px">${fmt(monthlyTotal)}</span></div>`:''}
     </div>`];
@@ -3598,7 +3604,7 @@ function renderDash(){
     // Solo los 2 totales, sin desglose por persona — el detalle completo
     // ya vive en Préstamos, a donde manda esta misma tarjeta al tocarla.
     return[`<div class="card dcard-half card-click" onclick="go('loans')">
-      <div class="slbl">⇅ Préstamos</div>
+      <div class="slbl">${slblBadge('⇅','#4e9eff')} Préstamos</div>
       <div style="display:flex;gap:24px;align-items:baseline;margin-top:4px">
         <div><div style="font-family:'DM Mono',monospace;font-size:20px;font-weight:700;color:var(--inc)">${fmt(owedTotal)}</div><div style="font-size:11px;color:var(--t3);margin-top:2px">Me deben</div></div>
         <div><div style="font-family:'DM Mono',monospace;font-size:20px;font-weight:700;color:var(--exp)">${fmt(ioweTotal)}</div><div style="font-size:11px;color:var(--t3);margin-top:2px">Debo</div></div>
@@ -3632,7 +3638,7 @@ function renderDash(){
     const healthColor=health>=80?'var(--inc)':health>=60?'#ffb340':health>=40?'#fb923c':'var(--exp)';
     return[`<div class="card dcard-half" style="display:flex;align-items:center;justify-content:space-between;gap:8px">
       <div style="flex-shrink:0">
-        <div class="slbl">💚 Salud financiera</div>
+        <div class="slbl">${slblBadge('💚','#30d693')} Salud financiera</div>
         <div style="font-family:'DM Mono',monospace;font-size:26px;font-weight:700;color:${healthColor}">${health}</div>
         <div style="font-size:12px;color:var(--t3)">${healthLabel}</div>
       </div>
@@ -3642,14 +3648,14 @@ function renderDash(){
   const buildGoals=()=>{
     const ag=S.goals.filter(g=>g.saved<g.target);
     return[`<div class="card dcard-half card-click" onclick="go('goals')">
-      <div class="slbl">🎯 Objetivos</div>
+      <div class="slbl">${slblBadge('🎯','#facc15')} Objetivos</div>
       ${ag.length?ag.map(g=>{const p=Math.min(100,g.saved/g.target*100).toFixed(0);return`<div style="margin-bottom:10px"><div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:3px"><span>${g.icon} ${esc(g.name)}</span><span style="font-family:'DM Mono',monospace;color:var(--t2)">${p}%</span></div><div class="pw"><div class="pb" style="width:${p}%;background:var(--ac)"></div></div></div>`}).join(''):'<div style="color:var(--t3);font-size:13px;padding:8px 0">Sin objetivos activos</div>'}
     </div>`];
   };
   const buildBudget=()=>{
-    if(!S.budgets.length)return[`<div class="card card-click" onclick="go('budget')"><div class="slbl">Presupuesto del mes</div><div style="color:var(--t3);font-size:13px;text-align:center;padding:8px">Sin presupuestos configurados</div></div>`];
+    if(!S.budgets.length)return[`<div class="card card-click" onclick="go('budget')"><div class="slbl">${slblBadge('📅','#22d3ee')} Presupuesto del mes</div><div style="color:var(--t3);font-size:13px;text-align:center;padding:8px">Sin presupuestos configurados</div></div>`];
     const items=S.budgets.map(b=>{const sp=mtxs.filter(t=>t.type==='expense'&&(t.category===b.category||getCatParent(t.category)===b.category)).reduce((a,t)=>a+M(t.amount),0);const p=Math.min(100,sp/b.limit*100).toFixed(0);return`<div><div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:3px"><span>${getCatIcon(b.category)} ${esc(b.category)}</span><span style="font-family:'DM Mono',monospace;color:${p>90?'var(--red)':p>70?'var(--yel)':'var(--t2)'}">${fmt(sp)}/${fmt(b.limit)}</span></div><div class="pw"><div class="pb" style="width:${p}%;background:${p>90?'var(--redg)':p>70?'var(--yelg)':'var(--acg)'}"></div></div></div>`});
-    return[`<div class="card card-click" onclick="go('budget')"><div class="slbl">Presupuesto del mes</div><div class="g2">${items.join('')}</div></div>`];
+    return[`<div class="card card-click" onclick="go('budget')"><div class="slbl">${slblBadge('📅','#22d3ee')} Presupuesto del mes</div><div class="g2">${items.join('')}</div></div>`];
   };
   // Próximos pagos: suscripciones y préstamos (que yo debo) con fecha
   // dentro de los próximos 30 días.
@@ -3669,7 +3675,7 @@ function renderDash(){
     });
     up.sort((a,b)=>a.days-b.days);
     const shown=up.slice(0,5);
-    return[`<div class="card"><div class="slbl">Próximos pagos</div>${shown.length?shown.map(i=>`<div style="display:flex;justify-content:space-between;align-items:center;padding:8px 0;border-bottom:1px solid var(--bdr)"><div style="display:flex;align-items:center;gap:9px"><div style="width:28px;height:28px;border-radius:50%;background:var(--bg4);display:flex;align-items:center;justify-content:center;font-size:12px">${i.icon}</div><div><div style="font-size:13px">${esc(i.label)}</div><div style="font-size:11px;color:var(--t3)">${esc(i.kind)} · ${fmtDate(i.date)}${i.days===0?' · Hoy':i.days===1?' · Mañana':' · en '+i.days+' días'}</div></div></div><div style="font-family:'DM Mono',monospace;font-size:13px;color:var(--exp)">${fmt(i.amount)}</div></div>`).join(''):emptyState('📅','Sin pagos próximos','No tienes suscripciones ni préstamos con vencimiento en los próximos 30 días.')}</div>`];
+    return[`<div class="card"><div class="slbl">${slblBadge('📆','#ff5f6d')} Próximos pagos</div>${shown.length?shown.map(i=>`<div style="display:flex;justify-content:space-between;align-items:center;padding:8px 0;border-bottom:1px solid var(--bdr)"><div style="display:flex;align-items:center;gap:9px"><div style="width:28px;height:28px;border-radius:50%;background:var(--bg4);display:flex;align-items:center;justify-content:center;font-size:12px">${i.icon}</div><div><div style="font-size:13px">${esc(i.label)}</div><div style="font-size:11px;color:var(--t3)">${esc(i.kind)} · ${fmtDate(i.date)}${i.days===0?' · Hoy':i.days===1?' · Mañana':' · en '+i.days+' días'}</div></div></div><div style="font-family:'DM Mono',monospace;font-size:13px;color:var(--exp)">${fmt(i.amount)}</div></div>`).join(''):emptyState('📅','Sin pagos próximos','No tienes suscripciones ni préstamos con vencimiento en los próximos 30 días.')}</div>`];
   };
   const widgetBuilders={txs:buildTxs,cats:buildCats,accs:buildAccs,tdc:buildTdc,subs:buildSubs,debts:buildDebts,goals:buildGoals,budget:buildBudget,upcoming:buildUpcoming,health:buildHealth};
   const allParts=[];
