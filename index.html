@@ -755,12 +755,10 @@ body.modal-open #bottom-nav{display:none !important}
     <button class="btn bp sm" onclick="saveAspecto()">Guardar cambios</button>
   </div>
   <div id="cfg-dashboard" style="display:none">
-    <div class="ss"><h3>Widgets del dashboard</h3>
+    <div class="ss">
+      <h3>Widgets del dashboard</h3>
       <div class="sr"><div><div class="si-l">Métricas del mes</div><div class="si-s">Ingreso, gasto, balance y tasa de ahorro — siempre visibles</div></div></div>
-    </div>
-    <div class="ss" style="margin-top:16px">
-      <h3>Orden de las siguientes tarjetas</h3>
-      <div style="font-size:12px;color:var(--t3);margin-bottom:10px">Usa las flechas para moverlas, y la casilla para mostrarlas/ocultarlas — el orden y las que estén activas se reflejan tal cual en el Dashboard.</div>
+      <div style="font-size:12px;color:var(--t3);margin:12px 0 10px">Usa las flechas para moverlas, y la casilla para mostrarlas/ocultarlas — el orden y las que estén activas se reflejan tal cual en el Dashboard.</div>
       <div id="dash-order-list"></div>
     </div>
   </div>
@@ -2286,7 +2284,7 @@ function emptyAppState(){
     accounts:[],transactions:[],categories:[],
     debts_owed:[],debts_iowe:[],goals:[],ev_records:[],budgets:[],subscriptions:[],
     settings:{name:'',currency:'MXN',theme:'dark',accent:'green'},
-    dw:{metrics:true,txs:true,cats:true,accs:true,goals:true,budget:false,upcoming:true,subs:true,debts:true},
+    dw:{metrics:true,txs:true,cats:true,accs:true,tdc:true,goals:true,budget:false,upcoming:true,subs:true,debts:true},
     notif:{budget:true,debts:true,subs:true,goals:true},
     vehicles:[],customSections:[],budgetRollover:false,nwHistory:[]
   };
@@ -2309,7 +2307,7 @@ let S = JSON.parse(localStorage.getItem('finance_v4')||'null') || {
   ],
   debts_owed:[],debts_iowe:[],goals:[],ev_records:[],budgets:[],subscriptions:[],
   settings:{name:'',currency:'MXN',theme:'dark',accent:'green'},
-  dw:{metrics:true,txs:true,cats:true,accs:true,goals:true,budget:false,upcoming:true,subs:true,debts:true},
+  dw:{metrics:true,txs:true,cats:true,accs:true,tdc:true,goals:true,budget:false,upcoming:true,subs:true,debts:true},
   notif:{budget:true,debts:true,subs:true,goals:true},
   vehicles:[],customSections:[],budgetRollover:false,nwHistory:[]
 };
@@ -3445,40 +3443,42 @@ function renderDash(){
   // para poder reordenarlas todas) y muestran su información COMPLETA;
   // si una lista es más larga que la tarjeta, se desplaza con scroll
   // interno en vez de cortarse.
+  // Cuentas y Tarjetas de crédito son DOS widgets independientes (antes
+  // "accs" generaba ambas tarjetas juntas bajo un solo interruptor —
+  // por eso Tarjetas de crédito no aparecía como opción propia en
+  // Ajustes → Dashboard, aunque sí se veía como tarjeta separada en el
+  // Dashboard). Ahora cada una tiene su propio nombre, casilla y orden.
   const buildAccs=()=>{
-    const out=[];
     const cashDebit=S.accounts.filter(a=>!a.archived&&(a.type==='cash'||a.type==='debit'));
-    const creditAccs=S.accounts.filter(a=>!a.archived&&a.type==='credit');
     const cashDebitTotal=cashDebit.reduce((s,a)=>s+(a.balanceHidden?0:M(a.balance)),0);
     const anyHidden=cashDebit.some(a=>a.balanceHidden);
-    out.push(`<div class="card dcard-half card-click" onclick="go('accounts')">
+    return[`<div class="card dcard-half card-click" onclick="go('accounts')">
       <div class="slbl">🏦 Cuentas</div>
       ${cashDebit.length?cashDebit.map(a=>`<div style="display:flex;justify-content:space-between;align-items:center;padding:7px 0;border-bottom:1px solid var(--bdr)"><div style="display:flex;align-items:center;gap:8px"><div style="width:8px;height:8px;border-radius:50%;background:${a.color||'var(--ac)'};flex-shrink:0"></div><span style="font-size:13px">${esc(a.name)}${a.locked?' 🔒':''}</span></div><span style="font-family:'DM Mono',monospace;font-size:13px;color:${a.balanceHidden?'var(--t3)':M(a.balance)>=0?'var(--inc)':'var(--exp)'}">${accBalanceLabel(a)}</span></div>`).join(''):'<div style="color:var(--t3);font-size:13px;padding:8px 0">Sin cuentas de efectivo/débito</div>'}
       ${cashDebit.length?`<div style="display:flex;justify-content:space-between;padding-top:9px;margin-top:3px;font-weight:600"><span style="font-size:13px">Total</span><span style="font-family:'DM Mono',monospace;font-size:13px;color:${cashDebitTotal>=0?'var(--inc)':'var(--exp)'}">${anyHidden?'••••••':fmt(cashDebitTotal)}</span></div>`:''}
-    </div>`);
-    // Tarjetas de crédito en su propia tarjeta — mezclarlas con
-    // efectivo/débito en el mismo total no tiene sentido (es deuda
-    // disponible, no dinero tuyo).
-    if(creditAccs.length){
-      out.push(`<div class="card dcard-half card-click" onclick="go('accounts')">
-        <div class="slbl">💳 Tarjetas de crédito</div>
-        ${creditAccs.map(a=>{
-          const available=M(a.balance||0);
-          const periodSpend=tdcPeriodSpend(a);
-          return`<div style="padding:8px 0;border-bottom:1px solid var(--bdr)">
-            <div style="display:flex;justify-content:space-between;align-items:center">
-              <div style="display:flex;align-items:center;gap:8px"><div style="width:8px;height:8px;border-radius:50%;background:${a.color||'var(--pur)'};flex-shrink:0"></div><span style="font-size:13px">${esc(a.name)}${a.locked?' 🔒':''}</span></div>
-              <span style="font-size:11px;color:var(--t3)">${a.limit?'Límite: '+fmt(a.limit):''}</span>
-            </div>
-            <div style="display:flex;justify-content:space-between;margin-top:4px">
-              <span style="font-size:11px;color:var(--t3)">Gasto del periodo: <span style="font-family:'DM Mono',monospace;color:var(--red)">${a.balanceHidden?'••••':periodSpend!==null?fmt(periodSpend):'—'}</span></span>
-              <span style="font-size:11px;color:var(--t3)">Disponible: <span style="font-family:'DM Mono',monospace;color:var(--t2)">${a.balanceHidden?'••••':fmt(available)}</span></span>
-            </div>
-          </div>`;
-        }).join('')}
-      </div>`);
-    }
-    return out;
+    </div>`];
+  };
+  const buildTdc=()=>{
+    const creditAccs=S.accounts.filter(a=>!a.archived&&a.type==='credit');
+    if(!creditAccs.length)return[`<div class="card dcard-half card-click" onclick="go('accounts')"><div class="slbl">💳 Tarjetas de crédito</div><div style="color:var(--t3);font-size:13px;padding:8px 0">Sin tarjetas de crédito</div></div>`];
+    return[`<div class="card dcard-half card-click" onclick="go('accounts')">
+      <div class="slbl">💳 Tarjetas de crédito</div>
+      ${creditAccs.map(a=>{
+        const available=M(a.balance||0);
+        const periodSpend=tdcPeriodSpend(a);
+        return`<div style="padding:8px 0;border-bottom:1px solid var(--bdr)">
+          <div style="display:flex;justify-content:space-between;align-items:center">
+            <div style="display:flex;align-items:center;gap:8px"><div style="width:8px;height:8px;border-radius:50%;background:${a.color||'var(--pur)'};flex-shrink:0"></div><span style="font-size:13px">${esc(a.name)}${a.locked?' 🔒':''}</span></div>
+            <span style="font-size:11px;color:var(--t3)">${a.limit?'Límite: '+fmt(a.limit):''}</span>
+          </div>
+          <div style="display:flex;justify-content:space-between;margin-top:4px">
+            <span style="font-size:11px;color:var(--t3)">Gasto del periodo: <span style="font-family:'DM Mono',monospace;color:var(--red)">${a.balanceHidden?'••••':periodSpend!==null?fmt(periodSpend):'—'}</span></span>
+            <span style="font-size:11px;color:var(--t3)">Disponible: <span style="font-family:'DM Mono',monospace;color:var(--t2)">${a.balanceHidden?'••••':fmt(available)}</span></span>
+          </div>
+        </div>`;
+      }).join('')}
+    </div>`];
+
   };
   const buildSubs=()=>{
     const activeSubs=S.subscriptions.filter(s=>(s.status||'active')==='active');
@@ -3535,9 +3535,13 @@ function renderDash(){
     const shown=up.slice(0,5);
     return[`<div class="card"><div class="slbl">Próximos pagos</div>${shown.length?shown.map(i=>`<div style="display:flex;justify-content:space-between;align-items:center;padding:8px 0;border-bottom:1px solid var(--bdr)"><div style="display:flex;align-items:center;gap:9px"><div style="width:28px;height:28px;border-radius:50%;background:var(--bg4);display:flex;align-items:center;justify-content:center;font-size:12px">${i.icon}</div><div><div style="font-size:13px">${esc(i.label)}</div><div style="font-size:11px;color:var(--t3)">${esc(i.kind)} · ${fmtDate(i.date)}${i.days===0?' · Hoy':i.days===1?' · Mañana':' · en '+i.days+' días'}</div></div></div><div style="font-family:'DM Mono',monospace;font-size:13px;color:var(--exp)">${fmt(i.amount)}</div></div>`).join(''):emptyState('📅','Sin pagos próximos','No tienes suscripciones ni préstamos con vencimiento en los próximos 30 días.')}</div>`];
   };
-  const widgetBuilders={txs:buildTxs,cats:buildCats,accs:buildAccs,subs:buildSubs,debts:buildDebts,goals:buildGoals,budget:buildBudget,upcoming:buildUpcoming};
+  const widgetBuilders={txs:buildTxs,cats:buildCats,accs:buildAccs,tdc:buildTdc,subs:buildSubs,debts:buildDebts,goals:buildGoals,budget:buildBudget,upcoming:buildUpcoming};
   const allParts=[];
-  getDashOrder().forEach(k=>{if(dw[k]&&widgetBuilders[k])allParts.push(...widgetBuilders[k]())});
+  // dw[k]===undefined (widget nuevo agregado después de que ya existía tu
+  // configuración guardada, como "tdc" hoy) se trata como visible por
+  // defecto — si no, un widget nuevo aparecería oculto para quien ya tenía
+  // Ajustes guardados, aunque nunca lo haya apagado a propósito.
+  getDashOrder().forEach(k=>{if(dw[k]!==false&&widgetBuilders[k])allParts.push(...widgetBuilders[k]())});
   $('d-grid').innerHTML=allParts.join('');
 }
 
@@ -5460,14 +5464,14 @@ function renderLoansHistory(){
 }
 function applyTheme(){const d=$('cfg-dark').checked;document.documentElement.setAttribute('data-theme',d?'dark':'light');S.settings.theme=d?'dark':'light';save();pushSettings();}
 function setAccent(a,el){document.documentElement.setAttribute('data-accent',a==='green'?'':a);document.querySelectorAll('.swatch[data-a]').forEach(s=>s.classList.remove('sel'));el.classList.add('sel');S.settings.accent=a;save();pushSettings();}
-const DASH_ORDER_LABELS={txs:'Últimas transacciones',cats:'Gastos por categoría',accs:'Resumen de cuentas',subs:'Suscripciones',debts:'Préstamos',goals:'Objetivos',budget:'Presupuesto del mes',upcoming:'Próximos pagos'};
+const DASH_ORDER_LABELS={txs:'Últimas transacciones',cats:'Gastos por categoría',accs:'Cuentas',tdc:'Tarjetas de crédito',subs:'Suscripciones',debts:'Préstamos',goals:'Objetivos',budget:'Presupuesto del mes',upcoming:'Próximos pagos'};
 // Orden por defecto: primero las tarjetas grandes (altura completa), y al
 // final las de media altura (accs=Cuentas+Tarjetas, debts, goals) — así
 // quedan pareadas de 2 en 2 en vez de intercaladas con una grande al lado
 // (que dejaría un hueco visual, ya que la fila toma la altura de la
 // tarjeta más alta). Esto solo es el punto de partida — se puede
 // reordenar libremente desde Ajustes → Dashboard en cualquier momento.
-const DASH_ORDER_DEFAULT=['txs','cats','subs','budget','upcoming','accs','debts','goals'];
+const DASH_ORDER_DEFAULT=['txs','cats','subs','budget','upcoming','accs','tdc','debts','goals'];
 function getDashOrder(){
   const o=S.dw.order;
   if(!o||!o.length)return[...DASH_ORDER_DEFAULT];
@@ -5490,7 +5494,7 @@ function moveDashWidget(key,dir){
   S.dw.order=order;save();pushSettings();
   renderDashOrderList();renderDash();
 }
-function saveDW(){['txs','cats','accs','goals','budget','upcoming','subs','debts'].forEach(k=>{const el=$('w-'+k);if(el)S.dw[k]=el.checked});save();pushSettings();renderDash();toast('Dashboard actualizado')}
+function saveDW(){['txs','cats','accs','tdc','goals','budget','upcoming','subs','debts'].forEach(k=>{const el=$('w-'+k);if(el)S.dw[k]=el.checked});save();pushSettings();renderDash();toast('Dashboard actualizado')}
 function saveNotif(){if(!S.notif)S.notif={};['bgt','dbt','sub','gol'].forEach(k=>{const el=$('n-'+k);if(el)S.notif[k]=el.checked});save();toast('Preferencias guardadas')}
 function exportData(){const a=document.createElement('a');a.href='data:application/json,'+encodeURIComponent(JSON.stringify(S,null,2));a.download='finance-backup.json';a.click();toast('Datos exportados')}
 function importData(e){const f=e.target.files[0];if(!f)return;const r=new FileReader();r.onload=ev=>{try{S=JSON.parse(ev.target.result);save();renderDash();toast('Datos importados')}catch{toast('Archivo inválido',false)}};r.readAsText(f)}
