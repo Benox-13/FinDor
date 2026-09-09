@@ -112,7 +112,12 @@ body{background:var(--bg);color:var(--txt);font-family:'Sora',sans-serif;font-si
    alto — su contenido normalmente es corto y se veían con demasiado
    espacio vacío. Si el contenido no cabe en esta altura, se desplaza con
    scroll interno en vez de cortarse. */
-.dgrid>.card.dcard-half{height:160px}
+.dgrid>.card.dcard-half{height:160px;position:relative;overflow:hidden}
+/* Mismo lenguaje visual del hero de patrimonio (resplandor sutil en una
+   esquina) aplicado a las tarjetas chicas, para que se sientan parte de
+   la misma familia — un solo tono (el acento) en vez de un color
+   distinto por tarjeta, así no se ve "arcoíris". */
+.dgrid>.card.dcard-half::before{content:'';position:absolute;top:-34px;right:-34px;width:120px;height:120px;border-radius:50%;background:radial-gradient(circle,var(--ac) 0%,transparent 70%);opacity:.12;pointer-events:none}
 .g3{display:grid;grid-template-columns:repeat(3,1fr);gap:16px}
 .g4{display:grid;grid-template-columns:repeat(4,1fr);gap:14px}
 
@@ -133,6 +138,10 @@ body{background:var(--bg);color:var(--txt);font-family:'Sora',sans-serif;font-si
 .m_ .mv{font-family:'DM Mono',monospace;font-size:22px;font-weight:500;line-height:1}
 .m_-inc .mv{color:var(--inc)}.m_-exp .mv{color:var(--exp)}.m_-bal .mv{color:var(--blu)}.m_-sav .mv{color:var(--pur)}
 .m_ .ms{font-size:11px;color:var(--t3);margin-top:6px}
+/* Mini-gráfica de tendencia (6 meses) dentro de cada tarjeta de métrica —
+   se ve por encima del círculo decorativo (que ya tiene z-index natural
+   por venir antes en el DOM), sutil, sin competir con el número grande. */
+.m_-spark{position:relative;z-index:1;margin-top:10px;height:28px;opacity:.55}
 /* fallback generic metric */
 .m_{background:var(--bg2);border:1px solid var(--bdr)}
 .gc{color:var(--ac)}.rc{color:var(--red)}.yc{color:var(--yel)}.blc{color:var(--blu)}.pc{color:var(--pur)}
@@ -362,6 +371,7 @@ body.modal-open #bottom-nav{display:none !important}
   #d-metrics .ml{font-size:9.5px;margin-bottom:5px}
   #d-metrics .mv{font-size:16px}
   #d-metrics .ms{font-size:9.5px;margin-top:3px}
+  #d-metrics .m_-spark{height:20px;margin-top:6px}
   /* Los modales ya usaban width:100% con max-width, así que se adaptan
      solos — solo reducimos un poco el padding exterior para ganar espacio.
      max-width:calc(100vw - 20px) es un refuerzo extra: si algo dentro del
@@ -489,10 +499,10 @@ body.modal-open #bottom-nav{display:none !important}
   </div>
   <div id="d-nw-hero"></div>
   <div id="d-metrics" class="g4" style="margin-bottom:16px">
-    <div class="m_ m_-inc"><div class="ml">Ingresos mes</div><div class="mv" id="d-inc">$0</div></div>
-    <div class="m_ m_-exp"><div class="ml">Gastos mes</div><div class="mv" id="d-exp">$0</div></div>
-    <div class="m_ m_-bal"><div class="ml">Balance mes</div><div class="mv" id="d-bal">$0</div></div>
-    <div class="m_ m_-sav"><div class="ml">Tasa ahorro</div><div class="mv" id="d-sav">0%</div><div class="ms">del ingreso</div></div>
+    <div class="m_ m_-inc"><div class="ml">Ingresos mes</div><div class="mv" id="d-inc">$0</div><div class="m_-spark" id="d-inc-spk"></div></div>
+    <div class="m_ m_-exp"><div class="ml">Gastos mes</div><div class="mv" id="d-exp">$0</div><div class="m_-spark" id="d-exp-spk"></div></div>
+    <div class="m_ m_-bal"><div class="ml">Balance mes</div><div class="mv" id="d-bal">$0</div><div class="m_-spark" id="d-bal-spk"></div></div>
+    <div class="m_ m_-sav"><div class="ml">Tasa ahorro</div><div class="mv" id="d-sav">0%</div><div class="ms">del ingreso</div><div class="m_-spark" id="d-sav-spk"></div></div>
   </div>
   <div id="d-grid" class="dgrid"></div>
 </div>
@@ -3484,6 +3494,19 @@ function renderDash(){
     $('d-inc').textContent=fmt(inc);$('d-exp').textContent=fmt(exp);
     const be=$('d-bal');be.textContent=fmt(bal);be.style.color=bal>=0?'var(--inc)':'var(--exp)';
     const se=$('d-sav');se.textContent=sav+'%';se.style.color=sav>=20?'var(--inc)':sav>=10?'var(--yel)':'var(--exp)';
+    // Mini-gráficas de tendencia (últimos 6 meses) dentro de cada tarjeta
+    // de métrica — mismo recurso visual que el hero de patrimonio, para
+    // que de un vistazo se vea si vas mejorando o empeorando, no solo el
+    // número de este mes solo.
+    const months6=[...Array(6)].map((_,i)=>{const d=new Date(yr,mo-5+i,1);return{m:d.getMonth(),y:d.getFullYear()}});
+    const incSeries=months6.map(({m,y})=>S.transactions.filter(t=>t.type==='income'&&dateLocal(t.date).getMonth()===m&&dateLocal(t.date).getFullYear()===y).reduce((a,t)=>a+M(t.amount),0));
+    const expSeries=months6.map(({m,y})=>S.transactions.filter(t=>t.type==='expense'&&dateLocal(t.date).getMonth()===m&&dateLocal(t.date).getFullYear()===y).reduce((a,t)=>a+M(t.amount),0));
+    const balSeries=incSeries.map((v,i)=>v-expSeries[i]);
+    const savSeries=incSeries.map((v,i)=>v>0?Math.round(balSeries[i]/v*100):0);
+    $('d-inc-spk').innerHTML=sparklineSVG(incSeries,'#30d693',160,28);
+    $('d-exp-spk').innerHTML=sparklineSVG(expSeries,'#ff5f6d',160,28);
+    $('d-bal-spk').innerHTML=sparklineSVG(balSeries,'#4e9eff',160,28);
+    $('d-sav-spk').innerHTML=sparklineSVG(savSeries,'#a855f7',160,28);
   }
   // Build grid of enabled widgets
   // Rediseño: TODOS los widgets (antes solo 4 de 8 se podían reordenar,
