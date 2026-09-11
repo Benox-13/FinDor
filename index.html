@@ -829,6 +829,27 @@ body.modal-open #bottom-nav{display:none !important}
   </div>
 </div>
 
+<!-- INVESTMENTS PAGE (misma estructura que vehículos) -->
+<div id="page-investments" class="page">
+  <div class="ph">
+    <div><div class="pt">📈 Mis Inversiones</div><div class="ps">Apuestas, cripto y negocios</div></div>
+    <button class="btn bp" onclick="openInvestmentM()">+ Agregar inversión</button>
+  </div>
+  <div id="investments-list" class="g3" style="margin-bottom:24px"></div>
+  <div id="investment-detail" style="display:none">
+    <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:18px;flex-wrap:wrap">
+      <div style="display:flex;align-items:center;gap:10px">
+        <button class="btn bg_ sm" onclick="closeInvestmentDetail()">← Volver</button>
+        <div class="pt" id="id-title" style="font-size:20px"></div>
+      </div>
+      <button class="btn bp" id="id-add-btn" onclick="openIRec(currentInvestmentId)">+ Movimiento</button>
+    </div>
+    <div class="g4" style="margin-bottom:16px" id="id-stats"></div>
+    <div class="tabs" id="id-tabs"></div>
+    <div class="card"><div class="tw"><table><thead><tr><th>Fecha</th><th>Tipo</th><th>Detalle</th><th>Monto</th><th></th></tr></thead><tbody id="id-tb"></tbody></table></div></div>
+  </div>
+</div>
+
 <!-- CUSTOM SECTION PAGE (dynamic, one per section) -->
 <div id="page-custom-section" class="page">
   <div class="ph">
@@ -1288,6 +1309,64 @@ body.modal-open #bottom-nav{display:none !important}
   </div>
 </div>
 
+<!-- INVESTMENT MODAL -->
+<div class="mo" id="mo-investment">
+  <div class="md">
+    <div class="mh"><span class="mttl" id="investment-modal-title">Agregar inversión</span><button class="btn bg_ ico sm" onclick="cM('mo-investment')">✕</button></div>
+    <div class="mbody">
+      <input type="hidden" id="inv-eid">
+      <div class="fg"><label class="fl">Nombre</label><input class="fc" type="text" id="inv-name" placeholder="Ej: Bet365, Binance, Mi taquería..."></div>
+      <div class="fg"><label class="fl">Tipo</label>
+        <select class="fc" id="inv-type">
+          <option value="apuesta">🎲 Apuesta</option>
+          <option value="cripto">₿ Cripto</option>
+          <option value="negocio">🏢 Negocio</option>
+        </select>
+      </div>
+      <div class="fg"><label class="fl">Valor actual ($)</label><input class="fc" type="number" id="inv-value" placeholder="0.00" step="0.01">
+        <div style="font-size:11px;color:var(--t3);margin-top:4px">Actualízalo cuando quieras — no se calcula solo, tú decides cuánto vale hoy</div>
+      </div>
+      <div class="fg"><label class="fl">Color</label>
+        <div style="display:flex;gap:7px;margin-top:4px" id="inv-colors">
+          <div class="swatch sel" data-c="#30d693" style="background:#30d693" onclick="selInvColor('#30d693',this)"></div>
+          <div class="swatch" data-c="#4e9eff" style="background:#4e9eff" onclick="selInvColor('#4e9eff',this)"></div>
+          <div class="swatch" data-c="#a855f7" style="background:#a855f7" onclick="selInvColor('#a855f7',this)"></div>
+          <div class="swatch" data-c="#ffb340" style="background:#ffb340" onclick="selInvColor('#ffb340',this)"></div>
+          <div class="swatch" data-c="#ff5f6d" style="background:#ff5f6d" onclick="selInvColor('#ff5f6d',this)"></div>
+          <div class="swatch" data-c="#ff7043" style="background:#ff7043" onclick="selInvColor('#ff7043',this)"></div>
+        </div>
+      </div>
+      <div class="fg"><label class="fl">Notas</label><input class="fc" type="text" id="inv-notes" placeholder="Opcional"></div>
+    </div>
+    <div class="mfoot"><button class="btn bg_ sm" onclick="cM('mo-investment')">Cancelar</button><button class="btn bp sm" onclick="saveInvestment()">Guardar</button></div>
+  </div>
+</div>
+
+<!-- INVESTMENT RECORD MODAL -->
+<div class="mo" id="mo-irec">
+  <div class="md">
+    <div class="mh"><span class="mttl" id="irec-ttl">Nuevo movimiento</span><button class="btn bg_ ico sm" onclick="cM('mo-irec')">✕</button></div>
+    <div class="mbody">
+      <input type="hidden" id="ir-eid"><input type="hidden" id="ir-iid">
+      <div class="g2">
+        <div class="fg"><label class="fl">Fecha</label><input class="fc" type="date" id="ir-dt"></div>
+        <div class="fg"><label class="fl">Tipo</label><select class="fc" id="ir-type" onchange="onIrTypeChange()"></select></div>
+      </div>
+      <div class="fg"><label class="fl">Monto ($)</label><input class="fc" type="number" id="ir-amt" placeholder="0.00" step="0.01"></div>
+      <div class="fg"><label class="fl">Notas</label><input class="fc" type="text" id="ir-notes" placeholder="Detalle adicional"></div>
+      <div class="sr" style="margin-top:4px;padding:10px;background:var(--bg3);border-radius:var(--r2);border:1px solid var(--bdr)">
+        <div><div class="si-l" style="font-size:13px">¿Generar transacción?</div><div class="si-s">Refleja este movimiento en una cuenta real</div></div>
+        <label class="sw"><input type="checkbox" id="ir-autotx" onchange="togIrAutotx()"><span class="sl"></span></label>
+      </div>
+      <div id="ir-tx-fields-g" class="g2" style="display:none">
+        <div class="fg"><label class="fl">Cuenta</label><select class="fc" id="ir-acc"></select></div>
+        <div class="fg"><label class="fl">Categoría</label><select class="fc" id="ir-cat"></select></div>
+      </div>
+    </div>
+    <div class="mfoot"><button class="btn bg_ sm" onclick="cM('mo-irec')">Cancelar</button><button class="btn bp sm" onclick="saveIRec()">Guardar</button></div>
+  </div>
+</div>
+
 <!-- CUSTOM SECTION MODAL (create/edit section) -->
 <div class="mo" id="mo-sec">
   <div class="md">
@@ -1549,6 +1628,15 @@ async function execRetryableWrite(desc){
       const r=(v.records||[]).find(x=>x.id===desc.recordId);if(!r)return true;
       return await cloudWrite(sb.from('vehicle_records').upsert(vehicleRecordToCloud(r,desc.vehicleId),{onConflict:'id'}),'sincronizar registro de vehículo');
     }
+    case 'investment':{
+      const v=Store.getInvestmentById(desc.id);if(!v)return true;
+      return await cloudWrite(sb.from('investments').upsert(investmentToCloud(v),{onConflict:'id'}),`sincronizar inversión ${v.name}`);
+    }
+    case 'investment_record':{
+      const v=Store.getInvestmentById(desc.investmentId);if(!v)return true;
+      const r=(v.records||[]).find(x=>x.id===desc.recordId);if(!r)return true;
+      return await cloudWrite(sb.from('investment_records').upsert(investmentRecordToCloud(r,desc.investmentId),{onConflict:'id'}),'sincronizar movimiento de inversión');
+    }
     case 'custom_section':{
       const s=Store.getCustomSectionById(desc.id);if(!s)return true;
       return await cloudWrite(sb.from('custom_sections').upsert(customSectionToCloud(s),{onConflict:'id'}),`sincronizar sección ${s.name}`);
@@ -1718,7 +1806,7 @@ async function pullFromSupabase(){
   if(!sb)return;
   try{
     const tables=['accounts','categories','subcategories','transactions','debts','goals',
-      'subscriptions','budgets','vehicles','vehicle_records','custom_sections',
+      'subscriptions','budgets','vehicles','vehicle_records','investments','investment_records','custom_sections',
       'custom_section_members','custom_section_categories','custom_section_records',
       'settings','net_worth_snapshots'];
     const results={};
@@ -1831,6 +1919,14 @@ async function pullFromSupabase(){
       })),
     }));
 
+    // --- inversiones + movimientos anidados (mismo patrón que vehículos) ---
+    const newInvestments=results.investments.map(v=>({
+      id:v.id,name:v.name,type:v.type,color:v.color||null,currentValue:centsToAmt(v.current_value_cents),notes:v.notes||'',
+      records:results.investment_records.filter(r=>r.investment_id===v.id).map(r=>({
+        id:r.id,dt:r.dt,type:r.type,amount:centsToAmt(r.amount_cents),notes:r.notes||'',txId:r.tx_id||null,
+      })),
+    }));
+
     // --- custom sections + members/categories/records anidados ---
     const memberById={};results.custom_section_members.forEach(m=>memberById[m.id]=m);
     const newCustomSections=results.custom_sections.map(s=>({
@@ -1868,7 +1964,7 @@ async function pullFromSupabase(){
     // abajo evita que lleguemos a pisar los datos locales a medias.
     S.accounts=newAccounts;S.categories=newCategories;S.transactions=newTransactions;
     S.debts_owed=newDebtsOwed;S.debts_iowe=newDebtsIowe;S.goals=newGoals;
-    S.subscriptions=newSubscriptions;S.budgets=newBudgets;S.vehicles=newVehicles;
+    S.subscriptions=newSubscriptions;S.budgets=newBudgets;S.vehicles=newVehicles;S.investments=newInvestments;
     S.customSections=newCustomSections;S.settings=newSettings;S.dw=newDw;S.notif=newNotif;
     S.nwHistory=newNwHistory;
     save();
@@ -1970,6 +2066,14 @@ function vehicleToCloud(v){
 function vehicleRecordToCloud(r,vehicleId){
   return{id:r.id,user_id:currentUserId,vehicle_id:vehicleId,dt:r.dt,type:r.type,qty:r.qty||null,
     cost_cents:amtToCents(r.cost||0),km:r.km||null,notes:r.notes||null,tx_id:isUUID(r.txId)?r.txId:null};
+}
+function investmentToCloud(v){
+  return{id:v.id,user_id:currentUserId,name:v.name,type:v.type,color:v.color||null,
+    current_value_cents:amtToCents(v.currentValue||0),notes:v.notes||null};
+}
+function investmentRecordToCloud(r,investmentId){
+  return{id:r.id,user_id:currentUserId,investment_id:investmentId,dt:r.dt,type:r.type,
+    amount_cents:amtToCents(r.amount||0),notes:r.notes||null,tx_id:isUUID(r.txId)?r.txId:null};
 }
 function customSectionToCloud(s){
   return{id:s.id,user_id:currentUserId,name:s.name,icon:s.icon||null,member_label:s.memberLabel||'Miembro'};
@@ -2334,7 +2438,7 @@ function emptyAppState(){
     settings:{name:'',currency:'MXN',theme:'dark',accent:'green'},
     dw:{metrics:true,txs:true,cats:true,accs:true,tdc:true,goals:true,budget:false,upcoming:true,subs:true,debts:true,health:true},
     notif:{budget:true,debts:true,subs:true,goals:true},
-    vehicles:[],customSections:[],budgetRollover:false,nwHistory:[]
+    vehicles:[],investments:[],customSections:[],budgetRollover:false,nwHistory:[]
   };
 }
 let S = JSON.parse(localStorage.getItem('finance_v4')||'null') || {
@@ -2357,7 +2461,7 @@ let S = JSON.parse(localStorage.getItem('finance_v4')||'null') || {
   settings:{name:'',currency:'MXN',theme:'dark',accent:'green'},
   dw:{metrics:true,txs:true,cats:true,accs:true,tdc:true,goals:true,budget:false,upcoming:true,subs:true,debts:true,health:true},
   notif:{budget:true,debts:true,subs:true,goals:true},
-  vehicles:[],customSections:[],budgetRollover:false,nwHistory:[]
+  vehicles:[],investments:[],customSections:[],budgetRollover:false,nwHistory:[]
 };
 
 function save(){
@@ -2496,6 +2600,15 @@ const Store = {
       if(patch.date!==undefined)vpatch.dt=updated.date;
       this.updateVehicleRecord(linkedVeh.vehicleId,linkedVeh.record.id,vpatch);
     }
+    // Mismo mecanismo para inversiones — un movimiento de inversión ligado
+    // también refleja el nuevo monto/fecha si se edita desde Transacciones.
+    const linkedInv=this.findInvestmentRecordByTxId(id);
+    if(linkedInv&&(patch.amount!==undefined||patch.date!==undefined)){
+      const ipatch={};
+      if(patch.amount!==undefined)ipatch.amount=updated.amount;
+      if(patch.date!==undefined)ipatch.dt=updated.date;
+      this.updateInvestmentRecord(linkedInv.investmentId,linkedInv.record.id,ipatch);
+    }
     if(updated.debtId)this.recalcDebtPaid(updated.debtId);
     if(old.debtId&&old.debtId!==updated.debtId)this.recalcDebtPaid(old.debtId);
     if(updated.goalId)this.recalcGoalSaved(updated.goalId);
@@ -2520,6 +2633,10 @@ const Store = {
     // aunque ya no haya un cargo asociado a ninguna cuenta).
     const linkedVeh=this.findVehicleRecordByTxId(id);
     if(linkedVeh)this.updateVehicleRecord(linkedVeh.vehicleId,linkedVeh.record.id,{txId:null});
+    // Mismo criterio para inversiones — se desvincula, no se borra el
+    // movimiento (conserva el historial aunque ya no haya cargo real).
+    const linkedInv=this.findInvestmentRecordByTxId(id);
+    if(linkedInv)this.updateInvestmentRecord(linkedInv.investmentId,linkedInv.record.id,{txId:null});
     if(tx.debtId)this.recalcDebtPaid(tx.debtId);
     if(tx.goalId)this.recalcGoalSaved(tx.goalId);
     save();
@@ -3010,6 +3127,76 @@ const Store = {
     v.records=(v.records||[]).filter(r=>r.id!==recordId);
     save();
     if(sb&&currentUserId&&isUUID(recordId))cloudWrite(sb.from('vehicle_records').update({deleted_at:new Date().toISOString()}).eq('id',recordId),'borrar registro de vehículo');
+  },
+
+  // ---------------- INVERSIONES (mismo patrón que Vehículos) ----------------
+  getInvestments(){ return S.investments; },
+  getInvestmentById(id){ return S.investments.find(v=>v.id===id); },
+  // Mismo mecanismo que findVehicleRecordByTxId — deja que updateTransaction/
+  // deleteTransaction reflejen el cambio también en el movimiento de
+  // inversión ligado, en vez de quedar desincronizados.
+  findInvestmentRecordByTxId(txId){
+    for(const v of S.investments){
+      const r=(v.records||[]).find(x=>x.txId===txId);
+      if(r)return{investmentId:v.id,record:r};
+    }
+    return null;
+  },
+  addInvestment(data){
+    const v={id:uid(),records:[],...data};
+    S.investments.push(v);
+    save();
+    if(sb&&currentUserId)cloudWrite(sb.from('investments').insert(investmentToCloud(v)),`crear inversión ${v.name}`);
+    return v;
+  },
+  updateInvestment(id,patch){
+    const v=this.getInvestmentById(id);
+    if(!v)return null;
+    Object.assign(v,patch);
+    save();
+    if(sb&&currentUserId&&isUUID(id)){
+      queueRetryableWrite('investment:'+id,{fn:'investment',id});
+    }
+    return v;
+  },
+  deleteInvestment(id){
+    S.investments=S.investments.filter(v=>v.id!==id);
+    save();
+    if(sb&&currentUserId&&isUUID(id))cloudWrite(sb.from('investments').update({deleted_at:new Date().toISOString()}).eq('id',id),'borrar inversión');
+  },
+  addInvestmentRecord(investmentId,data){
+    const v=this.getInvestmentById(investmentId);
+    if(!v)return null;
+    if(!v.records)v.records=[];
+    const r={id:uid(),...data};
+    v.records.push(r);
+    save();
+    // Mismo arreglo que en vehículos: se registra en retryableWrites DESDE
+    // ANTES de intentar subir, no solo si falla — así un pull que llegue
+    // justo mientras esto está en camino no lo borra por accidente.
+    if(sb&&currentUserId&&isUUID(investmentId)){
+      queueRetryableWrite('investment_record:'+r.id,{fn:'investment_record',investmentId,recordId:r.id});
+    }
+    return r;
+  },
+  updateInvestmentRecord(investmentId,recordId,patch){
+    const v=this.getInvestmentById(investmentId);
+    if(!v)return null;
+    const idx=(v.records||[]).findIndex(r=>r.id===recordId);
+    if(idx<0)return null;
+    v.records[idx]={...v.records[idx],...patch};
+    save();
+    if(sb&&currentUserId&&isUUID(recordId)){
+      queueRetryableWrite('investment_record:'+recordId,{fn:'investment_record',investmentId,recordId});
+    }
+    return v.records[idx];
+  },
+  deleteInvestmentRecord(investmentId,recordId){
+    const v=this.getInvestmentById(investmentId);
+    if(!v)return;
+    v.records=(v.records||[]).filter(r=>r.id!==recordId);
+    save();
+    if(sb&&currentUserId&&isUUID(recordId))cloudWrite(sb.from('investment_records').update({deleted_at:new Date().toISOString()}).eq('id',recordId),'borrar movimiento de inversión');
   },
 
   // ---------------- CUSTOM SECTIONS ----------------
@@ -5743,6 +5930,16 @@ initTxMonthNav();
 
 // ==================== VEHICLES ====================
 const V_FUEL_TYPES={electric:{label:'Eléctrico',icon:'⚡',energyUnit:'kWh',energyLabel:'kWh cargados'},gasoline:{label:'Gasolina',icon:'⛽',energyUnit:'L',energyLabel:'Litros cargados'},diesel:{label:'Diésel',icon:'🛢️',energyUnit:'L',energyLabel:'Litros cargados'},hybrid:{label:'Híbrido',icon:'🔋',energyUnit:'L',energyLabel:'Litros/kWh'}};
+// ==================== INVERSIONES (mismo patrón que Vehículos) ====================
+// 3 tipos fijos: apuestas, cripto, negocios. Cada movimiento tiene una
+// "polaridad" (income/expense) que define cómo afecta la cuenta ligada si
+// se genera transacción — a diferencia de vehículos (donde TODO es gasto),
+// aquí un aporte sale de tu cuenta (expense) pero un retiro o un ingreso
+// entra a tu cuenta (income).
+const INV_TYPES={apuesta:{label:'Apuesta',icon:'🎲'},cripto:{label:'Cripto',icon:'₿'},negocio:{label:'Negocio',icon:'🏢'}};
+const INV_REC_TYPES=['aporte','ingreso','gasto','retiro'];
+const INV_TYPE_LABELS={aporte:'Aporte',ingreso:'Ingreso',gasto:'Gasto',retiro:'Retiro'};
+const INV_REC_POLARITY={aporte:'expense',ingreso:'income',gasto:'expense',retiro:'income'};
 const V_REC_TYPES=['charge','maintenance','parking','wash','insurance','installment','other'];
 const V_TYPE_LABELS={charge:'Carga/Combustible',maintenance:'Mantenimiento',parking:'Parking',wash:'Lavado',insurance:'Seguro',installment:'Mensualidad',other:'Otro'};
 const V_COLORS=['#30d693','#4e9eff','#a855f7','#ffb340','#ff5f6d','#fb923c','#f472b6','#34d399'];
@@ -6005,6 +6202,222 @@ async function delVRec(vid,rid){
   Store.deleteVehicleRecord(vid,rid);renderVehicleDetail(vid);toast('Eliminado');
 }
 
+// ==================== INVERSIONES (mismo patrón que Vehículos) ====================
+let currentInvestmentId=null;
+let evCurITab='all';
+
+function renderInvestments(){
+  const g=$('investments-list');const d=$('investment-detail');
+  const stillExists=Store.getInvestmentById(currentInvestmentId);
+  if(currentInvestmentId&&stillExists){
+    g.style.display='none';d.style.display='block';
+    renderInvestmentDetail(currentInvestmentId);return;
+  } else if(currentInvestmentId&&!stillExists){currentInvestmentId=null;}
+  g.style.display='';d.style.display='none';
+  const investments=Store.getInvestments();
+  if(!investments.length){
+    g.innerHTML=emptyState('📈','Sin inversiones','Agrega tu primera inversión — apuestas, cripto o negocios — para llevar aportes, ingresos, gastos y el valor actual.','+ Nueva inversión',"openInvestmentM()");
+    return;
+  }
+  g.innerHTML=investments.map(v=>{
+    const it=INV_TYPES[v.type]||INV_TYPES.negocio;
+    const recs=v.records||[];
+    const aportado=recs.filter(r=>r.type==='aporte').reduce((a,r)=>a+M(r.amount||0),0);
+    const retirado=recs.filter(r=>r.type==='retiro').reduce((a,r)=>a+M(r.amount||0),0);
+    const ingresos=recs.filter(r=>r.type==='ingreso').reduce((a,r)=>a+M(r.amount||0),0);
+    const gastos=recs.filter(r=>r.type==='gasto').reduce((a,r)=>a+M(r.amount||0),0);
+    const valorActual=M(v.currentValue||0);
+    // Ganancia/pérdida: lo que vale hoy + lo que ya sacaste + lo que ya te
+    // ingresó, contra lo que metiste + lo que gastaste. Si nunca aportaste
+    // nada, el % no aplica (se muestra solo el $).
+    const ganancia=valorActual+retirado+ingresos-aportado-gastos;
+    const pctGan=aportado>0?(ganancia/aportado*100):null;
+    return`<div class="card card-click" style="border-left:3px solid ${v.color||'var(--ac)'}" onclick="openInvestmentDetail('${v.id}')">
+      <div style="display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:14px">
+        <div style="font-size:32px">${it.icon}</div>
+        <div style="display:flex;align-items:center;gap:6px" onclick="event.stopPropagation()"><span class="bdg bdg-n">${it.label}</span><button class="btn bg_ ico sm" title="Más opciones" onclick="showRowMenu(this,[{label:'Editar',icon:'✎',onClick:()=>openInvestmentM('${v.id}')},{label:'Eliminar',icon:'✕',danger:true,onClick:()=>delInvestment('${v.id}')}])">⋮</button></div>
+      </div>
+      <div style="font-size:16px;font-weight:600;margin-bottom:2px">${esc(v.name)}</div>
+      <div style="font-size:12px;color:var(--t3);margin-bottom:6px">Valor actual</div>
+      <div style="font-family:'DM Mono',monospace;font-size:20px;font-weight:700;margin-bottom:12px">${fmt(valorActual)}</div>
+      <div style="display:flex;justify-content:space-between;font-size:13px">
+        <span style="color:var(--t2)">Ganancia/pérdida</span>
+        <span style="font-family:'DM Mono',monospace;color:${ganancia>=0?'var(--inc)':'var(--exp)'}">${ganancia>=0?'+':''}${fmt(ganancia)}${pctGan!==null?` (${pctGan>=0?'+':''}${pctGan.toFixed(1)}%)`:''}</span>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+function openInvestmentDetail(id){currentInvestmentId=id;evCurITab='all';renderInvestments()}
+function closeInvestmentDetail(){currentInvestmentId=null;renderInvestments()}
+
+function renderInvestmentDetail(id){
+  const v=Store.getInvestmentById(id);if(!v)return;
+  const it=INV_TYPES[v.type]||INV_TYPES.negocio;
+  $('id-title').textContent=it.icon+' '+v.name;
+  const recs=v.records||[];
+  const aportado=recs.filter(r=>r.type==='aporte').reduce((a,r)=>a+M(r.amount||0),0);
+  const retirado=recs.filter(r=>r.type==='retiro').reduce((a,r)=>a+M(r.amount||0),0);
+  const ingresos=recs.filter(r=>r.type==='ingreso').reduce((a,r)=>a+M(r.amount||0),0);
+  const gastos=recs.filter(r=>r.type==='gasto').reduce((a,r)=>a+M(r.amount||0),0);
+  const valorActual=M(v.currentValue||0);
+  const ganancia=valorActual+retirado+ingresos-aportado-gastos;
+  const pctGan=aportado>0?(ganancia/aportado*100):null;
+  $('id-stats').innerHTML=`
+    <div class="ev-s"><div class="ev-v" style="color:var(--t2)">${fmt(valorActual)}</div><div class="ev-l">valor actual</div></div>
+    <div class="ev-s"><div class="ev-v" style="color:var(--ac)">${fmt(aportado)}</div><div class="ev-l">aportado</div></div>
+    <div class="ev-s"><div class="ev-v" style="color:${ganancia>=0?'var(--inc)':'var(--exp)'}">${ganancia>=0?'+':''}${fmt(ganancia)}</div><div class="ev-l">ganancia/pérdida${pctGan!==null?` (${pctGan>=0?'+':''}${pctGan.toFixed(1)}%)`:''}</div></div>
+    <div class="ev-s"><div class="ev-v" style="color:var(--red)">${fmt(gastos)}</div><div class="ev-l">gastos</div></div>`;
+  // Tabs
+  const tabs=$('id-tabs');
+  tabs.innerHTML=`<button class="tab ${evCurITab==='all'?'on':''}" onclick="setITab('all',this)">Todos</button>`+
+    INV_REC_TYPES.map(t=>`<button class="tab ${evCurITab===t?'on':''}" onclick="setITab('${t}',this)">${INV_TYPE_LABELS[t]}</button>`).join('');
+  // Table
+  let shown=evCurITab==='all'?recs:recs.filter(r=>r.type===evCurITab);
+  shown=[...shown].sort((a,b)=>new Date(b.dt)-new Date(a.dt));
+  $('id-tb').innerHTML=shown.length?shown.map(r=>{
+    const pol=INV_REC_POLARITY[r.type];
+    return`<tr>
+    <td style="color:var(--t2)">${fmtDate(r.dt)}</td>
+    <td><span class="bdg bdg-n">${INV_TYPE_LABELS[r.type]||r.type}</span></td>
+    <td style="color:var(--t2)">${esc(r.notes)||'—'}</td>
+    <td style="font-family:'DM Mono',monospace;color:${pol==='income'?'var(--inc)':'var(--exp)'}">${pol==='income'?'+':'-'}${fmt(r.amount)}</td>
+    <td><button class="btn bg_ ico sm" title="Más opciones" onclick="showRowMenu(this,[{label:'Editar',icon:'✎',onClick:()=>openIRec('${id}','${r.id}')},{label:'Eliminar',icon:'✕',danger:true,onClick:()=>delIRec('${id}','${r.id}')}])">⋮</button></td>
+  </tr>`;
+  }).join(''):'<tr><td colspan="5" style="text-align:center;color:var(--t3);padding:22px">Sin movimientos para este filtro</td></tr>';
+}
+
+function setITab(t,el){evCurITab=t;document.querySelectorAll('#id-tabs .tab').forEach(b=>b.classList.remove('on'));if(el)el.classList.add('on');renderInvestmentDetail(currentInvestmentId)}
+
+let invColor=V_COLORS[0];
+function selInvColor(c,el){invColor=c;document.querySelectorAll('#inv-colors .swatch').forEach(s=>s.classList.remove('sel'));el.classList.add('sel')}
+
+function openInvestmentM(editId=null){
+  $('inv-eid').value=editId||'';
+  if(editId){
+    const v=Store.getInvestmentById(editId);if(!v)return;
+    $('inv-name').value=v.name;$('inv-type').value=v.type;$('inv-value').value=v.currentValue||'';$('inv-notes').value=v.notes||'';
+    $('investment-modal-title').textContent='Editar inversión';
+    invColor=v.color||V_COLORS[0];document.querySelectorAll('#inv-colors .swatch').forEach(s=>s.classList.toggle('sel',s.dataset.c===invColor));
+  } else {
+    ['inv-name','inv-value','inv-notes'].forEach(i=>$(i).value='');
+    $('inv-type').value='cripto';invColor=V_COLORS[0];
+    document.querySelectorAll('#inv-colors .swatch').forEach((s,i)=>{s.classList.toggle('sel',i===0)});
+    $('investment-modal-title').textContent='Nueva inversión';
+  }
+  oM('mo-investment');
+}
+
+async function saveInvestment(){
+  const name=$('inv-name').value.trim();if(!name){toast('Nombre requerido',false);return}
+  const eid=$('inv-eid').value;
+  const obj={name,type:$('inv-type').value,currentValue:M($('inv-value').value)||0,color:invColor,notes:$('inv-notes').value};
+  if(eid){
+    const ok=await confirm_('¿Guardar cambios?','Se actualizará esta inversión.','Guardar');
+    if(!ok)return;
+    Store.updateInvestment(eid,obj);toast('Inversión actualizada');
+  }
+  else{Store.addInvestment(obj);toast('Inversión agregada')}
+  cM('mo-investment');renderInvestments();
+}
+
+async function delInvestment(id){
+  const ok=await confirm_('¿Eliminar inversión?','Se eliminarán todos sus movimientos.');if(!ok)return;
+  Store.deleteInvestment(id);if(currentInvestmentId===id)currentInvestmentId=null;renderInvestments();toast('Inversión eliminada');
+}
+
+function openIRec(iid,editId=null){
+  const v=Store.getInvestmentById(iid);if(!v)return;
+  $('ir-iid').value=iid;$('ir-eid').value=editId||'';
+  $('irec-ttl').textContent=editId?'Editar movimiento':'Nuevo movimiento — '+v.name;
+  $('ir-type').innerHTML=INV_REC_TYPES.map(t=>`<option value="${t}">${INV_TYPE_LABELS[t]}</option>`).join('');
+  $('ir-acc').innerHTML='<option value="">Selecciona una cuenta</option>'+selectableAccounts().map(a=>`<option value="${a.id}">${esc(a.name)} (${accBalanceLabel(a)})</option>`).join('');
+  if(editId){
+    const r=v.records?.find(x=>x.id===editId);if(!r)return;
+    $('ir-dt').value=r.dt;$('ir-type').value=r.type;$('ir-amt').value=r.amount;$('ir-notes').value=r.notes||'';
+    onIrTypeChange();
+    // Mismo arreglo que en vehículos: se precarga tildado (y con la cuenta/
+    // categoría correctas) si ya existe una transacción ligada — si no, al
+    // guardar sin tocar el checkbox se hubiera borrado por accidente.
+    const linkedTx=r.txId?Store.getTransactionById(r.txId):null;
+    $('ir-autotx').checked=!!linkedTx;
+    if(linkedTx){$('ir-acc').value=linkedTx.accountId;$('ir-cat').value=linkedTx.category||'';}
+  } else {
+    $('ir-dt').value=td_();$('ir-amt').value='';$('ir-notes').value='';
+    $('ir-type').value='aporte';
+    onIrTypeChange();
+    $('ir-autotx').checked=false;
+  }
+  togIrAutotx();
+  oM('mo-irec');
+}
+
+function togIrAutotx(){
+  $('ir-tx-fields-g').style.display=$('ir-autotx').checked?'grid':'none';
+}
+
+function onIrTypeChange(){
+  const t=$('ir-type').value;
+  const pol=INV_REC_POLARITY[t]||'expense';
+  // La categoría que se ofrece depende de si este movimiento es dinero que
+  // SALE de una cuenta (aporte/gasto) o que ENTRA (ingreso/retiro) — mismo
+  // criterio que usa el selector de tipo en "Nueva transacción".
+  $('ir-cat').innerHTML='<option value="">Selecciona una categoría</option>'+S.categories.filter(c=>c.type===pol).map(c=>`<option value="${esc(c.name)}">${c.icon} ${esc(c.name)}</option>`).join('');
+}
+
+async function saveIRec(){
+  const iid=$('ir-iid').value;const v=Store.getInvestmentById(iid);if(!v)return;
+  const dt=$('ir-dt').value;const amt=M($('ir-amt').value)||0;
+  if(!dt){toast('Fecha requerida',false);return}
+  const autotx=$('ir-autotx').checked;
+  const accId=$('ir-acc').value;const cat=$('ir-cat').value;
+  if(autotx&&(!accId||!cat)){toast('Selecciona cuenta y categoría para generar la transacción',false);return}
+  const type=$('ir-type').value;
+  const pol=INV_REC_POLARITY[type]||'expense';
+  const obj={dt,type,amount:amt,notes:$('ir-notes').value};
+  const eid=$('ir-eid').value;
+  const desc=`${INV_TYPE_LABELS[type]} — ${v.name}`;
+  if(eid){
+    const ok=await confirm_('¿Guardar cambios?','Se actualizará este movimiento.','Guardar');
+    if(!ok)return;
+    // Mismo patrón que saveVRec: si ya había transacción ligada y sigue
+    // pidiéndose, se actualiza (con el tipo/polaridad correctos por si el
+    // tipo de movimiento cambió); si ya no se pide, se borra; si antes no
+    // había y ahora sí, se crea.
+    const existing=(v.records||[]).find(r=>r.id===eid);
+    let txId=existing?.txId||null;
+    if(txId&&autotx&&amt>0){
+      Store.updateTransaction(txId,{type:pol,amount:amt,date:dt,description:desc,category:cat||undefined,accountId:accId||undefined});
+    } else if(txId&&(!autotx||amt<=0)){
+      Store.deleteTransaction(txId);
+      txId=null;
+    } else if(!txId&&autotx&&amt>0){
+      const tx=Store.addTransaction({type:pol,amount:amt,date:dt,time:tnow_(),description:desc,category:cat,accountId:accId,notes:'Movimiento de inversión'});
+      txId=tx.id;
+    }
+    Store.updateInvestmentRecord(iid,eid,{...obj,txId});
+    toast('Actualizado');
+  }
+  else{
+    let txId=null;
+    if(autotx&&amt>0){
+      const tx=Store.addTransaction({type:pol,amount:amt,date:dt,time:tnow_(),description:desc,category:cat,accountId:accId,notes:'Movimiento de inversión'});
+      txId=tx.id;
+    }
+    Store.addInvestmentRecord(iid,{...obj,txId});
+    toast('Movimiento guardado');
+  }
+  cM('mo-irec');renderInvestmentDetail(iid);
+}
+
+async function delIRec(iid,rid){
+  const ok=await confirm_('¿Eliminar movimiento?','');if(!ok)return;
+  const v=Store.getInvestmentById(iid);
+  const r=v&&(v.records||[]).find(x=>x.id===rid);
+  if(r?.txId)Store.deleteTransaction(r.txId);
+  Store.deleteInvestmentRecord(iid,rid);renderInvestmentDetail(iid);toast('Eliminado');
+}
+
 // ==================== CUSTOM SECTIONS ====================
 let currentSecId=null;
 let currentSecMemberFilter=null;
@@ -6019,6 +6432,7 @@ function renderSbSections(){
   // Insert section header + items + new section button before Sistema
   let html=`<div class="ns ns-dyn">Mis Secciones</div>`;
   html+=`<div class="ni ni-dyn" onclick="go('vehicles')"><span class="ic-wrap">🚗</span>Vehículos</div>`;
+  html+=`<div class="ni ni-dyn" onclick="go('investments')"><span class="ic-wrap">📈</span>Inversiones</div>`;
   Store.getCustomSections().forEach(s=>{
     html+=`<div class="ni ni-dyn" id="ni-sec-${s.id}" onclick="goSection('${s.id}')"><span class="ic-wrap">${esc(s.icon)||'📁'}</span>${esc(s.name)}</div>`;
   });
@@ -6267,10 +6681,20 @@ function goVehicles(){
   renderVehicles();updateNW();
 }
 
+// Helper to navigate to investments page — mismo patrón que goVehicles.
+function goInvestments(){
+  document.querySelectorAll('.page').forEach(p=>p.classList.remove('on'));
+  document.querySelectorAll('.ni').forEach(n=>n.classList.remove('on'));
+  $('page-investments').classList.add('on');
+  document.querySelectorAll('.ni').forEach(n=>{if(n.getAttribute('onclick')?.includes("'investments'"))n.classList.add('on')});
+  renderInvestments();updateNW();
+}
+
 // Patch go() to include vehicles
 const _goOrig=go;
 window.go=function(page){
   if(page==='vehicles'){goVehicles();return}
+  if(page==='investments'){goInvestments();return}
   if(page==='loans'){
     document.querySelectorAll('.page').forEach(p=>p.classList.remove('on'));
     document.querySelectorAll('.ni').forEach(n=>n.classList.remove('on'));
