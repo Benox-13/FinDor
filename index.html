@@ -1360,7 +1360,7 @@ body.modal-open #bottom-nav{display:none !important}
       </div>
       <div id="ir-tx-fields-g" class="g2" style="display:none">
         <div class="fg"><label class="fl">Cuenta</label><select class="fc" id="ir-acc"></select></div>
-        <div class="fg"><label class="fl">Categoría</label><select class="fc" id="ir-cat"></select></div>
+        <div class="fg" id="ir-cat-g"><label class="fl">Categoría</label><select class="fc" id="ir-cat"></select></div>
       </div>
     </div>
     <div class="mfoot"><button class="btn bg_ sm" onclick="cM('mo-irec')">Cancelar</button><button class="btn bp sm" onclick="saveIRec()">Guardar</button></div>
@@ -5931,15 +5931,27 @@ initTxMonthNav();
 // ==================== VEHICLES ====================
 const V_FUEL_TYPES={electric:{label:'Eléctrico',icon:'⚡',energyUnit:'kWh',energyLabel:'kWh cargados'},gasoline:{label:'Gasolina',icon:'⛽',energyUnit:'L',energyLabel:'Litros cargados'},diesel:{label:'Diésel',icon:'🛢️',energyUnit:'L',energyLabel:'Litros cargados'},hybrid:{label:'Híbrido',icon:'🔋',energyUnit:'L',energyLabel:'Litros/kWh'}};
 // ==================== INVERSIONES (mismo patrón que Vehículos) ====================
-// 3 tipos fijos: apuestas, cripto, negocios. Cada movimiento tiene una
-// "polaridad" (income/expense) que define cómo afecta la cuenta ligada si
-// se genera transacción — a diferencia de vehículos (donde TODO es gasto),
-// aquí un aporte sale de tu cuenta (expense) pero un retiro o un ingreso
-// entra a tu cuenta (income).
+// BUG REAL ENCONTRADO Y CORREGIDO: un Aporte se registraba como GASTO real
+// y un Retiro como INGRESO real — el mismo problema que ya arreglamos con
+// el pago de tarjeta de crédito. Esto inflaba "Gastos mes"/"Ingresos mes"
+// en el Dashboard con dinero que solo se movió de tu cuenta hacia tu
+// inversión (o al revés), no que se ganó o gastó de verdad: meter dinero
+// a cripto no es un gasto (sigue siendo tuyo, solo cambió de forma);
+// sacarlo no es un ingreso nuevo (ya era tuyo). Por eso Aporte y Retiro
+// ahora generan una TRANSFERENCIA (no cuenta en los totales de ingreso/
+// gasto) — igual que mover dinero entre dos cuentas tuyas. Ingreso
+// (ganancia real, ej. ganaste una apuesta) y Gasto (comisión, pérdida
+// real) sí son dinero que de verdad entra o sale de tu patrimonio, así
+// que esos se quedan como ingreso/gasto real de verdad.
 const INV_TYPES={apuesta:{label:'Apuesta',icon:'🎲'},cripto:{label:'Cripto',icon:'₿'},negocio:{label:'Negocio',icon:'🏢'}};
 const INV_REC_TYPES=['aporte','ingreso','gasto','retiro'];
 const INV_TYPE_LABELS={aporte:'Aporte',ingreso:'Ingreso',gasto:'Gasto',retiro:'Retiro'};
-const INV_REC_POLARITY={aporte:'expense',ingreso:'income',gasto:'expense',retiro:'income'};
+const INV_REC_TX_TYPE={aporte:'transfer',ingreso:'income',gasto:'expense',retiro:'transfer'};
+const INV_REC_TRANSFER_DIR={aporte:'out',retiro:'in'};
+// Para colorear +/- en la tabla de movimientos — independiente del tipo
+// real de transacción (una transferencia también se ve "+" o "-" según
+// hacia dónde va el dinero, aunque no cuente como ingreso/gasto).
+const INV_REC_DISPLAY_SIGN={aporte:'out',ingreso:'in',gasto:'out',retiro:'in'};
 const V_REC_TYPES=['charge','maintenance','parking','wash','insurance','installment','other'];
 const V_TYPE_LABELS={charge:'Carga/Combustible',maintenance:'Mantenimiento',parking:'Parking',wash:'Lavado',insurance:'Seguro',installment:'Mensualidad',other:'Otro'};
 const V_COLORS=['#30d693','#4e9eff','#a855f7','#ffb340','#ff5f6d','#fb923c','#f472b6','#34d399'];
@@ -6267,7 +6279,7 @@ function renderInvestmentDetail(id){
     <div class="ev-s"><div class="ev-v" style="color:var(--t2)">${fmt(valorActual)}</div><div class="ev-l">valor actual</div></div>
     <div class="ev-s"><div class="ev-v" style="color:var(--ac)">${fmt(aportado)}</div><div class="ev-l">aportado</div></div>
     <div class="ev-s"><div class="ev-v" style="color:${ganancia>=0?'var(--inc)':'var(--exp)'}">${ganancia>=0?'+':''}${fmt(ganancia)}</div><div class="ev-l">ganancia/pérdida${pctGan!==null?` (${pctGan>=0?'+':''}${pctGan.toFixed(1)}%)`:''}</div></div>
-    <div class="ev-s"><div class="ev-v" style="color:var(--red)">${fmt(gastos)}</div><div class="ev-l">gastos</div></div>`;
+    <div class="ev-s"><div class="ev-v" style="color:var(--blu)">${fmt(retirado)}</div><div class="ev-l">retirado</div></div>`;
   // Tabs
   const tabs=$('id-tabs');
   tabs.innerHTML=`<button class="tab ${evCurITab==='all'?'on':''}" onclick="setITab('all',this)">Todos</button>`+
@@ -6276,12 +6288,12 @@ function renderInvestmentDetail(id){
   let shown=evCurITab==='all'?recs:recs.filter(r=>r.type===evCurITab);
   shown=[...shown].sort((a,b)=>new Date(b.dt)-new Date(a.dt));
   $('id-tb').innerHTML=shown.length?shown.map(r=>{
-    const pol=INV_REC_POLARITY[r.type];
+    const pol=INV_REC_DISPLAY_SIGN[r.type];
     return`<tr>
     <td style="color:var(--t2)">${fmtDate(r.dt)}</td>
     <td><span class="bdg bdg-n">${INV_TYPE_LABELS[r.type]||r.type}</span></td>
     <td style="color:var(--t2)">${esc(r.notes)||'—'}</td>
-    <td style="font-family:'DM Mono',monospace;color:${pol==='income'?'var(--inc)':'var(--exp)'}">${pol==='income'?'+':'-'}${fmt(r.amount)}</td>
+    <td style="font-family:'DM Mono',monospace;color:${pol==='in'?'var(--inc)':'var(--exp)'}">${pol==='in'?'+':'-'}${fmt(r.amount)}</td>
     <td><button class="btn bg_ ico sm" title="Más opciones" onclick="showRowMenu(this,[{label:'Editar',icon:'✎',onClick:()=>openIRec('${id}','${r.id}')},{label:'Eliminar',icon:'✕',danger:true,onClick:()=>delIRec('${id}','${r.id}')}])">⋮</button></td>
   </tr>`;
   }).join(''):'<tr><td colspan="5" style="text-align:center;color:var(--t3);padding:22px">Sin movimientos para este filtro</td></tr>';
@@ -6358,11 +6370,16 @@ function togIrAutotx(){
 
 function onIrTypeChange(){
   const t=$('ir-type').value;
-  const pol=INV_REC_POLARITY[t]||'expense';
-  // La categoría que se ofrece depende de si este movimiento es dinero que
-  // SALE de una cuenta (aporte/gasto) o que ENTRA (ingreso/retiro) — mismo
-  // criterio que usa el selector de tipo en "Nueva transacción".
-  $('ir-cat').innerHTML='<option value="">Selecciona una categoría</option>'+S.categories.filter(c=>c.type===pol).map(c=>`<option value="${esc(c.name)}">${c.icon} ${esc(c.name)}</option>`).join('');
+  const txType=INV_REC_TX_TYPE[t]||'expense';
+  if(txType==='transfer'){
+    // Aporte/Retiro van como transferencia — no tiene sentido pedir una
+    // categoría de ingreso/gasto para algo que no es ni uno ni otro.
+    $('ir-cat-g').style.display='none';
+    $('ir-cat').innerHTML='';
+  } else {
+    $('ir-cat-g').style.display='';
+    $('ir-cat').innerHTML='<option value="">Selecciona una categoría</option>'+S.categories.filter(c=>c.type===txType).map(c=>`<option value="${esc(c.name)}">${c.icon} ${esc(c.name)}</option>`).join('');
+  }
 }
 
 async function saveIRec(){
@@ -6371,28 +6388,42 @@ async function saveIRec(){
   if(!dt){toast('Fecha requerida',false);return}
   const autotx=$('ir-autotx').checked;
   const accId=$('ir-acc').value;const cat=$('ir-cat').value;
-  if(autotx&&(!accId||!cat)){toast('Selecciona cuenta y categoría para generar la transacción',false);return}
   const type=$('ir-type').value;
-  const pol=INV_REC_POLARITY[type]||'expense';
+  const txType=INV_REC_TX_TYPE[type]||'expense';
+  // Aporte/Retiro no piden categoría (van como transferencia automática —
+  // ver comentario junto a INV_REC_TX_TYPE); Ingreso/Gasto sí, para que
+  // aparezcan bien clasificados en el resto de la app.
+  if(autotx&&!accId){toast('Selecciona una cuenta para generar la transacción',false);return}
+  if(autotx&&txType!=='transfer'&&!cat){toast('Selecciona una categoría para generar la transacción',false);return}
   const obj={dt,type,amount:amt,notes:$('ir-notes').value};
   const eid=$('ir-eid').value;
   const desc=`${INV_TYPE_LABELS[type]} — ${v.name}`;
+  // Arma los datos de la transacción ligada según si este movimiento es
+  // Aporte/Retiro (transferencia — no cuenta como ingreso/gasto real) o
+  // Ingreso/Gasto (sí es dinero real que entra o sale de tu patrimonio).
+  const buildTxData=()=>{
+    if(txType==='transfer'){
+      const transferCat=ensureCategory('Transferencia','expense');
+      return{type:'transfer',amount:amt,date:dt,description:desc,category:transferCat.name,accountId:accId,transferDirection:INV_REC_TRANSFER_DIR[type],notes:'Movimiento de inversión'};
+    }
+    return{type:txType,amount:amt,date:dt,description:desc,category:cat,accountId:accId,notes:'Movimiento de inversión'};
+  };
   if(eid){
     const ok=await confirm_('¿Guardar cambios?','Se actualizará este movimiento.','Guardar');
     if(!ok)return;
     // Mismo patrón que saveVRec: si ya había transacción ligada y sigue
-    // pidiéndose, se actualiza (con el tipo/polaridad correctos por si el
-    // tipo de movimiento cambió); si ya no se pide, se borra; si antes no
-    // había y ahora sí, se crea.
+    // pidiéndose, se actualiza (con el tipo correcto por si el tipo de
+    // movimiento cambió); si ya no se pide, se borra; si antes no había y
+    // ahora sí, se crea.
     const existing=(v.records||[]).find(r=>r.id===eid);
     let txId=existing?.txId||null;
     if(txId&&autotx&&amt>0){
-      Store.updateTransaction(txId,{type:pol,amount:amt,date:dt,description:desc,category:cat||undefined,accountId:accId||undefined});
+      Store.updateTransaction(txId,buildTxData());
     } else if(txId&&(!autotx||amt<=0)){
       Store.deleteTransaction(txId);
       txId=null;
     } else if(!txId&&autotx&&amt>0){
-      const tx=Store.addTransaction({type:pol,amount:amt,date:dt,time:tnow_(),description:desc,category:cat,accountId:accId,notes:'Movimiento de inversión'});
+      const tx=Store.addTransaction({...buildTxData(),time:tnow_()});
       txId=tx.id;
     }
     Store.updateInvestmentRecord(iid,eid,{...obj,txId});
@@ -6401,7 +6432,7 @@ async function saveIRec(){
   else{
     let txId=null;
     if(autotx&&amt>0){
-      const tx=Store.addTransaction({type:pol,amount:amt,date:dt,time:tnow_(),description:desc,category:cat,accountId:accId,notes:'Movimiento de inversión'});
+      const tx=Store.addTransaction({...buildTxData(),time:tnow_()});
       txId=tx.id;
     }
     Store.addInvestmentRecord(iid,{...obj,txId});
