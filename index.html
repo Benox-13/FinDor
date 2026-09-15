@@ -5931,27 +5931,26 @@ initTxMonthNav();
 // ==================== VEHICLES ====================
 const V_FUEL_TYPES={electric:{label:'Eléctrico',icon:'⚡',energyUnit:'kWh',energyLabel:'kWh cargados'},gasoline:{label:'Gasolina',icon:'⛽',energyUnit:'L',energyLabel:'Litros cargados'},diesel:{label:'Diésel',icon:'🛢️',energyUnit:'L',energyLabel:'Litros cargados'},hybrid:{label:'Híbrido',icon:'🔋',energyUnit:'L',energyLabel:'Litros/kWh'}};
 // ==================== INVERSIONES (mismo patrón que Vehículos) ====================
-// BUG REAL ENCONTRADO Y CORREGIDO: un Aporte se registraba como GASTO real
-// y un Retiro como INGRESO real — el mismo problema que ya arreglamos con
-// el pago de tarjeta de crédito. Esto inflaba "Gastos mes"/"Ingresos mes"
-// en el Dashboard con dinero que solo se movió de tu cuenta hacia tu
-// inversión (o al revés), no que se ganó o gastó de verdad: meter dinero
-// a cripto no es un gasto (sigue siendo tuyo, solo cambió de forma);
-// sacarlo no es un ingreso nuevo (ya era tuyo). Por eso Aporte y Retiro
-// ahora generan una TRANSFERENCIA (no cuenta en los totales de ingreso/
-// gasto) — igual que mover dinero entre dos cuentas tuyas. Ingreso
-// (ganancia real, ej. ganaste una apuesta) y Gasto (comisión, pérdida
-// real) sí son dinero que de verdad entra o sale de tu patrimonio, así
-// que esos se quedan como ingreso/gasto real de verdad.
+// Modelo simplificado a pedido: solo 2 tipos de movimiento — Depósito/
+// Aporte (dinero que metes a la plataforma/activo) y Retiro (dinero que
+// sacas) — más el campo "Valor actual" de cada inversión, que se edita a
+// mano cuando quieras. La ganancia/pérdida sale sola de comparar lo que
+// metiste vs. lo que ya sacaste + lo que vale hoy; no hace falta un tipo
+// de movimiento aparte para "ganancia": ya queda reflejada en esa cuenta.
+// Ambos tipos generan una TRANSFERENCIA (no un ingreso/gasto real) al
+// generar transacción — meter dinero a una plataforma no es gastarlo (
+// sigue siendo tuyo, solo cambió de forma), y sacarlo no es ingreso nuevo
+// (ya era tuyo) — así no se infla "Ingresos mes"/"Gastos mes" en el
+// Dashboard con dinero que solo cambió de lugar.
 const INV_TYPES={apuesta:{label:'Apuesta',icon:'🎲'},cripto:{label:'Cripto',icon:'₿'},negocio:{label:'Negocio',icon:'🏢'}};
-const INV_REC_TYPES=['aporte','ingreso','gasto','retiro'];
-const INV_TYPE_LABELS={aporte:'Aporte',ingreso:'Ingreso',gasto:'Gasto',retiro:'Retiro'};
-const INV_REC_TX_TYPE={aporte:'transfer',ingreso:'income',gasto:'expense',retiro:'transfer'};
+const INV_REC_TYPES=['aporte','retiro'];
+const INV_TYPE_LABELS={aporte:'Depósito/Aporte',retiro:'Retiro'};
+const INV_REC_TX_TYPE={aporte:'transfer',retiro:'transfer'};
 const INV_REC_TRANSFER_DIR={aporte:'out',retiro:'in'};
 // Para colorear +/- en la tabla de movimientos — independiente del tipo
 // real de transacción (una transferencia también se ve "+" o "-" según
 // hacia dónde va el dinero, aunque no cuente como ingreso/gasto).
-const INV_REC_DISPLAY_SIGN={aporte:'out',ingreso:'in',gasto:'out',retiro:'in'};
+const INV_REC_DISPLAY_SIGN={aporte:'out',retiro:'in'};
 const V_REC_TYPES=['charge','maintenance','parking','wash','insurance','installment','other'];
 const V_TYPE_LABELS={charge:'Carga/Combustible',maintenance:'Mantenimiento',parking:'Parking',wash:'Lavado',insurance:'Seguro',installment:'Mensualidad',other:'Otro'};
 const V_COLORS=['#30d693','#4e9eff','#a855f7','#ffb340','#ff5f6d','#fb923c','#f472b6','#34d399'];
@@ -6236,13 +6235,10 @@ function renderInvestments(){
     const recs=v.records||[];
     const aportado=recs.filter(r=>r.type==='aporte').reduce((a,r)=>a+M(r.amount||0),0);
     const retirado=recs.filter(r=>r.type==='retiro').reduce((a,r)=>a+M(r.amount||0),0);
-    const ingresos=recs.filter(r=>r.type==='ingreso').reduce((a,r)=>a+M(r.amount||0),0);
-    const gastos=recs.filter(r=>r.type==='gasto').reduce((a,r)=>a+M(r.amount||0),0);
     const valorActual=M(v.currentValue||0);
-    // Ganancia/pérdida: lo que vale hoy + lo que ya sacaste + lo que ya te
-    // ingresó, contra lo que metiste + lo que gastaste. Si nunca aportaste
-    // nada, el % no aplica (se muestra solo el $).
-    const ganancia=valorActual+retirado+ingresos-aportado-gastos;
+    // Ganancia/pérdida: lo que vale hoy + lo que ya sacaste, contra lo que
+    // metiste. Si nunca aportaste nada, el % no aplica (se muestra solo el $).
+    const ganancia=valorActual+retirado-aportado;
     const pctGan=aportado>0?(ganancia/aportado*100):null;
     return`<div class="card card-click" style="border-left:3px solid ${v.color||'var(--ac)'}" onclick="openInvestmentDetail('${v.id}')">
       <div style="display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:14px">
@@ -6270,10 +6266,8 @@ function renderInvestmentDetail(id){
   const recs=v.records||[];
   const aportado=recs.filter(r=>r.type==='aporte').reduce((a,r)=>a+M(r.amount||0),0);
   const retirado=recs.filter(r=>r.type==='retiro').reduce((a,r)=>a+M(r.amount||0),0);
-  const ingresos=recs.filter(r=>r.type==='ingreso').reduce((a,r)=>a+M(r.amount||0),0);
-  const gastos=recs.filter(r=>r.type==='gasto').reduce((a,r)=>a+M(r.amount||0),0);
   const valorActual=M(v.currentValue||0);
-  const ganancia=valorActual+retirado+ingresos-aportado-gastos;
+  const ganancia=valorActual+retirado-aportado;
   const pctGan=aportado>0?(ganancia/aportado*100):null;
   $('id-stats').innerHTML=`
     <div class="ev-s"><div class="ev-v" style="color:var(--t2)">${fmt(valorActual)}</div><div class="ev-l">valor actual</div></div>
