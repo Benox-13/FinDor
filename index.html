@@ -464,7 +464,6 @@ body.modal-open #bottom-nav{display:none !important}
   <div class="ni" onclick="go('dashboard')"><span class="ic-wrap">◈</span>Dashboard</div>
   <div class="ni" onclick="go('transactions')"><span class="ic-wrap">⇄</span>Transacciones</div>
   <div class="ni" onclick="go('accounts')"><span class="ic-wrap">▣</span>Cuentas</div>
-  <div class="ni" onclick="go('billing')"><span class="ic-wrap">🧾</span>Facturación</div>
   <div class="ns">Finanzas</div>
   <div class="ni" onclick="go('analysis')"><span class="ic-wrap">◉</span>Análisis</div>
   <div class="ni" onclick="go('budget')"><span class="ic-wrap">◧</span>Presupuesto</div>
@@ -551,14 +550,29 @@ body.modal-open #bottom-nav{display:none !important}
 <!-- ACCOUNTS -->
 <div id="page-accounts" class="page">
   <div class="ph"><div><div class="pt">Cuentas</div><div class="ps">Gestión de dinero por cuenta</div></div><button class="btn bp" onclick="openAccM()">+ Nueva cuenta</button></div>
-  <!-- Loan totals summary -->
-  <div class="g2" style="margin-bottom:18px" id="acc-loan-summary"></div>
-  <div id="acc-grid" style="margin-bottom:22px"></div>
-  <div class="slbl">MESES SIN INTERESES ACTIVOS</div>
-  <div id="msi-list"></div>
+  <div id="acc-list-wrap">
+    <!-- Loan totals summary -->
+    <div class="g2" style="margin-bottom:18px" id="acc-loan-summary"></div>
+    <div id="acc-grid" style="margin-bottom:22px"></div>
+    <div class="slbl">MESES SIN INTERESES ACTIVOS</div>
+    <div id="msi-list"></div>
+  </div>
+  <!-- ACCOUNT DETAIL — resumen (efectivo/débito) o Facturación (tarjeta de
+       crédito), según el tipo de cuenta. Mismo patrón de lista+detalle que
+       Vehículos e Inversiones (currentXId + open/closeXDetail). -->
+  <div id="acc-detail" style="display:none">
+    <div style="display:flex;align-items:center;gap:10px;margin-bottom:18px;flex-wrap:wrap">
+      <button class="btn bg_ sm" onclick="closeAccountDetail()">← Volver</button>
+      <div class="pt" id="acc-detail-title" style="font-size:20px"></div>
+    </div>
+    <div id="acc-detail-body"></div>
+  </div>
 </div>
 
-<!-- BILLING -->
+<!-- BILLING (ya no está en el menú lateral — se conserva por si se vuelve a
+     necesitar una vista de TODAS las tarjetas juntas; se llega a la
+     facturación de una tarjeta específica dando clic en su tarjeta en
+     Cuentas, ver openAccountDetail()) -->
 <div id="page-billing" class="page">
   <div class="ph"><div><div class="pt">Facturación</div><div class="ps">Resumen de tarjetas de crédito</div></div></div>
   <div id="billing-list"></div>
@@ -3434,97 +3448,100 @@ function updateNW(){
 }
 
 // ==================== BILLING ====================
-function renderBilling(){
-  const el=$('billing-list');if(!el)return;
+// HTML de la "tarjeta de facturación" de UNA tarjeta de crédito — antes
+// vivía inline dentro de renderBilling(); se extrajo a función propia para
+// poder reutilizarla también en el detalle de cuenta (Cuentas → clic en
+// una TDC), sin duplicar el cálculo de periodo/factura. El cálculo en sí
+// no cambió, solo se movió tal cual.
+function billingCardHTML(a){
   const now=new Date();
   const toLocal=d=>`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
   const todayStr=toLocal(now);
+  // Determine current billing period
+  let periodStart='',periodEnd='',invoiceAmt=0,currentAmt=0,daysToPayment=null;
+  if(a.cutDay){
+    let lastCut=new Date(now.getFullYear(),now.getMonth(),a.cutDay);
+    if(lastCut>now)lastCut=new Date(now.getFullYear(),now.getMonth()-1,a.cutDay);
+    let nextCut=new Date(lastCut.getFullYear(),lastCut.getMonth()+1,a.cutDay);
+    periodStart=toLocal(lastCut);
+    periodEnd=toLocal(nextCut);
+    // Current period spending (since last cut, not yet closed)
+    currentAmt=S.transactions.filter(t=>t.type==='expense'&&t.accountId===a.id&&t.date>periodStart&&t.date<=todayStr).reduce((s,t)=>s+M(t.amount),0);
+    // Invoice = previous closed period (before last cut)
+    const prevCutDate=new Date(lastCut.getFullYear(),lastCut.getMonth()-1,a.cutDay);
+    const prevCutStr=toLocal(prevCutDate);
+    invoiceAmt=S.transactions.filter(t=>t.type==='expense'&&t.accountId===a.id&&t.date>prevCutStr&&t.date<=periodStart).reduce((s,t)=>s+M(t.amount),0);
+    // Se resta lo ya pagado desde el corte — antes esto se quedaba
+    // igual sin importar cuánto se hubiera abonado.
+    invoiceAmt=Math.max(0,invoiceAmt-tdcPaidSince(a.id,periodStart));
+    if(a.payDay){
+      let payDate=new Date(now.getFullYear(),now.getMonth(),a.payDay);
+      if(payDate<=now)payDate=new Date(now.getFullYear(),now.getMonth()+1,a.payDay);
+      daysToPayment=Math.ceil((payDate-now)/864e5);
+    }
+  }
+  const used=a.limit?a.limit-M(a.balance):null;
+  const usedP=a.limit?Math.min(100,used/a.limit*100).toFixed(0):0;
+  const urgencyColor=daysToPayment!==null?(daysToPayment<=3?'var(--exp)':daysToPayment<=7?'var(--yel)':'var(--inc)'):'var(--t3)';
+  return`<div style="background:var(--bg3);border:1px solid var(--bdr);border-radius:var(--r);overflow:hidden;border-left:4px solid ${a.color||'var(--ac)'}">
+    <!-- Card header -->
+    <div style="padding:16px 18px;border-bottom:1px solid var(--bdr)">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:12px">
+        <div>
+          <div style="font-size:16px;font-weight:600;margin-bottom:2px">${esc(a.name)}</div>
+          <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+            ${a.cutDay?`<span style="font-size:11px;color:var(--t3)">✂ Corte: día ${a.cutDay}</span>`:''}
+            ${a.payDay?`<span style="font-size:11px;color:var(--t3)">💳 Pago: día ${a.payDay}</span>`:''}
+            ${daysToPayment!==null?`<span style="font-size:11px;font-weight:600;color:${urgencyColor};background:${urgencyColor==='var(--exp)'?'rgba(255,95,109,.1)':urgencyColor==='var(--yel)'?'rgba(255,179,64,.1)':'rgba(48,214,147,.1)'};padding:2px 8px;border-radius:10px">${daysToPayment===0?'¡Paga hoy!':daysToPayment<0?'¡VENCIDO!':daysToPayment+'d para pago'}</span>`:''}
+          </div>
+        </div>
+        <button class="btn bp sm" style="flex-shrink:0" onclick="openBillingPay('${a.id}')">💳 Pagar</button>
+      </div>
+      ${a.limit?`<div style="display:flex;justify-content:space-between;font-size:11px;color:var(--t3);margin-bottom:5px;font-family:'DM Mono',monospace"><span>Disponible: <span style="color:${M(a.balance)>=0?'var(--inc)':'var(--exp)'}">${fmt(M(a.balance))}</span></span><span>Límite: ${fmt(a.limit)}</span></div>
+      <div style="height:6px;background:var(--bg4);border-radius:3px;overflow:hidden"><div style="height:6px;width:${usedP}%;border-radius:3px;background:${usedP>85?'var(--redg)':usedP>65?'var(--yelg)':'var(--acg)'}"></div></div>`:''}
+    </div>
+    <!-- Billing periods -->
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:0">
+      <!-- Current period -->
+      <div style="padding:14px 16px;border-right:1px solid var(--bdr)">
+        <div style="font-size:10px;color:var(--t3);text-transform:uppercase;letter-spacing:.7px;margin-bottom:6px">Periodo actual</div>
+        ${a.cutDay?`<div style="font-size:10px;color:var(--t3);margin-bottom:6px">${periodStart} → hoy</div>`:''}
+        <div style="font-family:'DM Mono',monospace;font-size:22px;color:var(--exp);font-weight:500">${fmt(currentAmt)}</div>
+        <div style="font-size:11px;color:var(--t3);margin-top:3px">gastado desde último corte</div>
+        ${!a.cutDay?`<div style="font-size:11px;color:var(--t3);margin-top:6px">Configura día de corte en Cuentas</div>`:''}
+      </div>
+      <!-- Invoice (previous period) -->
+      <div style="padding:14px 16px;${invoiceAmt>0?'background:rgba(255,179,64,.04)':''}">
+        <div style="font-size:10px;color:var(--t3);text-transform:uppercase;letter-spacing:.7px;margin-bottom:6px">Factura pendiente</div>
+        ${a.cutDay?`<div style="font-size:10px;color:var(--t3);margin-bottom:6px">Período cerrado</div>`:''}
+        <div style="font-family:'DM Mono',monospace;font-size:22px;color:${invoiceAmt>0?'var(--yel)':'var(--t3)'};font-weight:500">${fmt(invoiceAmt)}</div>
+        <div style="font-size:11px;color:var(--t3);margin-top:3px">${invoiceAmt>0?`pagar antes del día ${a.payDay||'—'}`:'sin factura pendiente'}</div>
+        ${invoiceAmt>0?`<button class="btn bg_ sm" style="margin-top:8px;font-size:11px;width:100%" onclick="openBillingPay('${a.id}',${invoiceAmt})">Pagar ${fmt(invoiceAmt)}</button>`:''}
+      </div>
+    </div>
+    <!-- Recent transactions for this card -->
+    <div style="border-top:1px solid var(--bdr);padding:12px 16px">
+      <div style="font-size:11px;color:var(--t3);text-transform:uppercase;letter-spacing:.7px;margin-bottom:8px">Últimos movimientos</div>
+      ${(()=>{
+        // Antes esto solo mostraba gastos (type==='expense'), así que un
+        // pago a la tarjeta (una transferencia) NUNCA aparecía aquí —
+        // parecía que el pago "no se había registrado" aunque sí existiera.
+        const recent=S.transactions.filter(t=>t.accountId===a.id&&(t.type==='expense'||t.type==='transfer')).sort((x,y)=>(y.date+(y.time||'')).localeCompare(x.date+(x.time||''))).slice(0,4);
+        return recent.length?recent.map(t=>{
+          const isPay=t.type==='transfer';
+          const sign=t.type==='expense'?'-':isPay?(t.transferDirection==='in'?'+':'-'):'';
+          const clr=t.type==='expense'?'var(--exp)':'var(--blu)';
+          return`<div style="display:flex;justify-content:space-between;align-items:center;padding:5px 0;border-bottom:1px solid var(--bdr)"><div style="flex:1;min-width:0"><div style="font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(t.description)}${isPay?' <span style="color:var(--blu)">· Pago</span>':''}</div><div style="font-size:10px;color:var(--t3)">${fmtDate(t.date)} · ${isPay?'Transferencia':esc(t.category)||'—'}</div></div><span style="font-family:'DM Mono',monospace;font-size:12px;color:${clr};flex-shrink:0;margin-left:10px">${sign}${fmt(t.amount)}</span></div>`;
+        }).join(''):'<div style="font-size:12px;color:var(--t3)">Sin movimientos</div>';
+      })()}
+    </div>
+  </div>`;
+}
+function renderBilling(){
+  const el=$('billing-list');if(!el)return;
   const tdcs=S.accounts.filter(a=>a.type==='credit');
   if(!tdcs.length){el.innerHTML=`<div style="text-align:center;padding:40px 20px;color:var(--t3)"><div style="font-size:32px;margin-bottom:10px">🧾</div><div style="font-size:14px;margin-bottom:6px">Sin tarjetas de crédito</div><div style="font-size:12px">Agrega una cuenta de tipo TDC en Cuentas</div></div>`;return}
-  let html='<div style="display:flex;flex-direction:column;gap:16px">';
-  tdcs.forEach(a=>{
-    // Determine current billing period
-    let periodStart='',periodEnd='',invoiceAmt=0,currentAmt=0,daysToPayment=null;
-    if(a.cutDay){
-      let lastCut=new Date(now.getFullYear(),now.getMonth(),a.cutDay);
-      if(lastCut>now)lastCut=new Date(now.getFullYear(),now.getMonth()-1,a.cutDay);
-      let nextCut=new Date(lastCut.getFullYear(),lastCut.getMonth()+1,a.cutDay);
-      periodStart=toLocal(lastCut);
-      periodEnd=toLocal(nextCut);
-      // Current period spending (since last cut, not yet closed)
-      currentAmt=S.transactions.filter(t=>t.type==='expense'&&t.accountId===a.id&&t.date>periodStart&&t.date<=todayStr).reduce((s,t)=>s+M(t.amount),0);
-      // Invoice = previous closed period (before last cut)
-      const prevCutDate=new Date(lastCut.getFullYear(),lastCut.getMonth()-1,a.cutDay);
-      const prevCutStr=toLocal(prevCutDate);
-      invoiceAmt=S.transactions.filter(t=>t.type==='expense'&&t.accountId===a.id&&t.date>prevCutStr&&t.date<=periodStart).reduce((s,t)=>s+M(t.amount),0);
-      // Se resta lo ya pagado desde el corte — antes esto se quedaba
-      // igual sin importar cuánto se hubiera abonado.
-      invoiceAmt=Math.max(0,invoiceAmt-tdcPaidSince(a.id,periodStart));
-      if(a.payDay){
-        let payDate=new Date(now.getFullYear(),now.getMonth(),a.payDay);
-        if(payDate<=now)payDate=new Date(now.getFullYear(),now.getMonth()+1,a.payDay);
-        daysToPayment=Math.ceil((payDate-now)/864e5);
-      }
-    }
-    const used=a.limit?a.limit-M(a.balance):null;
-    const usedP=a.limit?Math.min(100,used/a.limit*100).toFixed(0):0;
-    const urgencyColor=daysToPayment!==null?(daysToPayment<=3?'var(--exp)':daysToPayment<=7?'var(--yel)':'var(--inc)'):'var(--t3)';
-    html+=`<div style="background:var(--bg3);border:1px solid var(--bdr);border-radius:var(--r);overflow:hidden;border-left:4px solid ${a.color||'var(--ac)'}">
-      <!-- Card header -->
-      <div style="padding:16px 18px;border-bottom:1px solid var(--bdr)">
-        <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:12px">
-          <div>
-            <div style="font-size:16px;font-weight:600;margin-bottom:2px">${esc(a.name)}</div>
-            <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
-              ${a.cutDay?`<span style="font-size:11px;color:var(--t3)">✂ Corte: día ${a.cutDay}</span>`:''}
-              ${a.payDay?`<span style="font-size:11px;color:var(--t3)">💳 Pago: día ${a.payDay}</span>`:''}
-              ${daysToPayment!==null?`<span style="font-size:11px;font-weight:600;color:${urgencyColor};background:${urgencyColor==='var(--exp)'?'rgba(255,95,109,.1)':urgencyColor==='var(--yel)'?'rgba(255,179,64,.1)':'rgba(48,214,147,.1)'};padding:2px 8px;border-radius:10px">${daysToPayment===0?'¡Paga hoy!':daysToPayment<0?'¡VENCIDO!':daysToPayment+'d para pago'}</span>`:''}
-            </div>
-          </div>
-          <button class="btn bp sm" style="flex-shrink:0" onclick="openBillingPay('${a.id}')">💳 Pagar</button>
-        </div>
-        ${a.limit?`<div style="display:flex;justify-content:space-between;font-size:11px;color:var(--t3);margin-bottom:5px;font-family:'DM Mono',monospace"><span>Disponible: <span style="color:${M(a.balance)>=0?'var(--inc)':'var(--exp)'}">${fmt(M(a.balance))}</span></span><span>Límite: ${fmt(a.limit)}</span></div>
-        <div style="height:6px;background:var(--bg4);border-radius:3px;overflow:hidden"><div style="height:6px;width:${usedP}%;border-radius:3px;background:${usedP>85?'var(--redg)':usedP>65?'var(--yelg)':'var(--acg)'}"></div></div>`:''}
-      </div>
-      <!-- Billing periods -->
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:0">
-        <!-- Current period -->
-        <div style="padding:14px 16px;border-right:1px solid var(--bdr)">
-          <div style="font-size:10px;color:var(--t3);text-transform:uppercase;letter-spacing:.7px;margin-bottom:6px">Periodo actual</div>
-          ${a.cutDay?`<div style="font-size:10px;color:var(--t3);margin-bottom:6px">${periodStart} → hoy</div>`:''}
-          <div style="font-family:'DM Mono',monospace;font-size:22px;color:var(--exp);font-weight:500">${fmt(currentAmt)}</div>
-          <div style="font-size:11px;color:var(--t3);margin-top:3px">gastado desde último corte</div>
-          ${!a.cutDay?`<div style="font-size:11px;color:var(--t3);margin-top:6px">Configura día de corte en Cuentas</div>`:''}
-        </div>
-        <!-- Invoice (previous period) -->
-        <div style="padding:14px 16px;${invoiceAmt>0?'background:rgba(255,179,64,.04)':''}">
-          <div style="font-size:10px;color:var(--t3);text-transform:uppercase;letter-spacing:.7px;margin-bottom:6px">Factura pendiente</div>
-          ${a.cutDay?`<div style="font-size:10px;color:var(--t3);margin-bottom:6px">Período cerrado</div>`:''}
-          <div style="font-family:'DM Mono',monospace;font-size:22px;color:${invoiceAmt>0?'var(--yel)':'var(--t3)'};font-weight:500">${fmt(invoiceAmt)}</div>
-          <div style="font-size:11px;color:var(--t3);margin-top:3px">${invoiceAmt>0?`pagar antes del día ${a.payDay||'—'}`:'sin factura pendiente'}</div>
-          ${invoiceAmt>0?`<button class="btn bg_ sm" style="margin-top:8px;font-size:11px;width:100%" onclick="openBillingPay('${a.id}',${invoiceAmt})">Pagar ${fmt(invoiceAmt)}</button>`:''}
-        </div>
-      </div>
-      <!-- Recent transactions for this card -->
-      <div style="border-top:1px solid var(--bdr);padding:12px 16px">
-        <div style="font-size:11px;color:var(--t3);text-transform:uppercase;letter-spacing:.7px;margin-bottom:8px">Últimos movimientos</div>
-        ${(()=>{
-          // Antes esto solo mostraba gastos (type==='expense'), así que un
-          // pago a la tarjeta (una transferencia) NUNCA aparecía aquí —
-          // parecía que el pago "no se había registrado" aunque sí existiera.
-          const recent=S.transactions.filter(t=>t.accountId===a.id&&(t.type==='expense'||t.type==='transfer')).sort((x,y)=>(y.date+(y.time||'')).localeCompare(x.date+(x.time||''))).slice(0,4);
-          return recent.length?recent.map(t=>{
-            const isPay=t.type==='transfer';
-            const sign=t.type==='expense'?'-':isPay?(t.transferDirection==='in'?'+':'-'):'';
-            const clr=t.type==='expense'?'var(--exp)':'var(--blu)';
-            return`<div style="display:flex;justify-content:space-between;align-items:center;padding:5px 0;border-bottom:1px solid var(--bdr)"><div style="flex:1;min-width:0"><div style="font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(t.description)}${isPay?' <span style="color:var(--blu)">· Pago</span>':''}</div><div style="font-size:10px;color:var(--t3)">${fmtDate(t.date)} · ${isPay?'Transferencia':esc(t.category)||'—'}</div></div><span style="font-family:'DM Mono',monospace;font-size:12px;color:${clr};flex-shrink:0;margin-left:10px">${sign}${fmt(t.amount)}</span></div>`;
-          }).join(''):'<div style="font-size:12px;color:var(--t3)">Sin movimientos</div>';
-        })()}
-      </div>
-    </div>`;
-  });
-  html+='</div>';
-  el.innerHTML=html;
+  el.innerHTML='<div style="display:flex;flex-direction:column;gap:16px">'+tdcs.map(a=>billingCardHTML(a)).join('')+'</div>';
 }
 
 let _bpayType='total';
@@ -4593,7 +4610,20 @@ async function saveAcc(){
 }
 
 const ACC_TYPE_GROUP_LABEL={cash:'Efectivo',debit:'Débito',credit:'Tarjetas de crédito'};
+let currentAccountDetailId=null;
 function renderAccounts(){
+  // Lista vs. detalle — mismo patrón que Vehículos/Inversiones
+  // (currentVehicleId/currentInvestmentId): si hay una cuenta seleccionada
+  // y sigue existiendo, se muestra su detalle en vez de la grilla de
+  // tarjetas.
+  const listWrap=$('acc-list-wrap'),detail=$('acc-detail');
+  const detailAcc=currentAccountDetailId?Store.getAccountById(currentAccountDetailId):null;
+  if(currentAccountDetailId&&detailAcc){
+    listWrap.style.display='none';detail.style.display='block';
+    renderAccountDetailBody(detailAcc);
+    return;
+  } else if(currentAccountDetailId&&!detailAcc){currentAccountDetailId=null;}
+  listWrap.style.display='';detail.style.display='none';
   // Loan summary cards
   const ls=$('acc-loan-summary');
   if(ls){
@@ -4625,6 +4655,59 @@ function renderAccounts(){
   }
   g.innerHTML=html;
   renderMSI();updateNW();
+}
+function openAccountDetail(id){currentAccountDetailId=id;renderAccounts()}
+function closeAccountDetail(){currentAccountDetailId=null;renderAccounts()}
+// Contenido del detalle de una cuenta: para tarjetas de crédito se
+// reutiliza la misma vista de Facturación (billingCardHTML); para
+// efectivo/débito se arma un resumen (saldo, movimientos del mes,
+// últimos movimientos) con acceso a la lista completa de transacciones.
+function renderAccountDetailBody(a){
+  $('acc-detail-title').textContent=a.name;
+  if(a.type==='credit'){
+    $('acc-detail-body').innerHTML=billingCardHTML(a)+`<div style="text-align:center;margin-top:14px"><button class="btn bg_ sm" onclick="viewAccountTransactions('${a.id}')">Ver todas las transacciones →</button></div>`;
+  } else {
+    $('acc-detail-body').innerHTML=accountSummaryHTML(a);
+  }
+}
+function accountSummaryHTML(a){
+  const now=new Date();
+  const mo=now.getMonth(),yr=now.getFullYear();
+  const tl={cash:'Efectivo',debit:'Débito'};const tc={cash:'bdg-g',debit:'bdg-b'};
+  const accTxs=Store.queryTransactions({accountId:a.id,sortBy:'date',sortDir:'desc'});
+  const monthTxs=accTxs.filter(t=>{const d=dateLocal(t.date);return d.getMonth()===mo&&d.getFullYear()===yr});
+  const inc=monthTxs.filter(t=>t.type==='income').reduce((s,t)=>s+M(t.amount),0);
+  const exp=monthTxs.filter(t=>t.type==='expense').reduce((s,t)=>s+M(t.amount),0);
+  const recent=accTxs.slice(0,8);
+  return`<div class="card" style="margin-bottom:16px;border-left:3px solid ${a.color||'var(--ac)'}">
+    <div style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:10px">
+      <div>
+        <span class="bdg ${tc[a.type]||'bdg-n'}">${tl[a.type]||a.type}</span>
+        <div style="font-family:'DM Mono',monospace;font-size:28px;margin-top:8px;color:${a.balanceHidden?'var(--t3)':M(a.balance)>=0?'var(--inc)':'var(--exp)'}">${accBalanceLabel(a)}</div>
+        <div style="font-size:12px;color:var(--t3);margin-top:2px">Saldo actual${a.locked?' · 🔒 Cuenta bloqueada':''}</div>
+      </div>
+      <div style="display:flex;gap:6px">
+        <button class="btn bg_ ico sm" title="${a.locked?'Desbloquear cuenta':'Bloquear cuenta'}" onclick="toggleAccLocked('${a.id}')">${a.locked?'🔒':'🔓'}</button>
+        <button class="btn bg_ ico sm" title="${a.balanceHidden?'Mostrar saldo':'Ocultar saldo'}" onclick="toggleAccBalanceHidden('${a.id}')">${a.balanceHidden?'🙈':'👁'}</button>
+        <button class="btn bg_ ico sm" title="Más opciones" onclick="showRowMenu(this,[{label:'Editar',icon:'✎',onClick:()=>openAccM('${a.id}')},{label:'${a.archived?'Desarchivar':'Archivar'}',icon:'${a.archived?'📤':'📥'}',onClick:()=>toggleAccArchived('${a.id}')},{label:'Eliminar',icon:'✕',danger:true,onClick:()=>delAcc('${a.id}')}])">⋮</button>
+      </div>
+    </div>
+  </div>
+  <div class="g2" style="margin-bottom:16px">
+    <div class="m_ m_-inc"><div class="ml">Ingresos este mes</div><div class="mv">${a.balanceHidden?'••••••':fmt(inc)}</div></div>
+    <div class="m_ m_-exp"><div class="ml">Gastos este mes</div><div class="mv">${a.balanceHidden?'••••••':fmt(exp)}</div></div>
+  </div>
+  <div class="card">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;flex-wrap:wrap;gap:8px">
+      <div class="slbl" style="margin:0">Últimos movimientos</div>
+      <button class="btn bp sm" onclick="viewAccountTransactions('${a.id}')">Ver todas las transacciones →</button>
+    </div>
+    ${recent.length?recent.map(t=>{
+      const sign=t.type==='expense'?'-':t.type==='income'?'+':t.type==='transfer'?(t.transferDirection==='in'?'+':'-'):'';
+      const clr=t.type==='expense'?'var(--exp)':t.type==='income'?'var(--inc)':'var(--blu)';
+      return`<div style="display:flex;justify-content:space-between;align-items:center;padding:7px 0;border-bottom:1px solid var(--bdr)"><div style="flex:1;min-width:0"><div style="font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(t.description)}${t.type==='transfer'?' <span style="color:var(--blu)">· Transf.</span>':''}</div><div style="font-size:11px;color:var(--t3)">${fmtDate(t.date)} · ${esc(t.category)||'—'}</div></div><span style="font-family:'DM Mono',monospace;font-size:13px;color:${clr};flex-shrink:0;margin-left:10px">${sign}${fmt(t.amount)}</span></div>`;
+    }).join(''):'<div style="font-size:12px;color:var(--t3);padding:10px 0">Sin movimientos todavía</div>'}
+  </div>`;
 }
 // Clic en una tarjeta de cuenta: va a Transacciones ya filtrado por esa
 // cuenta. go('transactions') ya deja el selector de cuentas poblado (lo
@@ -4727,7 +4810,7 @@ function accountCardHTML(a){
       const clr=t.type==='expense'?'var(--exp)':t.type==='income'?'var(--inc)':'var(--blu)';
       return`<div style="display:flex;justify-content:space-between;gap:8px;font-size:11px;color:var(--t3);padding:2px 0"><span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(t.description)}${t.type==='transfer'?' <span style="color:var(--blu)">· Transf.</span>':''}</span><span style="font-family:'DM Mono',monospace;color:${clr};flex-shrink:0">${sign}${fmt(t.amount)}</span></div>`;
     }).join('')}</div>`:'';
-    return`<div class="card-click" style="background:var(--bg3);border:1px solid var(--bdr);border-radius:var(--r);padding:15px;position:relative;border-left:3px solid ${a.color||'var(--ac)'}${a.locked?';opacity:.85':''}" onclick="viewAccountTransactions('${a.id}')">
+    return`<div class="card-click" style="background:var(--bg3);border:1px solid var(--bdr);border-radius:var(--r);padding:15px;position:relative;border-left:3px solid ${a.color||'var(--ac)'}${a.locked?';opacity:.85':''}" onclick="openAccountDetail('${a.id}')">
       <div style="position:absolute;top:12px;right:12px;display:flex;align-items:center;gap:4px" onclick="event.stopPropagation()">
         <span class="bdg ${tc[a.type]||'bdg-n'}">${tl[a.type]||a.type}</span>
         <button class="btn bg_ ico sm" title="${a.locked?'Desbloquear cuenta':'Bloquear cuenta (no permite crear/editar movimientos)'}" onclick="toggleAccLocked('${a.id}')">${a.locked?'🔒':'🔓'}</button>
@@ -4736,33 +4819,17 @@ function accountCardHTML(a){
       </div>
       <div style="font-size:15px;font-weight:500;margin-bottom:4px">${esc(a.name)}${a.locked?' 🔒':''}</div>
       <div style="font-family:'DM Mono',monospace;font-size:19px;color:${a.balanceHidden?'var(--t3)':M(a.balance)>=0?'var(--inc)':'var(--exp)'}">${accBalanceLabel(a)}</div>
-      ${a.type==='credit'&&!a.locked?`<button class="btn bp sm" style="margin-top:10px;width:100%" onclick="event.stopPropagation();payCreditCard('${a.id}')">💳 Pagar tarjeta</button>`:''}
+      ${a.type==='credit'&&!a.locked?`<button class="btn bp sm" style="margin-top:10px;width:100%" onclick="event.stopPropagation();openBillingPay('${a.id}')">💳 Pagar tarjeta</button>`:''}
       ${extra}${recentHtml}
     </div>`;
 }
-// Abre "Nueva transacción" precargada como TRANSFERENCIA hacia esta
-// tarjeta — así queda claro que pagar una TDC es un traspaso de dinero
-// (de la cuenta de donde sale, hacia la tarjeta), no un gasto suelto.
-//
-// BUG DE FLUJO ENCONTRADO (no de código, de UX): no existía ningún botón
-// dedicado para esto, así que era fácil registrar el pago como un Gasto
-// normal desde la cuenta de débito — eso sí baja el dinero disponible de
-// esa cuenta (correcto), pero como un Gasto solo toca UNA cuenta, la
-// tarjeta nunca se entera del pago: "lo que debes" en la tarjeta se queda
-// igual, y el pago no aparece en el historial de la tarjeta. La forma
-// correcta es una Transferencia (mueve dinero DE la cuenta de origen
-// HACIA la tarjeta) — este botón deja eso precargado para no repetir el
-// error.
-function payCreditCard(cardId){
-  const card=Store.getAccountById(cardId);
-  if(!card)return;
-  openTxM();
-  setTxT('transfer');
-  ensureAccountOption('tx-acc2',cardId);
-  $('tx-acc2').value=cardId;
-  $('tx-dsc').value='Pago de tarjeta';
-  onAccChange();
-}
+// NOTA: el botón "Pagar tarjeta" usaba antes una función propia
+// (payCreditCard) que abría "Nueva transacción" como Transferencia —
+// funcionalmente correcto, pero un formulario DISTINTO al de Facturación
+// (openBillingPay), que además prellena el monto de la factura y permite
+// pagar con puntos. Se unificó: ahora todos los botones de pago de
+// tarjeta, estén donde estén, abren openBillingPay() — un solo formulario
+// de pago en toda la app.
 async function toggleAccLocked(id){
   const a=Store.getAccountById(id);if(!a)return;
   Store.updateAccount(id,{locked:!a.locked});
