@@ -932,7 +932,15 @@ body.modal-open #bottom-nav{display:none !important}
         <div id="msi-opts" style="display:none">
           <div class="g2">
             <div class="fg"><label class="fl">Meses</label>
-              <select class="fc" id="tx-msi-mo" onchange="calcMsiPay()"><option value="3">3 meses</option><option value="6">6 meses</option><option value="9">9 meses</option><option value="12">12 meses</option><option value="18">18 meses</option><option value="24">24 meses</option></select>
+              <input class="fc" type="number" id="tx-msi-mo" min="1" step="1" inputmode="numeric" value="3" oninput="calcMsiPay()">
+              <div style="display:flex;gap:5px;margin-top:6px;flex-wrap:wrap">
+                <button type="button" class="btn bg_ sm" style="padding:4px 10px;font-size:11px" onclick="setMsiMo(3)">3</button>
+                <button type="button" class="btn bg_ sm" style="padding:4px 10px;font-size:11px" onclick="setMsiMo(6)">6</button>
+                <button type="button" class="btn bg_ sm" style="padding:4px 10px;font-size:11px" onclick="setMsiMo(9)">9</button>
+                <button type="button" class="btn bg_ sm" style="padding:4px 10px;font-size:11px" onclick="setMsiMo(12)">12</button>
+                <button type="button" class="btn bg_ sm" style="padding:4px 10px;font-size:11px" onclick="setMsiMo(18)">18</button>
+                <button type="button" class="btn bg_ sm" style="padding:4px 10px;font-size:11px" onclick="setMsiMo(24)">24</button>
+              </div>
             </div>
             <div class="fg"><label class="fl">Pago mensual</label><input class="fc" type="text" id="msi-pay" readonly></div>
           </div>
@@ -4002,7 +4010,7 @@ function openTxM(editId=null){
     // esta transacción queda ordenada como la más reciente del día. Si el
     // usuario cambia la hora a mano, se ordena según lo que puso.
     $('tx-amt').value='';$('tx-dt').value=td_();$('tx-time').value=tnow_();$('tx-dsc').value='';$('tx-notes').value='';
-    $('tx-msi').checked=false;$('msi-opts').style.display='none';
+    $('tx-msi').checked=false;$('msi-opts').style.display='none';$('tx-msi-mo').value='3';
     fillTxSelects();
   }
   oM('mo-tx');
@@ -4061,7 +4069,8 @@ function onAccChange(){
   if(!showMsi){$('tx-msi').checked=false;$('msi-opts').style.display='none'}
 }
 function togMsi(){$('msi-opts').style.display=$('tx-msi').checked?'block':'none';if($('tx-msi').checked)calcMsiPay()}
-function calcMsiPay(){const a=M($('tx-amt').value)||0;const m=parseInt($('tx-msi-mo').value)||3;$('msi-pay').value=fmt(a/m)}
+function setMsiMo(n){$('tx-msi-mo').value=n;calcMsiPay()}
+function calcMsiPay(){const a=M($('tx-amt').value)||0;const m=Math.max(1,parseInt($('tx-msi-mo').value,10)||3);$('msi-pay').value=fmt(a/m)}
 
 // ==================== IMPORTAR EXCEL ====================
 // Reutiliza Store.addTransaction() para cada fila importada — así cada
@@ -4286,7 +4295,9 @@ async function saveTx(){
   if(txType==='transfer'&&!$('tx-acc2').value){toast('Selecciona la cuenta destino',false);return}
   const time=$('tx-time').value||tnow_();
   const msiOn=$('tx-msi').checked&&txType==='expense';
-  const msiMo=parseInt($('tx-msi-mo').value)||0;
+  const msiMoRaw=$('tx-msi-mo').value;
+  const msiMo=parseInt(msiMoRaw,10);
+  if(msiOn&&(!Number.isInteger(msiMo)||msiMo<1||String(msiMoRaw).includes('.'))){toast('El número de meses de MSI debe ser un entero mayor a 0',false);return}
 
   if(editingTxId){
     const existing=Store.getTransactionById(editingTxId);
