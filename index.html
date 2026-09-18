@@ -979,17 +979,20 @@ body.modal-open #bottom-nav{display:none !important}
   </div>
 </div>
 
-<!-- MSI PAYMENT MODAL -->
+<!-- MSI ADVANCE PAYMENT MODAL — antes era "Pago mensual MSI" (una
+     mecánica que creaba una transacción cada mes y duplicaba el pago ya
+     cubierto por la factura normal). Ahora es solo para adelantos
+     voluntarios de dinero real, ver execMsiAdvance(). -->
 <div class="mo" id="mo-msi-pay">
   <div class="md" style="max-width:400px">
-    <div class="mh"><span class="mttl">Pago mensual MSI</span><button class="btn bg_ ico sm" onclick="cM('mo-msi-pay')">✕</button></div>
+    <div class="mh"><span class="mttl">Adelantar pago — MSI</span><button class="btn bg_ ico sm" onclick="cM('mo-msi-pay')">✕</button></div>
     <div class="mbody">
       <input type="hidden" id="msi-pay-txid">
       <div id="msi-pay-info" style="background:var(--bg3);border-radius:var(--r2);padding:12px;margin-bottom:14px;font-size:13px;color:var(--t2)"></div>
-      <div class="fg"><label class="fl">Pagar con cuenta</label><select class="fc" id="msi-pay-acc"></select></div>
-      <div class="fg"><label class="fl">Monto a pagar</label><input class="fc" type="number" id="msi-pay-amt" step="0.01"></div>
+      <div class="fg"><label class="fl">Cuenta de origen</label><select class="fc" id="msi-pay-acc"></select></div>
+      <div class="fg"><label class="fl">Monto a abonar</label><input class="fc" type="number" id="msi-pay-amt" step="0.01" placeholder="0.00"></div>
     </div>
-    <div class="mfoot"><button class="btn bg_ sm" onclick="cM('mo-msi-pay')">Cancelar</button><button class="btn bp sm" onclick="execMsiPay()">Registrar pago</button></div>
+    <div class="mfoot"><button class="btn bg_ sm" onclick="cM('mo-msi-pay')">Cancelar</button><button class="btn bp sm" onclick="execMsiAdvance()">Registrar adelanto</button></div>
   </div>
 </div>
 
@@ -3465,12 +3468,15 @@ function billingCardHTML(a){
     let nextCut=new Date(lastCut.getFullYear(),lastCut.getMonth()+1,a.cutDay);
     periodStart=toLocal(lastCut);
     periodEnd=toLocal(nextCut);
-    // Current period spending (since last cut, not yet closed)
-    currentAmt=S.transactions.filter(t=>t.type==='expense'&&t.accountId===a.id&&t.date>periodStart&&t.date<=todayStr).reduce((s,t)=>s+M(t.amount),0);
+    // Current period spending (since last cut, not yet closed) — se
+    // separa MSI de gasto normal (ver tdcSpendForPeriod/msiPeriodAmount):
+    // una compra a MSI solo aporta su mensualidad a cada periodo, no el
+    // total de la compra.
+    currentAmt=tdcSpendForPeriod(a.id,todayStr,a.cutDay);
     // Invoice = previous closed period (before last cut)
     const prevCutDate=new Date(lastCut.getFullYear(),lastCut.getMonth()-1,a.cutDay);
     const prevCutStr=toLocal(prevCutDate);
-    invoiceAmt=S.transactions.filter(t=>t.type==='expense'&&t.accountId===a.id&&t.date>prevCutStr&&t.date<=periodStart).reduce((s,t)=>s+M(t.amount),0);
+    invoiceAmt=tdcSpendForPeriod(a.id,prevCutStr,a.cutDay);
     // Se resta lo ya pagado desde el corte — antes esto se quedaba
     // igual sin importar cuánto se hubiera abonado.
     invoiceAmt=Math.max(0,invoiceAmt-tdcPaidSince(a.id,periodStart));
@@ -4328,7 +4334,12 @@ async function saveTx(){
   // "Sin descripción" para identificar la transacción en las listas.
   const desc=$('tx-dsc').value||subcat||cat||'Sin descripción';
   const tx={type:txType,amount:amt,date:dt,time,description:desc,category:cat,subcategory:subcat||undefined,accountId:accId,notes:$('tx-notes').value,
-    msi:msiOn?{months:msiMo,paid:0,monthly:amt/msiMo,paidAmt:0}:null};
+    // Nota sobre el modelo de MSI: ya NO se guarda "paid"/"paidAmt" como
+    // contador manual — el avance ahora es puramente informativo (se
+    // calcula solo con la fecha de compra y el día de corte de la
+    // tarjeta, ver msiStatus()). "advancePaid" solo guarda dinero REAL
+    // adelantado voluntariamente (ver openMsiAdvanceM/execMsiAdvance).
+    msi:msiOn?{months:msiMo,monthly:amt/msiMo,advancePaid:0}:null};
   Store.addTransaction(tx);
   cM('mo-tx');renderDash();renderTxP();toast('Transacción guardada');saveBtn.disabled=false;
 }
@@ -4725,15 +4736,23 @@ function viewAccountTransactions(accountId){
 // del Dashboard — antes solo existía duplicado dentro de accountCardHTML.
 // Devuelve null si la cuenta no tiene día de corte configurado (no hay
 // forma de saber dónde empieza el periodo).
+// Suma el gasto de una tarjeta que corresponde a un periodo de
+// facturación específico (identificado por cualquier fecha dentro de ese
+// periodo). Se separa MSI de gasto normal porque el MSI reparte su monto
+// en mensualidades (ver msiPeriodAmount) en vez de cobrarse completo el
+// día de la compra — antes, una compra a 6 MSI aparecía completa en el
+// estado de cuenta del mes en que se hizo, en vez de solo su mensualidad.
+function tdcSpendForPeriod(accountId,periodDateStr,cutDay){
+  const pKey=periodKeyForDate(periodDateStr,cutDay);
+  const nonMsi=S.transactions.filter(t=>t.type==='expense'&&!t.msi&&t.accountId===accountId&&periodKeyForDate(t.date,cutDay)===pKey).reduce((s,t)=>s+M(t.amount),0);
+  const msi=S.transactions.filter(t=>t.type==='expense'&&t.msi&&t.accountId===accountId).reduce((s,t)=>s+msiPeriodAmount(t,periodDateStr,cutDay),0);
+  return nonMsi+msi;
+}
 function tdcPeriodSpend(a){
   if(!a.cutDay)return null;
   const now=new Date();
   const toLocal=d=>`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
-  let lastCut=new Date(now.getFullYear(),now.getMonth(),a.cutDay);
-  if(lastCut>now)lastCut=new Date(now.getFullYear(),now.getMonth()-1,a.cutDay);
-  const lastCutStr=toLocal(lastCut);
-  const todayStr=toLocal(now);
-  return S.transactions.filter(t=>t.type==='expense'&&t.accountId===a.id&&t.date>lastCutStr&&t.date<=todayStr).reduce((s,t)=>s+M(t.amount),0);
+  return tdcSpendForPeriod(a.id,toLocal(now),a.cutDay);
 }
 // BUG REAL ENCONTRADO: "Factura pendiente"/"pago pendiente" en las 3
 // pantallas que lo muestran (Facturación, la tarjeta de Cuentas, y el
@@ -4789,7 +4808,7 @@ function accountCardHTML(a){
         if(afterCut){
           const cutDate=new Date(now.getFullYear(),now.getMonth(),a.cutDay);
           const prevCut=new Date(now.getFullYear(),now.getMonth()-1,a.cutDay);
-          const invoiceSpend=S.transactions.filter(t=>t.type==='expense'&&t.accountId===a.id&&t.date>=toLocal(prevCut)&&t.date<toLocal(cutDate)).reduce((s,t)=>s+M(t.amount),0);
+          const invoiceSpend=tdcSpendForPeriod(a.id,toLocal(prevCut),a.cutDay);
           // Se resta lo ya pagado desde el corte — mismo arreglo que en
           // Facturación y en el diálogo de pago (ver tdcPaidSince).
           const invoicePending=Math.max(0,invoiceSpend-tdcPaidSince(a.id,toLocal(cutDate)));
@@ -4856,46 +4875,107 @@ async function delAcc(id){
   Store.deleteAccount(id);renderAccounts();renderDash();populateTxAccFilter();toast('Cuenta eliminada');
 }
 
-// MSI — Corrected: payment comes FROM another account, reduces that account balance, and reduces outstanding MSI debt
+// ==================== MSI (meses sin intereses) ====================
+// Modelo nuevo: una compra a MSI ya se registró como UN gasto por el
+// monto TOTAL el día de la compra (eso baja el crédito disponible
+// correctamente desde ese momento). tx.msi = {months, monthly,
+// advancePaid} es solo metadata: NO genera ninguna transacción por su
+// avance normal — ese avance se cubre solo, mes a mes, cuando pagas la
+// factura de la tarjeta (ver Facturación, que ahora reparte cada MSI en
+// mensualidades — ver msiPeriodAmount más abajo). La única transacción
+// real posible aquí es un ADELANTO voluntario de dinero (ver
+// execMsiAdvance), que se guarda en advancePaid y acorta lo que falta.
+
+// periodKeyForDate: entero comparable que identifica a qué periodo de
+// corte pertenece una fecha (mismo valor para cualquier fecha entre un
+// corte y el siguiente).
+function periodKeyForDate(dateStr,cutDay){
+  const d=dateLocal(dateStr);
+  let y=d.getFullYear(),m=d.getMonth();
+  if(d.getDate()<cutDay){m--;if(m<0){m=11;y--;}}
+  return y*12+m;
+}
+// msiStatus: cuántos meses de este MSI ya transcurrieron (por día de
+// corte de la tarjeta, no por transacciones), cuánto se ha adelantado, y
+// cuánto falta.
+function msiStatus(t){
+  const months=t.msi.months,monthly=M(t.msi.monthly);
+  // paidAmt es el campo de la mecánica vieja ("pago del mes" manual) que
+  // se quitó — se conserva como adelanto inicial para no perder abonos
+  // reales que ya se hubieran hecho con ese mecanismo.
+  const advancePaid=M(t.msi.advancePaid!=null?t.msi.advancePaid:(t.msi.paidAmt||0));
+  const total=M(t.amount);
+  const acc=Store.getAccountById(t.accountId);
+  if(!acc||!acc.cutDay){
+    // Sin día de corte configurado no se puede ubicar el periodo — se
+    // muestra el total menos cualquier adelanto, sin "meses transcurridos".
+    const remainingBalance=Math.max(0,total-advancePaid);
+    return{months,monthly,advancePaid,elapsed:0,remainingBalance,remainingMonths:monthly>0?Math.ceil(remainingBalance/monthly):0,effectiveMonths:months,noCutDay:true};
+  }
+  const pToday=periodKeyForDate(td_(),acc.cutDay);
+  const pPurchase=periodKeyForDate(t.date,acc.cutDay);
+  const elapsed=Math.max(0,Math.min(months,pToday-pPurchase));
+  const owedBeforeAdvance=Math.max(0,total-elapsed*monthly);
+  const remainingBalance=Math.max(0,owedBeforeAdvance-advancePaid);
+  const remainingMonths=monthly>0?Math.ceil(remainingBalance/monthly):0;
+  const effectiveMonths=Math.min(months,elapsed+remainingMonths);
+  return{months,monthly,advancePaid,elapsed,remainingBalance,remainingMonths,effectiveMonths,noCutDay:false};
+}
+// msiPeriodAmount: cuánto aporta ESTA transacción a un periodo de
+// facturación específico (identificado por cualquier fecha dentro de ese
+// periodo). Gasto normal (sin MSI): el monto completo, igual que antes.
+// MSI: solo la mensualidad, y solo mientras ese periodo siga dentro de
+// los meses todavía activos (effectiveMonths) — así un adelanto de pago
+// también acorta lo que aparece en Facturación hacia adelante.
+function msiPeriodAmount(t,periodDateStr,cutDay){
+  if(!t.msi||!cutDay)return M(t.amount);
+  const pIdx=periodKeyForDate(periodDateStr,cutDay)-periodKeyForDate(t.date,cutDay);
+  return(pIdx>=0&&pIdx<msiStatus(t).effectiveMonths)?M(t.msi.monthly):0;
+}
 function renderMSI(){
-  const msi=S.transactions.filter(t=>t.msi&&(t.msi.paid||0)<t.msi.months);
+  const active=S.transactions.filter(t=>t.msi&&msiStatus(t).remainingBalance>0);
   const el=$('msi-list');
-  if(!msi.length){el.innerHTML='<div style="color:var(--t3);font-size:13px">Sin MSI activos</div>';return}
-  el.innerHTML=msi.map(t=>{
-    const paid=t.msi.paid||0;const rem=t.msi.months-paid;const p=(paid/t.msi.months*100).toFixed(0);
-    const tdcAcc=S.accounts.find(a=>a.id===t.accountId);
-    return`<div class="msi-r"><div style="display:flex;justify-content:space-between;margin-bottom:5px"><span style="font-weight:500;font-size:13px">${esc(t.description)}</span><span style="color:var(--pur);font-family:'DM Mono',monospace;font-size:13px">${fmt(t.msi.monthly)}/mes</span></div><div style="display:flex;justify-content:space-between;font-size:11px;color:var(--t3);margin-bottom:5px"><span>TDC: ${tdcAcc?esc(tdcAcc.name):'—'} · ${t.msi.months} meses</span><span>${paid} pagos hechos · ${rem} restantes</span></div><div class="pw" style="margin-bottom:8px"><div class="pb" style="width:${p}%;background:var(--pur)"></div></div><button class="btn bg_ sm" onclick="openMsiPayM('${t.id}')">Registrar pago del mes</button></div>`;
+  if(!active.length){el.innerHTML='<div style="color:var(--t3);font-size:13px">Sin MSI activos</div>';return}
+  el.innerHTML=active.map(t=>{
+    const st=msiStatus(t);
+    const tdcAcc=Store.getAccountById(t.accountId);
+    const p=(st.elapsed/st.months*100).toFixed(0);
+    return`<div class="msi-r"><div style="display:flex;justify-content:space-between;margin-bottom:5px"><span style="font-weight:500;font-size:13px">${esc(t.description)}</span><span style="color:var(--pur);font-family:'DM Mono',monospace;font-size:13px">${fmt(st.monthly)}/mes</span></div><div style="display:flex;justify-content:space-between;font-size:11px;color:var(--t3);margin-bottom:5px"><span>TDC: ${tdcAcc?esc(tdcAcc.name):'—'} · ${st.months} meses${st.noCutDay?' · configura día de corte para seguimiento exacto':''}</span><span>${st.elapsed} transcurridos · ${st.remainingMonths} restantes</span></div><div class="pw" style="margin-bottom:8px"><div class="pb" style="width:${p}%;background:var(--pur)"></div></div><div style="display:flex;justify-content:space-between;align-items:center;gap:8px"><span style="font-size:12px;color:var(--t3)">Te falta: <span style="font-family:'DM Mono',monospace;color:var(--txt)">${fmt(st.remainingBalance)}</span></span><button class="btn bg_ sm" onclick="openMsiAdvanceM('${t.id}')">Adelantar pago</button></div></div>`;
   }).join('');
 }
-
-function openMsiPayM(txId){
-  const tx=S.transactions.find(t=>t.id===txId);if(!tx)return;
-  const tdc=Store.getAccountById(tx.accountId);
-  if(tdc?.locked){toast('Esta cuenta está bloqueada — no se pueden registrar movimientos en ella.',false);return}
+function openMsiAdvanceM(txId){
+  const tx=S.transactions.find(t=>t.id===txId);if(!tx||!tx.msi)return;
+  const st=msiStatus(tx);
   $('msi-pay-txid').value=txId;
-  $('msi-pay-info').innerHTML=`<strong>${esc(tx.description)}</strong><br>Pago ${(tx.msi.paid||0)+1} de ${tx.msi.months} · monto sugerido: <strong>${fmt(tx.msi.monthly)}</strong>`;
-  $('msi-pay-amt').value=tx.msi.monthly.toFixed(2);
-  // Fill account selector excluding the TDC that has the MSI
+  $('msi-pay-info').innerHTML=`<strong>${esc(tx.description)}</strong><br>Te falta: <strong>${fmt(st.remainingBalance)}</strong> (${st.remainingMonths} mensualidad${st.remainingMonths===1?'':'es'} de ${fmt(st.monthly)})`;
+  $('msi-pay-amt').value='';
+  // Cuenta de origen del adelanto — excluye la propia tarjeta con el MSI
   const opts=selectableAccounts(tx.accountId).map(a=>`<option value="${a.id}">${esc(a.name)} (${accBalanceLabel(a)})</option>`).join('');
   $('msi-pay-acc').innerHTML=opts||'<option value="">Sin otras cuentas</option>';
   oM('mo-msi-pay');
 }
-
-function execMsiPay(){
+function execMsiAdvance(){
   const txId=$('msi-pay-txid').value;
-  const tx=S.transactions.find(t=>t.id===txId);if(!tx)return;
+  const tx=S.transactions.find(t=>t.id===txId);if(!tx||!tx.msi)return;
   const payAccId=$('msi-pay-acc').value;
-  const amt=M($('msi-pay-amt').value)||tx.msi.monthly;
-  const newPaid=(tx.msi.paid||0)+1;
-  const newPaidAmt=(tx.msi.paidAmt||0)+amt;
-  // Antes esto movía los balances a mano, metía la transacción nueva
-  // directo al arreglo local, y solo actualizaba tx.msi en localStorage —
-  // nada de eso llegaba nunca a Supabase (ni los balances, ni la
-  // transacción nueva, ni el progreso del MSI). Ahora todo pasa por Store.
-  Store.addTransaction({type:'transfer',amount:amt,date:td_(),time:tnow_(),description:`Pago MSI ${newPaid}/${tx.msi.months}: ${tx.description}`,category:tx.category||'',subcategory:tx.subcategory||undefined,accountId:payAccId,accountId2:tx.accountId,notes:'Pago MSI automático'});
-  Store.updateTransaction(tx.id,{msi:{...tx.msi,paid:newPaid,paidAmt:newPaidAmt}});
-  cM('mo-msi-pay');renderMSI();renderAccounts();renderDash();toast(`Pago ${newPaid}/${tx.msi.months} registrado`);
+  const amt=M($('msi-pay-amt').value)||0;
+  if(!payAccId){toast('Selecciona la cuenta de origen',false);return}
+  if(!(amt>0)){toast('Ingresa un monto válido',false);return}
+  // Mismo patrón de transferencia (dos transacciones ligadas por
+  // linkedTxId) que usa el pago normal de tarjeta (execBillingPay) — así
+  // se ve y se cuenta exactamente igual en el resto de la app.
+  const transferCat=ensureCategory('Transferencia','expense');
+  const desc=`Adelanto MSI: ${tx.description}`;
+  const outTx=Store.addTransaction({type:'transfer',amount:amt,date:td_(),time:tnow_(),description:desc,category:transferCat.name,accountId:payAccId,transferDirection:'out',notes:'Adelanto de pago a meses sin intereses'});
+  const inTx=Store.addTransaction({type:'transfer',amount:amt,date:td_(),time:tnow_(),description:desc,category:transferCat.name,accountId:tx.accountId,transferDirection:'in',linkedTxId:outTx.id,notes:'Adelanto de pago a meses sin intereses'});
+  Store.updateTransaction(outTx.id,{linkedTxId:inTx.id});
+  const advancePaid=M(tx.msi.advancePaid!=null?tx.msi.advancePaid:(tx.msi.paidAmt||0))+amt;
+  Store.updateTransaction(tx.id,{msi:{months:tx.msi.months,monthly:tx.msi.monthly,advancePaid}});
+  const newSt=msiStatus({...tx,msi:{...tx.msi,advancePaid}});
+  cM('mo-msi-pay');renderMSI();renderAccounts();renderDash();
+  toast(`Adelanto registrado — te falta ${fmt(newSt.remainingBalance)}`);
 }
+
 
 // ==================== ANALYSIS ====================
 let anPeriod='month';let ch1,ch2,ch3,ch4,ch5,ch6,ch7;
