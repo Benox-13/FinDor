@@ -688,19 +688,19 @@ body.modal-open #bottom-nav{display:none !important}
 
 <!-- SETTINGS -->
 <div id="page-settings" class="page">
-  <div class="ph"><div><div class="pt">Configuración</div></div></div>
+  <div class="ph"><div><div class="pt">Configuración</div><div class="ps">Tu perfil, apariencia y datos de la app</div></div></div>
   <div class="tabs" id="cfg-tabs">
-    <button class="tab on" onclick="cfgTab('perfil',this)">Perfil</button>
-    <button class="tab" onclick="cfgTab('aspecto',this)">Aspecto</button>
-    <button class="tab" onclick="cfgTab('dashboard',this)">Dashboard</button>
-    <button class="tab" onclick="cfgTab('categorias',this)">Categorías</button>
-    <button class="tab" onclick="cfgTab('notif',this)">Notificaciones</button>
-    <button class="tab" onclick="cfgTab('historial',this)">Historial NW</button>
+    <button class="tab on" onclick="cfgTab('perfil',this)">👤 Perfil</button>
+    <button class="tab" onclick="cfgTab('aspecto',this)">🎨 Aspecto</button>
+    <button class="tab" onclick="cfgTab('dashboard',this)">📊 Dashboard</button>
+    <button class="tab" onclick="cfgTab('categorias',this)">🏷️ Categorías</button>
+    <button class="tab" onclick="cfgTab('notif',this)">🔔 Notificaciones</button>
+    <button class="tab" onclick="cfgTab('historial',this)">📈 Historial NW</button>
   </div>
   <div id="cfg-perfil">
     <!-- PERFIL CARD -->
     <div class="card" style="margin-bottom:20px">
-      <div style="display:flex;align-items:center;gap:18px">
+      <div style="display:flex;align-items:center;gap:18px;flex-wrap:wrap">
         <div style="position:relative;flex-shrink:0">
           <div id="prof-avatar" style="width:72px;height:72px;border-radius:50%;background:var(--acg);display:flex;align-items:center;justify-content:center;font-size:28px;box-shadow:0 4px 14px rgba(48,214,147,.3);overflow:hidden;cursor:pointer" onclick="if(profileEditMode)$('prof-photo-input').click()">
             <span id="prof-avatar-emoji">👤</span>
@@ -709,18 +709,20 @@ body.modal-open #bottom-nav{display:none !important}
           <div id="prof-edit-hint" style="display:none;position:absolute;bottom:-2px;right:-2px;width:22px;height:22px;border-radius:50%;background:var(--acg);display:flex;align-items:center;justify-content:center;font-size:11px;pointer-events:none">✎</div>
           <input type="file" id="prof-photo-input" accept="image/*" style="display:none" onchange="onProfPhotoChange(event)">
         </div>
-        <div style="flex:1">
+        <div style="flex:1;min-width:140px">
           <div id="prof-name-display" style="font-size:18px;font-weight:600;margin-bottom:3px">—</div>
           <div id="prof-email-display" style="font-size:12px;color:var(--t3)">Sin correo</div>
         </div>
-        <button class="btn bg_ sm" id="prof-edit-btn" onclick="toggleProfileEdit()">✎ Modificar</button>
-        <button class="btn bp sm" id="prof-save-btn" style="display:none" onclick="saveProfileFull()">Guardar</button>
-        <button class="btn bd sm" onclick="authLogout()">Cerrar sesión</button>
+        <div style="display:flex;gap:8px;flex-wrap:wrap">
+          <button class="btn bg_ sm" id="prof-edit-btn" onclick="toggleProfileEdit()">✎ Modificar</button>
+          <button class="btn bp sm" id="prof-save-btn" style="display:none" onclick="saveProfileFull()">Guardar</button>
+          <button class="btn bd sm" onclick="authLogout()">Cerrar sesión</button>
+        </div>
       </div>
     </div>
     <!-- EDICIÓN CAMPOS -->
     <div id="prof-edit-fields" style="display:none">
-      <div class="ss"><h3>Información personal</h3>
+      <div class="ss"><h3>👤 Información personal</h3>
         <div class="g2">
           <div class="fg"><label class="fl">Nombre</label><input class="fc" id="cfg-name" placeholder="Tu nombre"></div>
           <div class="fg"><label class="fl">Correo</label><input class="fc" id="cfg-email" type="email" placeholder="tu@correo.com"></div>
@@ -733,11 +735,20 @@ body.modal-open #bottom-nav{display:none !important}
       </div>
     </div>
     <!-- DATOS section (always visible) -->
-    <div class="ss"><h3>Datos</h3>
-      <div class="sr"><div><div class="si-l">Exportar datos</div><div class="si-s">Backup en JSON</div></div><button class="btn bg_ sm" onclick="exportData()">Exportar</button></div>
-      <div class="sr"><div><div class="si-l">Importar datos</div><div class="si-s">Restaurar desde backup</div></div><label class="btn bg_ sm" style="cursor:pointer">Importar<input type="file" accept=".json" onchange="importData(event)" style="display:none"></label></div>
-      <div class="sr"><div><div class="si-l">Importar transacciones desde Excel</div><div class="si-s">Sube un .xlsx/.xls/.csv con tu historial</div></div><button class="btn bg_ sm" onclick="openImportM()">Importar Excel</button></div>
-      <div class="sr"><div><div class="si-l" style="color:var(--red)">Borrar todo</div><div class="si-s">Acción irreversible</div></div><button class="btn bd sm" onclick="oM('mo-nuke')">Borrar</button></div>
+    <div class="ss"><h3>🗂️ Datos</h3>
+      <div class="sr"><div style="display:flex;align-items:center;gap:12px"><div class="ic-badge ic-badge-b">📤</div><div><div class="si-l">Exportar datos</div><div class="si-s">Backup en JSON</div></div></div><button class="btn bg_ sm" onclick="exportData()">Exportar</button></div>
+      <div class="sr"><div style="display:flex;align-items:center;gap:12px"><div class="ic-badge ic-badge-b">📥</div><div><div class="si-l">Importar datos</div><div class="si-s">Restaurar desde backup</div></div></div><label class="btn bg_ sm" style="cursor:pointer">Importar<input type="file" accept=".json" onchange="importData(event)" style="display:none"></label></div>
+      <div class="sr"><div style="display:flex;align-items:center;gap:12px"><div class="ic-badge ic-badge-g">📊</div><div><div class="si-l">Importar transacciones desde Excel</div><div class="si-s">Sube un .xlsx/.xls/.csv con tu historial</div></div></div><button class="btn bg_ sm" onclick="openImportM()">Importar Excel</button></div>
+    </div>
+    <!-- ZONA DE RIESGO — separada del resto para que una acción
+         irreversible nunca quede al mismo nivel visual que exportar/
+         importar, siguiendo el mismo principio que usan apps como YNAB. -->
+    <div class="card" style="border:1px solid rgba(255,95,109,.25);background:rgba(255,95,109,.05);margin-bottom:20px">
+      <div style="font-size:11px;font-weight:700;color:var(--red);text-transform:uppercase;letter-spacing:1px;margin-bottom:12px">⚠️ Zona de riesgo</div>
+      <div class="sr" style="border:none;padding:0">
+        <div style="display:flex;align-items:center;gap:12px"><div class="ic-badge ic-badge-r">🗑️</div><div><div class="si-l" style="color:var(--red)">Borrar todo</div><div class="si-s">Acción irreversible</div></div></div>
+        <button class="btn bd sm" onclick="oM('mo-nuke')">Borrar</button>
+      </div>
     </div>
   </div>
 
@@ -775,10 +786,10 @@ body.modal-open #bottom-nav{display:none !important}
   </div>
 </div>
   <div id="cfg-aspecto" style="display:none">
-    <div class="ss"><h3>Tema</h3>
-      <div class="sr"><div><div class="si-l">Modo oscuro</div></div><label class="sw"><input type="checkbox" id="cfg-dark" checked onchange="applyTheme()"><span class="sl"></span></label></div>
+    <div class="ss"><h3>🌙 Tema</h3>
+      <div class="sr"><div style="display:flex;align-items:center;gap:12px"><div class="ic-badge ic-badge-n">🌙</div><div><div class="si-l">Modo oscuro</div></div></div><label class="sw"><input type="checkbox" id="cfg-dark" checked onchange="applyTheme()"><span class="sl"></span></label></div>
     </div>
-    <div class="ss"><h3>Color de acento</h3>
+    <div class="ss"><h3>🎨 Color de acento</h3>
       <div style="display:flex;gap:10px;padding:4px 0">
         <div class="swatch sel" data-a="green" style="background:#6ee7b7" onclick="setAccent('green',this)"></div>
         <div class="swatch" data-a="blue" style="background:#60a5fa" onclick="setAccent('blue',this)"></div>
@@ -787,15 +798,15 @@ body.modal-open #bottom-nav{display:none !important}
         <div class="swatch" data-a="pink" style="background:#f472b6" onclick="setAccent('pink',this)"></div>
       </div>
     </div>
-    <div class="ss"><h3>Transacciones</h3>
-      <div class="sr"><div><div class="si-l">Balance por día</div><div class="si-s">Muestra el balance de la cuenta al final de cada día — solo cuando filtras la lista a una sola cuenta</div></div><label class="sw"><input type="checkbox" id="cfg-daily-balance" onchange="setShowDailyBalance(this.checked)"><span class="sl"></span></label></div>
+    <div class="ss"><h3>💳 Transacciones</h3>
+      <div class="sr"><div style="display:flex;align-items:center;gap:12px"><div class="ic-badge ic-badge-n">📆</div><div><div class="si-l">Balance por día</div><div class="si-s">Muestra el balance de la cuenta al final de cada día — solo cuando filtras la lista a una sola cuenta</div></div></div><label class="sw"><input type="checkbox" id="cfg-daily-balance" onchange="setShowDailyBalance(this.checked)"><span class="sl"></span></label></div>
     </div>
     <button class="btn bp sm" onclick="saveAspecto()">Guardar cambios</button>
   </div>
   <div id="cfg-dashboard" style="display:none">
     <div class="ss">
-      <h3>Widgets del dashboard</h3>
-      <div class="sr"><div><div class="si-l">Métricas del mes</div><div class="si-s">Ingreso, gasto, balance y tasa de ahorro — siempre visibles</div></div></div>
+      <h3>📊 Widgets del dashboard</h3>
+      <div class="sr"><div style="display:flex;align-items:center;gap:12px"><div class="ic-badge ic-badge-n">📌</div><div><div class="si-l">Métricas del mes</div><div class="si-s">Ingreso, gasto, balance y tasa de ahorro — siempre visibles</div></div></div></div>
       <div style="font-size:12px;color:var(--t3);margin:12px 0 10px">Usa las flechas para moverlas, y la casilla para mostrarlas/ocultarlas — el orden y las que estén activas se reflejan tal cual en el Dashboard.</div>
       <div id="dash-order-list"></div>
     </div>
@@ -808,18 +819,18 @@ body.modal-open #bottom-nav{display:none !important}
     </div>
   </div>
   <div id="cfg-historial" style="display:none">
-    <div class="ss"><h3>Historial de patrimonio neto</h3>
+    <div class="ss"><h3>📈 Historial de patrimonio neto</h3>
       <div style="font-size:12px;color:var(--t2);margin-bottom:14px">Snapshot automático mensual de tu patrimonio. Se guarda al abrir la app cada mes.</div>
       <div id="nw-history-list"></div>
       <div class="cht" style="height:200px;margin-top:16px"><canvas id="ch-nw"></canvas></div>
     </div>
   </div>
   <div id="cfg-notif" style="display:none">
-    <div class="ss"><h3>Alertas</h3>
-      <div class="sr"><div><div class="si-l">Presupuesto excedido</div></div><label class="sw"><input type="checkbox" id="n-bgt" checked onchange="saveNotif()"><span class="sl"></span></label></div>
-      <div class="sr"><div><div class="si-l">Deudas próximas a vencer</div></div><label class="sw"><input type="checkbox" id="n-dbt" checked onchange="saveNotif()"><span class="sl"></span></label></div>
-      <div class="sr"><div><div class="si-l">Suscripciones por cobrar (3 días)</div></div><label class="sw"><input type="checkbox" id="n-sub" checked onchange="saveNotif()"><span class="sl"></span></label></div>
-      <div class="sr"><div><div class="si-l">Objetivos completados</div></div><label class="sw"><input type="checkbox" id="n-gol" checked onchange="saveNotif()"><span class="sl"></span></label></div>
+    <div class="ss"><h3>🔔 Alertas</h3>
+      <div class="sr"><div style="display:flex;align-items:center;gap:12px"><div class="ic-badge ic-badge-y">📊</div><div><div class="si-l">Presupuesto excedido</div></div></div><label class="sw"><input type="checkbox" id="n-bgt" checked onchange="saveNotif()"><span class="sl"></span></label></div>
+      <div class="sr"><div style="display:flex;align-items:center;gap:12px"><div class="ic-badge ic-badge-r">💳</div><div><div class="si-l">Deudas próximas a vencer</div></div></div><label class="sw"><input type="checkbox" id="n-dbt" checked onchange="saveNotif()"><span class="sl"></span></label></div>
+      <div class="sr"><div style="display:flex;align-items:center;gap:12px"><div class="ic-badge ic-badge-b">🔁</div><div><div class="si-l">Suscripciones por cobrar (3 días)</div></div></div><label class="sw"><input type="checkbox" id="n-sub" checked onchange="saveNotif()"><span class="sl"></span></label></div>
+      <div class="sr"><div style="display:flex;align-items:center;gap:12px"><div class="ic-badge ic-badge-g">🎯</div><div><div class="si-l">Objetivos completados</div></div></div><label class="sw"><input type="checkbox" id="n-gol" checked onchange="saveNotif()"><span class="sl"></span></label></div>
     </div>
   </div>
 </div>
