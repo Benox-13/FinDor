@@ -413,15 +413,18 @@ body.modal-open #bottom-nav{display:none !important}
     <div style="text-align:center;margin-bottom:28px">
       <div style="font-size:40px;margin-bottom:8px">💰</div>
       <div style="font-size:20px;font-weight:600">Fînance</div>
-      <div style="font-size:13px;color:var(--t3)">Inicia sesión para continuar</div>
+      <div style="font-size:13px;color:var(--t3)" id="auth-subtitle">Inicia sesión para continuar</div>
     </div>
     <div class="card" style="padding:20px">
       <div class="fg"><label class="fl">Correo</label><input class="fc" type="email" id="auth-email" placeholder="tu@email.com" autocomplete="username"></div>
       <div class="fg"><label class="fl">Contraseña</label><input class="fc" type="password" id="auth-pass" placeholder="••••••••" autocomplete="current-password"></div>
+      <div class="fg" id="auth-pass2-wrap" style="display:none"><label class="fl">Confirmar contraseña</label><input class="fc" type="password" id="auth-pass2" placeholder="••••••••" autocomplete="new-password"></div>
       <div id="auth-error" style="display:none;color:var(--red);font-size:12px;margin-bottom:10px"></div>
-      <button class="btn bp" style="width:100%" id="auth-submit-btn" onclick="authLogin()">Iniciar sesión</button>
+      <div id="auth-info" style="display:none;color:var(--inc);font-size:12px;margin-bottom:10px"></div>
+      <button class="btn bp" style="width:100%" id="auth-submit-btn" onclick="authSubmit()">Iniciar sesión</button>
     </div>
-    <div style="text-align:center;margin-top:14px;font-size:11px;color:var(--t3)">Conectado a Supabase — solo tú puedes entrar con tu cuenta.</div>
+    <div style="text-align:center;margin-top:14px;font-size:12px" id="auth-toggle-wrap"><span style="color:var(--t3)">¿No tienes cuenta? </span><a href="javascript:void(0)" onclick="setAuthMode('signup')" style="color:var(--ac)">Crear cuenta</a></div>
+    <div style="text-align:center;margin-top:10px;font-size:11px;color:var(--t3)">Cada cuenta solo puede ver su propia información.</div>
   </div>
 </div>
 
@@ -2378,6 +2381,61 @@ async function authInit(){
   });
 }
 
+// ==================== CREAR CUENTA (signup) ====================
+// El modelo de datos ya estaba listo para varios usuarios (cada fila
+// guarda user_id, y Supabase RLS se encarga de que cada quien solo vea
+// las suyas) — lo que faltaba era la pantalla. IMPORTANTE: antes de
+// compartir el link para que alguien más cree su cuenta, hay que correr
+// el SQL de políticas RLS en las 18 tablas — sin eso, cualquier cuenta
+// podría ver los datos de las demás.
+let authMode='login';
+function setAuthMode(mode){
+  authMode=mode;
+  $('auth-error').style.display='none';
+  $('auth-info').style.display='none';
+  const isSignup=mode==='signup';
+  $('auth-pass2-wrap').style.display=isSignup?'block':'none';
+  $('auth-subtitle').textContent=isSignup?'Crea tu cuenta para empezar':'Inicia sesión para continuar';
+  $('auth-submit-btn').textContent=isSignup?'Crear cuenta':'Iniciar sesión';
+  $('auth-toggle-wrap').innerHTML=isSignup
+    ?'<span style="color:var(--t3)">¿Ya tienes cuenta? </span><a href="javascript:void(0)" onclick="setAuthMode(\'login\')" style="color:var(--ac)">Iniciar sesión</a>'
+    :'<span style="color:var(--t3)">¿No tienes cuenta? </span><a href="javascript:void(0)" onclick="setAuthMode(\'signup\')" style="color:var(--ac)">Crear cuenta</a>';
+}
+function authSubmit(){authMode==='signup'?authSignup():authLogin()}
+async function authSignup(){
+  const email=$('auth-email').value.trim();
+  const pass=$('auth-pass').value;
+  const pass2=$('auth-pass2').value;
+  const errEl=$('auth-error');errEl.style.display='none';
+  const infoEl=$('auth-info');infoEl.style.display='none';
+  if(!email||!pass){errEl.textContent='Escribe tu correo y contraseña.';errEl.style.display='block';return}
+  if(pass.length<6){errEl.textContent='La contraseña debe tener al menos 6 caracteres.';errEl.style.display='block';return}
+  if(pass!==pass2){errEl.textContent='Las contraseñas no coinciden.';errEl.style.display='block';return}
+  const btn=$('auth-submit-btn');btn.disabled=true;btn.textContent='Creando cuenta...';
+  if(!sb){errEl.textContent='No hay conexión a Supabase ahora mismo.';errEl.style.display='block';btn.disabled=false;btn.textContent='Crear cuenta';return}
+  const {data,error}=await sb.auth.signUp({email,password:pass});
+  btn.disabled=false;btn.textContent='Crear cuenta';
+  if(error){
+    errEl.textContent=error.message==='User already registered'?'Ya existe una cuenta con ese correo.':error.message;
+    errEl.style.display='block';
+    return;
+  }
+  $('auth-pass').value='';$('auth-pass2').value='';
+  if(data.session){
+    // El proyecto de Supabase tiene desactivada la confirmación por
+    // correo — entra directo, igual que un login normal.
+    currentUserId=data.user.id;
+    $('auth-screen').style.display='none';
+    fullSync();
+  } else {
+    // El proyecto pide confirmar el correo antes de poder entrar (esto se
+    // controla en Supabase, no aquí — ver Authentication → Settings).
+    infoEl.textContent='Cuenta creada — revisa tu correo y confirma tu cuenta antes de iniciar sesión.';
+    infoEl.style.display='block';
+    setAuthMode('login');
+  }
+}
+
 async function authLogin(){
   const email=$('auth-email').value.trim();
   const pass=$('auth-pass').value;
@@ -2409,7 +2467,7 @@ async function authLogout(){
 // Permite iniciar sesión con Enter en vez de solo clic
 document.addEventListener('DOMContentLoaded',()=>{
   const pass=$('auth-pass');
-  if(pass)pass.addEventListener('keydown',e=>{if(e.key==='Enter')authLogin()});
+  if(pass)pass.addEventListener('keydown',e=>{if(e.key==='Enter')authSubmit()});
 });
 
 authInit();
