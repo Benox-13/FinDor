@@ -3592,12 +3592,14 @@ function billingCardHTML(a){
     let nextCut=new Date(lastCut.getFullYear(),lastCut.getMonth()+1,a.cutDay);
     periodStart=toLocal(lastCut);
     periodEnd=toLocal(nextCut);
-    // Current period spending (since last cut, not yet closed) — se
-    // separa MSI de gasto normal (ver tdcSpendForPeriod/msiPeriodAmount):
-    // una compra a MSI solo aporta su mensualidad a cada periodo, no el
-    // total de la compra.
-    currentAmt=tdcSpendForPeriod(a.id,todayStr,a.cutDay);
-    // Invoice = previous closed period (before last cut)
+    // Current period spending (since last cut, not yet closed) — el MSI
+    // NO cuenta aquí todavía (includeMsi=false): su mensualidad solo
+    // aparece hasta que este periodo cierre con el corte (ver invoiceAmt
+    // abajo), para no mostrarla dos veces en dos momentos distintos.
+    currentAmt=tdcSpendForPeriod(a.id,todayStr,a.cutDay,false);
+    // Invoice = previous closed period (before last cut) — aquí SÍ
+    // cuenta el MSI: es la primera y única vez que su mensualidad debe
+    // aparecer, justo el día del corte.
     const prevCutDate=new Date(lastCut.getFullYear(),lastCut.getMonth()-1,a.cutDay);
     const prevCutStr=toLocal(prevCutDate);
     invoiceAmt=tdcSpendForPeriod(a.id,prevCutStr,a.cutDay);
@@ -4592,6 +4594,22 @@ function computeDailyBalances(accountId){
   }
   return byDate;
 }
+// Gasto acumulado día a día dentro del periodo que se esté viendo —
+// arranca en $0 en el corte de ese periodo y va sumando cada gasto
+// NORMAL (no-MSI) según su fecha. El MSI no se acumula aquí a propósito:
+// su mensualidad todavía no "existe" como gasto mientras el periodo
+// sigue abierto — el mismo criterio que ya usa "Gastado este periodo" en
+// Facturación (ver tdcSpendForPeriod), para que ambos números siempre
+// cuenten la misma historia.
+function computeTDCDailyAccumulated(accountId,periodStartStr,periodEndStr){
+  const txs=S.transactions
+    .filter(t=>t.accountId===accountId&&t.type==='expense'&&!t.msi&&t.date>periodStartStr&&(!periodEndStr||t.date<=periodEndStr))
+    .slice().sort((a,b)=>(a.date+(a.time||'00:00')).localeCompare(b.date+(b.time||'00:00')));
+  let running=0;
+  const byDate={};
+  txs.forEach(t=>{running=M(running+M(t.amount));byDate[t.date]=running});
+  return byDate;
+}
 
 function renderTxP(){
   // Repopulate account/category filter options if empty
@@ -4672,9 +4690,31 @@ function renderTxP(){
     // número siempre sea el balance real de ese día.
     const showBal=!!(accId&&S.settings?.showDailyBalance);
     const dailyBal=showBal?computeDailyBalances(accId):null;
+    // Gasto acumulado del periodo — solo para TDC. Arranca en $0 en el
+    // corte del periodo que se esté viendo (el seleccionado en el filtro,
+    // o el periodo abierto actual si no hay ninguno elegido) y va sumando
+    // cada gasto normal según su fecha. El MSI NO se acumula aquí — su
+    // mensualidad todavía no "existe" como gasto del día a día mientras
+    // el periodo sigue abierto (ver tdcSpendForPeriod/el mismo criterio
+    // que ya se usa en "Gastado este periodo").
+    let tdcAccum=null;
+    if(isTDC){
+      let accStart=dateFrom;
+      if(!accStart){
+        const now=new Date();
+        let lastCut=new Date(now.getFullYear(),now.getMonth(),acc.cutDay);
+        if(lastCut>now)lastCut=new Date(now.getFullYear(),now.getMonth()-1,acc.cutDay);
+        accStart=`${lastCut.getFullYear()}-${String(lastCut.getMonth()+1).padStart(2,'0')}-${String(lastCut.getDate()).padStart(2,'0')}`;
+      }
+      tdcAccum=computeTDCDailyAccumulated(accId,accStart,dateTo||null);
+    }
     tb.innerHTML=groups.map(g=>{
       const bal=dailyBal&&(g.date in dailyBal)?dailyBal[g.date]:null;
-      const balHtml=bal!==null?`<span style="text-transform:none;letter-spacing:normal;color:var(--t2);font-family:'DM Mono',monospace;font-weight:600">${fmt(bal)}</span>`:'';
+      const accum=tdcAccum&&(g.date in tdcAccum)?tdcAccum[g.date]:null;
+      const parts=[];
+      if(accum!==null)parts.push(`<span style="text-transform:none;letter-spacing:normal;color:var(--yel);font-family:'DM Mono',monospace;font-weight:600">Acum: ${fmt(accum)}</span>`);
+      if(bal!==null)parts.push(`<span style="text-transform:none;letter-spacing:normal;color:var(--t2);font-family:'DM Mono',monospace;font-weight:600">${fmt(bal)}</span>`);
+      const balHtml=parts.length?`<span style="display:flex;gap:10px">${parts.join('')}</span>`:'';
       return`<div class="tx-date-hdr" style="display:flex;justify-content:space-between;align-items:baseline">${esc(txGroupLabel(g.date))}${balHtml}</div>${g.items.map(rowHTML).join('')}`;
     }).join('');
   } else {
@@ -4885,9 +4925,23 @@ function viewAccountTransactions(accountId){
 // en mensualidades (ver msiPeriodAmount) en vez de cobrarse completo el
 // día de la compra — antes, una compra a 6 MSI aparecía completa en el
 // estado de cuenta del mes en que se hizo, en vez de solo su mensualidad.
-function tdcSpendForPeriod(accountId,periodDateStr,cutDay){
+//
+// BUG REAL ENCONTRADO (el que reportaste): la mensualidad de un MSI se
+// contaba en "Gastado este periodo" desde el MISMO DÍA de la compra —
+// antes de que el periodo cerrara con su corte. Días o semanas después,
+// cuando ese periodo por fin cerraba, la misma mensualidad volvía a
+// aparecer en "Factura pendiente". No es que el saldo real (Disponible)
+// se tocara dos veces — ese siempre se movió una sola vez, por el total
+// de la compra, el día que se hizo — pero SÍ se veía dos veces en
+// pantalla en dos momentos distintos, como si te hubieran cobrado dos
+// veces. La mensualidad de un MSI ahora solo cuenta a partir de que su
+// periodo CIERRA (el día del corte) — includeMsi=false en el periodo
+// abierto (todavía no corta) hace que el MSI aporte $0 ahí; solo aparece
+// una vez, cuando ese periodo pasa a ser la factura.
+function tdcSpendForPeriod(accountId,periodDateStr,cutDay,includeMsi=true){
   const pKey=periodKeyForDate(periodDateStr,cutDay);
   const nonMsi=S.transactions.filter(t=>t.type==='expense'&&!t.msi&&t.accountId===accountId&&periodKeyForDate(t.date,cutDay)===pKey).reduce((s,t)=>s+M(t.amount),0);
+  if(!includeMsi)return nonMsi;
   const msi=S.transactions.filter(t=>t.type==='expense'&&t.msi&&t.accountId===accountId).reduce((s,t)=>s+msiPeriodAmount(t,periodDateStr,cutDay),0);
   return nonMsi+msi;
 }
@@ -4895,7 +4949,8 @@ function tdcPeriodSpend(a){
   if(!a.cutDay)return null;
   const now=new Date();
   const toLocal=d=>`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
-  return tdcSpendForPeriod(a.id,toLocal(now),a.cutDay);
+  // Periodo ABIERTO (todavía no corta) — MSI no cuenta aquí todavía.
+  return tdcSpendForPeriod(a.id,toLocal(now),a.cutDay,false);
 }
 // BUG REAL ENCONTRADO: "Factura pendiente"/"pago pendiente" en las 3
 // pantallas que lo muestran (Facturación, la tarjeta de Cuentas, y el
