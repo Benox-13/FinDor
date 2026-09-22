@@ -1015,7 +1015,9 @@ body.modal-open #bottom-nav{display:none !important}
       <input type="hidden" id="ac-eid">
       <div class="fg"><label class="fl">Nombre</label><input class="fc" type="text" id="ac-name" placeholder="Ej: BBVA Débito"></div>
       <div class="fg"><label class="fl">Tipo</label><select class="fc" id="ac-type" onchange="onAccTypeChg()"><option value="cash">Efectivo</option><option value="debit">Débito</option><option value="credit">Tarjeta de crédito</option></select></div>
-      <div class="fg"><label class="fl">Saldo inicial</label><input class="fc" type="number" id="ac-bal" placeholder="0.00" step="0.01"></div>
+      <div class="fg"><label class="fl" id="ac-bal-lbl">Saldo inicial</label><input class="fc" type="number" id="ac-bal" placeholder="0.00" step="0.01">
+        <div id="ac-bal-hint" style="display:none;font-size:11px;color:var(--t3);margin-top:5px">Escribe cuánto tienes <strong>disponible para gastar</strong> ahora mismo (límite menos lo que ya debes) — no lo que debes. Ej: límite $10,000 y debes $2,000 → escribe <strong>8,000</strong>.</div>
+      </div>
       <div class="fg" id="ac-lim-g" style="display:none"><label class="fl">Límite de crédito</label><input class="fc" type="number" id="ac-lim" placeholder="0.00" step="0.01"></div>
       <div id="ac-credit-dates" style="display:none">
         <div class="g2">
@@ -2533,7 +2535,14 @@ const uid=()=>'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g,c=>{
   return v.toString(16);
 });
 const isUUID=s=>typeof s==='string'&&/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(s);
-const td_=()=>new Date().toISOString().split('T')[0];
+// BUG REAL ENCONTRADO: td_() usaba new Date().toISOString(), que SIEMPRE
+// convierte a UTC. Para México (UTC-6), eso significa que de las 6pm a
+// medianoche hora local, todos los formularios de "fecha actual" (nueva
+// transacción, registro de vehículo/inversión, pago de deuda, abono a
+// meta, etc.) mostraban la fecha de MAÑANA, no la de hoy. Ahora arma la
+// fecha con los componentes locales del dispositivo, igual que ya se
+// hacía correctamente en Facturación (openBillingPay) y en dateLocal().
+const td_=()=>{const d=new Date();return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`};
 const tnow_=()=>{const d=new Date();return String(d.getHours()).padStart(2,'0')+':'+String(d.getMinutes()).padStart(2,'0')+':'+String(d.getSeconds()).padStart(2,'0')};
 const fmt=n=>M(n||0).toLocaleString('es-MX',{style:'currency',currency:S?.settings?.currency||'MXN',minimumFractionDigits:2,maximumFractionDigits:2});
 // Insignia de color detrás del ícono de cada tarjeta del Dashboard —
@@ -4697,7 +4706,21 @@ async function delTx(id){
 
 // ==================== ACCOUNTS ====================
 let accColor='#6ee7b7';
-function onAccTypeChg(){const isCr=$('ac-type').value==='credit';$('ac-lim-g').style.display=isCr?'block':'none';$('ac-credit-dates').style.display=isCr?'block':'none'}
+// BUG/CONFUSIÓN REAL ENCONTRADA: el campo "Saldo inicial" de una tarjeta
+// de crédito en realidad debe llevar el CRÉDITO DISPONIBLE (límite menos
+// lo que ya debes) — así funciona el cálculo en toda la app (Cuentas,
+// Facturación, Dashboard: "usado" = límite - este saldo). Pero la
+// etiqueta genérica "Saldo inicial" invita a escribir lo que DEBES, que
+// es justo lo contrario — y una vez invertido, cada movimiento nuevo
+// arrastra el error y el "disponible" nunca cuadra. Ahora el campo
+// cambia de nombre y muestra una pista solo cuando el tipo es TDC.
+function onAccTypeChg(){
+  const isCr=$('ac-type').value==='credit';
+  $('ac-lim-g').style.display=isCr?'block':'none';
+  $('ac-credit-dates').style.display=isCr?'block':'none';
+  $('ac-bal-lbl').textContent=isCr?'Crédito disponible ahora':'Saldo inicial';
+  $('ac-bal-hint').style.display=isCr?'block':'none';
+}
 function selAccColor(c,el){accColor=c;document.querySelectorAll('#ac-colors .swatch').forEach(s=>s.classList.remove('sel'));el.classList.add('sel')}
 
 function openAccM(editId=null){
@@ -4717,6 +4740,8 @@ function openAccM(editId=null){
   const isCr=$('ac-type').value==='credit';
   $('ac-lim-g').style.display=isCr?'block':'none';
   $('ac-credit-dates').style.display=isCr?'block':'none';
+  $('ac-bal-lbl').textContent=isCr?'Crédito disponible ahora':'Saldo inicial';
+  $('ac-bal-hint').style.display=isCr?'block':'none';
   document.querySelectorAll('#ac-colors .swatch').forEach(s=>{s.classList.toggle('sel',s.dataset.c===accColor)});
   oM('mo-acc');
 }
