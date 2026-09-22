@@ -4715,7 +4715,7 @@ function renderTxP(){
       if(accum!==null)parts.push(`<span style="text-transform:none;letter-spacing:normal;color:var(--yel);font-family:'DM Mono',monospace;font-weight:600">Acum: ${fmt(accum)}</span>`);
       if(bal!==null)parts.push(`<span style="text-transform:none;letter-spacing:normal;color:var(--t2);font-family:'DM Mono',monospace;font-weight:600">${fmt(bal)}</span>`);
       const balHtml=parts.length?`<span style="display:flex;gap:10px">${parts.join('')}</span>`:'';
-      return`<div class="tx-date-hdr" style="display:flex;justify-content:space-between;align-items:baseline">${esc(txGroupLabel(g.date))}${balHtml}</div>${g.items.map(rowHTML).join('')}`;
+      return`<div class="tx-date-hdr" style="display:flex;justify-content:space-between;align-items:baseline;flex-wrap:wrap;gap:4px 10px">${esc(txGroupLabel(g.date))}${balHtml}</div>${g.items.map(rowHTML).join('')}`;
     }).join('');
   } else {
     tb.innerHTML=txs.map(rowHTML).join('');
