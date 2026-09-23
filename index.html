@@ -658,6 +658,25 @@ body.modal-open #bottom-nav{display:none !important}
   <div class="card"><div class="slbl">Tendencia de balance</div><div class="cht" style="height:180px"><canvas id="ch-trend"></canvas></div></div>
   <div class="card" style="margin-top:14px"><div class="slbl">Evolución del patrimonio</div><div class="cht" style="height:180px"><canvas id="ch-nw-report"></canvas></div></div>
 
+  <!-- TENDENCIAS MÁS PROFUNDAS -->
+  <div class="slbl" style="margin:24px 0 10px">TENDENCIAS</div>
+  <div class="card" style="margin-bottom:14px">
+    <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;margin-bottom:4px">
+      <div class="slbl" style="margin:0">Evolución de una categoría</div>
+      <select class="fc" id="an-cat-select" style="max-width:220px;font-size:12px;padding:6px 10px" onchange="renderCatTrendChart()"></select>
+    </div>
+    <div class="cht" style="height:180px"><canvas id="ch-cat-trend"></canvas></div>
+  </div>
+  <div class="card" style="margin-bottom:14px"><div class="slbl">Gasto por cuenta</div><div class="cht"><canvas id="ch-acc-spend"></canvas></div></div>
+
+  <!-- VEHÍCULOS E INVERSIONES — datos que Money Coach ni maneja. -->
+  <div class="slbl" style="margin:24px 0 10px">VEHÍCULOS E INVERSIONES</div>
+  <div class="g2" id="an-vehicles-investments"></div>
+
+  <!-- PROYECCIÓN DE FLUJO DE CAJA -->
+  <div class="slbl" style="margin:24px 0 10px">PROYECCIÓN DEL PRÓXIMO MES</div>
+  <div class="card" id="an-cashflow" style="margin-bottom:14px"></div>
+
   <!-- RESUMEN CONSOLIDADO DE COMPROMISOS — estilo MoneyCoach: hoy Deudas,
        Suscripciones y Metas viven cada una en su propia sección, sin una
        vista de conjunto que responda "¿cómo van TODOS mis compromisos
@@ -5195,9 +5214,25 @@ function execMsiAdvance(){
 
 
 // ==================== ANALYSIS ====================
-let anPeriod='month';let ch1,ch2,ch3,ch4,ch5,ch6,ch7;
+let anPeriod='month';let ch1,ch2,ch3,ch4,ch5,ch6,ch7,ch8,ch9,chVeh;
 
 function setPeriod(p,el){anPeriod=p;document.querySelectorAll('.p2b').forEach(b=>b.classList.remove('on'));el.classList.add('on');renderAnalysis()}
+
+// Días REALMENTE transcurridos dentro del periodo elegido — para "Este
+// mes" a mitad de mes son los días que van, no los 30 del mes completo.
+// Con "Todo" usa el rango real de tus transacciones (de la más vieja a
+// hoy), para que el promedio diario también tenga sentido ahí.
+function daysElapsedInPeriod(){
+  const now=new Date();
+  if(anPeriod==='month')return now.getDate();
+  if(anPeriod==='3m'){const c=new Date();c.setMonth(c.getMonth()-3);return Math.max(1,Math.round((now-c)/864e5))}
+  if(anPeriod==='6m'){const c=new Date();c.setMonth(c.getMonth()-6);return Math.max(1,Math.round((now-c)/864e5))}
+  if(anPeriod==='year'){const start=new Date(now.getFullYear(),0,1);return Math.max(1,Math.round((now-start)/864e5)+1)}
+  // 'all': desde la transacción más vieja hasta hoy
+  if(!S.transactions.length)return 0;
+  const oldest=S.transactions.reduce((min,t)=>{const d=dateLocal(t.date);return d<min?d:min},dateLocal(S.transactions[0].date));
+  return Math.max(1,Math.round((now-oldest)/864e5)+1);
+}
 
 function getPeriodTxs(){
   const now=new Date();const all=S.transactions;
@@ -5273,6 +5308,11 @@ function renderAnalysis(){
     }
     html+=chip('Gasto más grande',biggestExp?fmt(M(biggestExp.amount)):'—','var(--exp)',biggestExp?esc(biggestExp.description||biggestExp.category||''):'Sin gastos en el periodo');
     html+=chip('Promedio por gasto',expTxs.length?fmt(avgExp):'—','var(--txt)',expTxs.length?expTxs.length+' movimiento(s)':'');
+    // Promedio diario: gasto total del periodo ÷ días REALMENTE
+    // transcurridos en él (no el largo total del periodo si todavía está
+    // en curso — "Este mes" a la mitad del mes cuenta esos días, no 30).
+    const daysElapsed=daysElapsedInPeriod();
+    html+=chip('Promedio diario',daysElapsed>0?fmt(exp/daysElapsed):'—','var(--txt)',daysElapsed>0?daysElapsed+' día(s)':'');
     insightsEl.innerHTML=html;
   }
 
@@ -5364,7 +5404,168 @@ function renderAnalysis(){
   const wdVals=wdOrder.map(i=>wdSums[i]);
   ch7=new Chart($('ch-weekday'),{type:'bar',data:{labels:wdLabels,datasets:[{data:wdVals,backgroundColor:'rgba(248,113,113,0.45)',borderColor:'#f87171',borderWidth:1.5,borderRadius:4}]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false}},scales:{x:{grid:{color:gridC}},y:{grid:{color:gridC},ticks:{callback:v=>fmt(v)}}}}});
 
+  renderAnalysisTrends();
   renderAnalysisCommitments();
+  renderAnalysisVehiclesInvestments();
+  renderAnalysisCashflow();
+}
+
+// ---- Proyección del próximo mes: suma lo que YA sabes que vas a pagar
+// (suscripciones activas + mensualidades de deudas + mensualidades de
+// MSI) contra tu ingreso promedio reciente, para ver cuánto te queda
+// realmente libre antes de gastar nada discrecional. Es una proyección,
+// no una promesa — si cambia algo (cancelas una suscripción, te suben el
+// sueldo) el número se recalcula solo la próxima vez que entres aquí.
+function renderAnalysisCashflow(){
+  const el=$('an-cashflow');if(!el)return;
+
+  // Suscripciones activas, a su costo mensual equivalente.
+  const subsMonthly=S.subscriptions.filter(s=>(s.status||'active')==='active')
+    .reduce((a,s)=>a+(s.freq==='monthly'?s.cost:s.freq==='annual'?s.cost/12:s.cost*4.33),0);
+
+  // Deudas que debes (iowe) con mensualidad fija definida y que todavía
+  // no se terminan de pagar.
+  const debtsMonthly=Store.getDebts('iowe')
+    .filter(d=>d.installments&&d.installments.months&&(d.installments.paid||0)<d.installments.months)
+    .reduce((a,d)=>a+M(d.amount/d.installments.months),0);
+
+  // MSI activos — su mensualidad de siempre, mientras les quede saldo.
+  const msiMonthly=S.transactions.filter(t=>t.msi&&msiStatus(t).remainingBalance>0)
+    .reduce((a,t)=>a+M(t.msi.monthly),0);
+
+  const totalComprometido=M(subsMonthly+debtsMonthly+msiMonthly);
+
+  // Ingreso esperado: promedio de tus últimos 3 meses con ingresos
+  // reales — no un número inventado ni un objetivo, tu propio historial.
+  const now=new Date();
+  const last3=[0,1,2].map(i=>{const d=new Date(now.getFullYear(),now.getMonth()-i,1);return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')});
+  const incByMonth=last3.map(m=>S.transactions.filter(t=>t.type==='income'&&t.date.startsWith(m)).reduce((a,t)=>a+M(t.amount),0));
+  const monthsWithData=incByMonth.filter(v=>v>0).length;
+  const ingresoEsperado=monthsWithData?M(incByMonth.reduce((a,v)=>a+v,0)/monthsWithData):0;
+  const libre=M(ingresoEsperado-totalComprometido);
+
+  if(!ingresoEsperado&&!totalComprometido){
+    el.innerHTML=emptyState('📅','Sin datos suficientes','Registra algunos ingresos y compromisos (suscripciones, deudas o MSI) para ver tu proyección del próximo mes.','','');
+    return;
+  }
+  el.innerHTML=`
+    <div style="display:flex;justify-content:space-between;flex-wrap:wrap;gap:14px;margin-bottom:16px">
+      <div><div style="font-size:11px;color:var(--t3)">Ingreso esperado${monthsWithData<3?' (promedio de '+monthsWithData+' mes'+(monthsWithData===1?'':'es')+')':' (promedio 3 meses)'}</div><div style="font-family:'DM Mono',monospace;font-size:22px;color:var(--inc)">${fmt(ingresoEsperado)}</div></div>
+      <div style="text-align:right"><div style="font-size:11px;color:var(--t3)">Te queda libre</div><div style="font-family:'DM Mono',monospace;font-size:22px;color:${libre>=0?'var(--inc)':'var(--exp)'}">${libre>=0?'':'-'}${fmt(Math.abs(libre))}</div></div>
+    </div>
+    <div style="font-size:10px;color:var(--t3);text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px">Ya comprometido: ${fmt(totalComprometido)}</div>
+    <div style="display:flex;flex-direction:column;gap:6px">
+      <div style="display:flex;justify-content:space-between;font-size:13px"><span style="color:var(--t2)">↻ Suscripciones</span><span style="font-family:'DM Mono',monospace">${fmt(subsMonthly)}</span></div>
+      <div style="display:flex;justify-content:space-between;font-size:13px"><span style="color:var(--t2)">💳 Mensualidades de deudas</span><span style="font-family:'DM Mono',monospace">${fmt(debtsMonthly)}</span></div>
+      <div style="display:flex;justify-content:space-between;font-size:13px"><span style="color:var(--t2)">🛍️ Mensualidades MSI</span><span style="font-family:'DM Mono',monospace">${fmt(msiMonthly)}</span></div>
+    </div>`;
+}
+
+// ---- Vehículos e Inversiones: costo mensual real de vehículos (sí hay
+// fecha real por registro, se puede graficar en el tiempo) + resumen
+// consolidado de inversiones (el "valor actual" es un número que se
+// actualiza a mano, sin historial — por honestidad no se inventa una
+// gráfica de evolución que la app no puede respaldar con datos reales).
+function renderAnalysisVehiclesInvestments(){
+  const el=$('an-vehicles-investments');if(!el)return;
+  const cards=[];
+
+  // ---- Vehículos: costo mensual (últimos 6 meses), sumando TODOS los
+  // vehículos si tienes más de uno.
+  const vehicles=Store.getVehicles();
+  const allVRecs=vehicles.flatMap(v=>(v.records||[]).map(r=>({...r,vName:v.name})));
+  const months=getLast6Months();
+  const monthLabels=months.map(m=>{const d=new Date(m+'-01');return d.toLocaleDateString('es-MX',{month:'short'})});
+  const monthVals=months.map(m=>allVRecs.filter(r=>r.dt&&r.dt.startsWith(m)).reduce((a,r)=>a+M(r.cost||0),0));
+  const lifetimeTotal=allVRecs.reduce((a,r)=>a+M(r.cost||0),0);
+  cards.push(`<div class="card"><div class="slbl" style="margin-bottom:10px">🚗 Vehículos${vehicles.length>1?` (${vehicles.length})`:''}</div>
+    ${vehicles.length?`<div style="margin-bottom:10px"><div style="font-size:11px;color:var(--t3)">Gasto total histórico</div><div style="font-family:'DM Mono',monospace;font-size:20px;color:var(--exp)">${fmt(lifetimeTotal)}</div></div>
+    <div class="cht" style="height:130px"><canvas id="ch-vehicle-cost"></canvas></div>
+    <button class="btn bg_ sm" style="width:100%;margin-top:10px" onclick="go('vehicles')">Ver vehículos →</button>`
+    :'<div style="font-size:12px;color:var(--t3);padding:8px 0">Sin vehículos registrados</div>'}
+  </div>`);
+
+  // ---- Inversiones: resumen consolidado — aportado, valor actual y
+  // ganancia/pérdida TOTAL entre todas, más un ranking por rendimiento %.
+  const investments=Store.getInvestments();
+  const invRows=investments.map(v=>{
+    const recs=v.records||[];
+    const aportado=recs.filter(r=>r.type==='aporte').reduce((a,r)=>a+M(r.amount||0),0);
+    const retirado=recs.filter(r=>r.type==='retiro').reduce((a,r)=>a+M(r.amount||0),0);
+    const valorActual=M(v.currentValue||0);
+    const ganancia=valorActual+retirado-aportado;
+    const pct=aportado>0?(ganancia/aportado*100):null;
+    return{name:v.name,icon:(INV_TYPES[v.type]||INV_TYPES.negocio).icon,aportado,valorActual,ganancia,pct};
+  });
+  const totalAportado=invRows.reduce((a,r)=>a+r.aportado,0);
+  const totalValorActual=invRows.reduce((a,r)=>a+r.valorActual,0);
+  const totalGanancia=invRows.reduce((a,r)=>a+r.ganancia,0);
+  const totalPct=totalAportado>0?(totalGanancia/totalAportado*100):null;
+  const ranked=invRows.filter(r=>r.pct!==null).sort((a,b)=>b.pct-a.pct).slice(0,4);
+  const invRankRows=ranked.length?ranked.map(r=>`<div style="display:flex;justify-content:space-between;align-items:center;padding:6px 0;border-bottom:1px solid var(--bdr)"><div style="font-size:12px;display:flex;align-items:center;gap:6px;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(r.icon)} ${esc(r.name)}</div><span style="font-family:'DM Mono',monospace;font-size:12px;color:${r.pct>=0?'var(--inc)':'var(--exp)'};flex-shrink:0;margin-left:8px">${r.pct>=0?'+':''}${r.pct.toFixed(1)}%</span></div>`).join(''):'<div style="font-size:12px;color:var(--t3);padding:8px 0">Sin aportes registrados todavía</div>';
+  cards.push(`<div class="card"><div class="slbl" style="margin-bottom:10px">📈 Inversiones${investments.length>1?` (${investments.length})`:''}</div>
+    ${investments.length?`<div style="display:flex;justify-content:space-between;margin-bottom:12px">
+      <div><div style="font-size:11px;color:var(--t3)">Valor actual total</div><div style="font-family:'DM Mono',monospace;font-size:17px">${fmt(totalValorActual)}</div></div>
+      <div style="text-align:right"><div style="font-size:11px;color:var(--t3)">Ganancia/pérdida</div><div style="font-family:'DM Mono',monospace;font-size:17px;color:${totalGanancia>=0?'var(--inc)':'var(--exp)'}">${totalGanancia>=0?'+':''}${fmt(totalGanancia)}${totalPct!==null?` (${totalPct>=0?'+':''}${totalPct.toFixed(1)}%)`:''}</div></div>
+    </div>
+    <div style="font-size:10px;color:var(--t3);text-transform:uppercase;letter-spacing:.5px;margin-bottom:2px">Ranking por rendimiento</div>
+    ${invRankRows}
+    <button class="btn bg_ sm" style="width:100%;margin-top:10px" onclick="go('investments')">Ver inversiones →</button>`
+    :'<div style="font-size:12px;color:var(--t3);padding:8px 0">Sin inversiones registradas</div>'}
+  </div>`);
+
+  el.innerHTML=cards.join('');
+
+  // El canvas de vehículos se crea DESPUÉS de innerHTML, para que ya
+  // exista en el DOM cuando Chart.js lo busca.
+  if(vehicles.length){
+    const dark=!S.settings.theme||S.settings.theme==='dark';
+    const gridC=dark?'rgba(255,255,255,0.06)':'rgba(0,0,0,0.06)';
+    if(chVeh)chVeh.destroy();
+    chVeh=new Chart($('ch-vehicle-cost'),{type:'bar',data:{labels:monthLabels,datasets:[{data:monthVals,backgroundColor:'rgba(78,158,255,.45)',borderColor:'#4e9eff',borderWidth:1.5,borderRadius:4}]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false}},scales:{x:{grid:{display:false}},y:{grid:{color:gridC},ticks:{callback:v=>fmt(v)}}}}});
+  }
+}
+
+// ---- Tendencias más profundas: evolución de una categoría elegida (6
+// meses) y comparación de gasto entre cuentas (dentro del periodo de
+// arriba, anPeriod) ----
+function renderAnalysisTrends(){
+  const sel=$('an-cat-select');
+  if(sel){
+    const cur=sel.value;
+    const cats=S.categories.filter(c=>c.type==='expense').sort((a,b)=>a.name.localeCompare(b.name));
+    sel.innerHTML=cats.map(c=>`<option value="${esc(c.name)}">${esc(c.icon)} ${esc(c.name)}</option>`).join('');
+    if(cur&&cats.some(c=>c.name===cur))sel.value=cur;
+  }
+  renderCatTrendChart();
+  renderAccSpendChart();
+}
+function renderCatTrendChart(){
+  const sel=$('an-cat-select');if(!sel||!sel.value)return;
+  const catName=sel.value;
+  const months=getLast6Months();
+  const labels=months.map(m=>{const d=new Date(m+'-01');return d.toLocaleDateString('es-MX',{month:'short',year:'2-digit'})});
+  const vals=months.map(m=>S.transactions.filter(t=>t.type==='expense'&&t.category===catName&&t.date.startsWith(m)).reduce((a,t)=>a+M(t.amount),0));
+  const dark=!S.settings.theme||S.settings.theme==='dark';
+  const gridC=dark?'rgba(255,255,255,0.06)':'rgba(0,0,0,0.06)';
+  if(ch8)ch8.destroy();
+  ch8=new Chart($('ch-cat-trend'),{type:'line',data:{labels,datasets:[{label:catName,data:vals,borderColor:'#f87171',backgroundColor:'rgba(248,113,113,0.08)',fill:true,tension:0.4,pointRadius:4,pointBackgroundColor:'#f87171'}]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false}},scales:{x:{grid:{color:gridC}},y:{grid:{color:gridC},ticks:{callback:v=>fmt(v)}}}}});
+}
+function renderAccSpendChart(){
+  const txs=getPeriodTxs().filter(t=>t.type==='expense'&&t.accountId);
+  const byAcc={};
+  txs.forEach(t=>{byAcc[t.accountId]=(byAcc[t.accountId]||0)+M(t.amount)});
+  const rows=Object.entries(byAcc).map(([id,total])=>{const a=Store.getAccountById(id);return{name:a?a.name:'Cuenta eliminada',total}}).sort((a,b)=>b.total-a.total).slice(0,8);
+  const dark=!S.settings.theme||S.settings.theme==='dark';
+  const gridC=dark?'rgba(255,255,255,0.06)':'rgba(0,0,0,0.06)';
+  const textC=dark?'#9ca3b0':'#4a5068';
+  const palette=['#f87171','#fb923c','#fbbf24','#a3e635','#4ade80','#2dd4bf','#38bdf8','#818cf8','#c084fc','#f472b6'];
+  if(ch9)ch9.destroy();
+  if(!rows.length){
+    const ctx=$('ch-acc-spend').getContext('2d');ctx.clearRect(0,0,$('ch-acc-spend').width,$('ch-acc-spend').height);ctx.fillStyle=textC;ctx.textAlign='center';ctx.font='13px Sora';ctx.fillText('Sin gastos en el período',150,90);
+    return;
+  }
+  ch9=new Chart($('ch-acc-spend'),{type:'bar',data:{labels:rows.map(r=>r.name),datasets:[{data:rows.map(r=>r.total),backgroundColor:rows.map((_,i)=>palette[i%palette.length]),borderRadius:4}]},options:{indexAxis:'y',responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false}},scales:{x:{grid:{color:gridC},ticks:{callback:v=>fmt(v)}},y:{grid:{display:false}}}}});
 }
 
 // ---- Resumen consolidado de compromisos (Deudas + Suscripciones +
