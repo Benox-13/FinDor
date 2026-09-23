@@ -657,6 +657,13 @@ body.modal-open #bottom-nav{display:none !important}
   <div class="card" style="margin-bottom:14px"><div class="slbl">Gasto por día de la semana</div><div class="cht" style="height:180px"><canvas id="ch-weekday"></canvas></div></div>
   <div class="card"><div class="slbl">Tendencia de balance</div><div class="cht" style="height:180px"><canvas id="ch-trend"></canvas></div></div>
   <div class="card" style="margin-top:14px"><div class="slbl">Evolución del patrimonio</div><div class="cht" style="height:180px"><canvas id="ch-nw-report"></canvas></div></div>
+
+  <!-- RESUMEN CONSOLIDADO DE COMPROMISOS — estilo MoneyCoach: hoy Deudas,
+       Suscripciones y Metas viven cada una en su propia sección, sin una
+       vista de conjunto que responda "¿cómo van TODOS mis compromisos
+       juntos?" de un vistazo. -->
+  <div class="slbl" style="margin:24px 0 10px">RESUMEN DE COMPROMISOS</div>
+  <div class="g3" id="an-commitments"></div>
 </div>
 
 <!-- BUDGET -->
@@ -5356,7 +5363,87 @@ function renderAnalysis(){
   const wdLabels=wdOrder.map(i=>wdNames[i]);
   const wdVals=wdOrder.map(i=>wdSums[i]);
   ch7=new Chart($('ch-weekday'),{type:'bar',data:{labels:wdLabels,datasets:[{data:wdVals,backgroundColor:'rgba(248,113,113,0.45)',borderColor:'#f87171',borderWidth:1.5,borderRadius:4}]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false}},scales:{x:{grid:{color:gridC}},y:{grid:{color:gridC},ticks:{callback:v=>fmt(v)}}}}});
+
+  renderAnalysisCommitments();
 }
+
+// ---- Resumen consolidado de compromisos (Deudas + Suscripciones +
+// Metas) — no depende del periodo elegido arriba (anPeriod): un
+// compromiso pendiente es un compromiso pendiente sin importar si estás
+// viendo "Este mes" o "Todo", así que siempre muestra el estado ACTUAL.
+function renderAnalysisCommitments(){
+  const el=$('an-commitments');if(!el)return;
+  const cards=[];
+
+  // ---- Deudas: cuánto te deben + cuánto debes, y próximos vencimientos
+  // de ambos tipos mezclados, ordenados por fecha más próxima.
+  const owed=Store.getDebts('owed').filter(d=>d.amount-(d.paid||0)>0);
+  const iowe=Store.getDebts('iowe').filter(d=>d.amount-(d.paid||0)>0);
+  const totalOwed=owed.reduce((s,d)=>s+Math.max(0,d.amount-(d.paid||0)),0);
+  const totalIowe=iowe.reduce((s,d)=>s+Math.max(0,d.amount-(d.paid||0)),0);
+  const upcoming=[...owed.map(d=>({...d,kind:'owed'})),...iowe.map(d=>({...d,kind:'iowe'}))]
+    .filter(d=>d.due).sort((a,b)=>new Date(a.due)-new Date(b.due)).slice(0,4);
+  const debtRows=upcoming.length?upcoming.map(d=>{
+    const dl=Math.ceil((new Date(d.due)-new Date())/864e5);
+    const ov=dl<0;
+    return`<div style="display:flex;justify-content:space-between;align-items:center;padding:6px 0;border-bottom:1px solid var(--bdr)"><div style="font-size:12px;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(d.person)}<span style="color:var(--t3)"> · ${d.kind==='owed'?'te debe':'debes'}</span></div><span class="bdg ${ov?'bdg-r':dl<7?'bdg-y':'bdg-n'}" style="flex-shrink:0;margin-left:8px">${ov?'Vencida':dl+'d'}</span></div>`;
+  }).join(''):'<div style="font-size:12px;color:var(--t3);padding:8px 0">Sin vencimientos próximos</div>';
+  cards.push(`<div class="card"><div class="slbl" style="margin-bottom:10px">💳 Deudas</div>
+    <div style="display:flex;justify-content:space-between;margin-bottom:12px">
+      <div><div style="font-size:11px;color:var(--t3)">Te deben</div><div style="font-family:'DM Mono',monospace;font-size:17px;color:var(--inc)">${fmt(totalOwed)}</div></div>
+      <div style="text-align:right"><div style="font-size:11px;color:var(--t3)">Debes</div><div style="font-family:'DM Mono',monospace;font-size:17px;color:var(--exp)">${fmt(totalIowe)}</div></div>
+    </div>
+    <div style="font-size:10px;color:var(--t3);text-transform:uppercase;letter-spacing:.5px;margin-bottom:2px">Próximos vencimientos</div>
+    ${debtRows}
+    <button class="btn bg_ sm" style="width:100%;margin-top:10px" onclick="go('debts')">Ver deudas →</button>
+  </div>`);
+
+  // ---- Suscripciones: costo acumulado histórico total + ranking de las
+  // que más te han costado desde que las registraste (no solo su costo
+  // mensual actual, sino lo que YA pagaste en la vida de cada una).
+  const allSubs=Store.getSubscriptions();
+  const subsWithTotal=allSubs.map(s=>({...s,totalPaid:Store.getSubscriptionHistory(s.id).reduce((a,t)=>a+M(t.amount),0)}));
+  const grandTotalSubs=subsWithTotal.reduce((a,s)=>a+s.totalPaid,0);
+  const topSubs=subsWithTotal.slice().sort((a,b)=>b.totalPaid-a.totalPaid).slice(0,4);
+  const subRows=topSubs.length?topSubs.map(s=>`<div style="display:flex;justify-content:space-between;align-items:center;padding:6px 0;border-bottom:1px solid var(--bdr)"><div style="font-size:12px;display:flex;align-items:center;gap:6px;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(s.icon)} ${esc(s.name)}</div><span style="font-family:'DM Mono',monospace;font-size:12px;color:var(--t2);flex-shrink:0;margin-left:8px">${fmt(s.totalPaid)}</span></div>`).join(''):'<div style="font-size:12px;color:var(--t3);padding:8px 0">Sin suscripciones todavía</div>';
+  cards.push(`<div class="card"><div class="slbl" style="margin-bottom:10px">↻ Suscripciones</div>
+    <div style="margin-bottom:12px"><div style="font-size:11px;color:var(--t3)">Pagado en total, desde siempre</div><div style="font-family:'DM Mono',monospace;font-size:22px;color:var(--exp)">${fmt(grandTotalSubs)}</div></div>
+    <div style="font-size:10px;color:var(--t3);text-transform:uppercase;letter-spacing:.5px;margin-bottom:2px">Las que más te han costado</div>
+    ${subRows}
+    <button class="btn bg_ sm" style="width:100%;margin-top:10px" onclick="go('subscriptions')">Ver suscripciones →</button>
+  </div>`);
+
+  // ---- Metas: progreso consolidado + tiempo estimado por meta al ritmo
+  // de abonos que llevas hasta hoy (promedio mensual desde el primer
+  // abono registrado — no asume nada, se basa en tu historial real).
+  const activeGoals=Store.getGoals().filter(g=>!g.finalized);
+  const totalSaved=activeGoals.reduce((a,g)=>a+(g.saved||0),0);
+  const totalTarget=activeGoals.reduce((a,g)=>a+g.target,0);
+  const overallPct=totalTarget>0?Math.min(100,(totalSaved/totalTarget*100)).toFixed(0):0;
+  const goalRows=activeGoals.length?activeGoals.slice(0,4).map(g=>{
+    const rem=Math.max(0,g.target-(g.saved||0));
+    const hist=Store.getGoalHistory(g.id);
+    let etaLabel='—';
+    if(rem<=0){etaLabel='¡Lista! 🎯';}
+    else if(hist.length){
+      const firstDate=dateLocal(hist[hist.length-1].date); // hist viene más reciente primero
+      const monthsElapsed=Math.max(1,(new Date()-firstDate)/(1000*60*60*24*30));
+      const avgPerMonth=(g.saved||0)/monthsElapsed;
+      if(avgPerMonth>0){const monthsLeft=Math.ceil(rem/avgPerMonth);etaLabel=monthsLeft+(monthsLeft===1?' mes':' meses');}
+    }
+    return`<div style="display:flex;justify-content:space-between;align-items:center;padding:6px 0;border-bottom:1px solid var(--bdr)"><div style="font-size:12px;display:flex;align-items:center;gap:6px;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(g.icon)} ${esc(g.name)}</div><span style="font-size:11px;color:var(--t3);flex-shrink:0;margin-left:8px">${etaLabel}</span></div>`;
+  }).join(''):'<div style="font-size:12px;color:var(--t3);padding:8px 0">Sin metas activas</div>';
+  cards.push(`<div class="card"><div class="slbl" style="margin-bottom:10px">🎯 Metas</div>
+    <div style="display:flex;justify-content:space-between;font-size:13px;margin-bottom:5px"><span style="font-family:'DM Mono',monospace;color:var(--inc)">${fmt(totalSaved)}</span><span style="font-family:'DM Mono',monospace;color:var(--t2)">${fmt(totalTarget)}</span></div>
+    <div class="pw" style="margin-bottom:12px"><div class="pb" style="width:${overallPct}%;background:var(--acg)"></div></div>
+    <div style="font-size:10px;color:var(--t3);text-transform:uppercase;letter-spacing:.5px;margin-bottom:2px">Tiempo estimado (a tu ritmo actual)</div>
+    ${goalRows}
+    <button class="btn bg_ sm" style="width:100%;margin-top:10px" onclick="go('goals')">Ver metas →</button>
+  </div>`);
+
+  el.innerHTML=cards.join('');
+}
+
 
 function getLast6Months(){const r=[];const d=new Date();for(let i=5;i>=0;i--){const x=new Date(d.getFullYear(),d.getMonth()-i,1);r.push(x.getFullYear()+'-'+String(x.getMonth()+1).padStart(2,'0'))}return r}
 
