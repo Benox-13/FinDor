@@ -5686,6 +5686,8 @@ function saveBudget(){
 // Budget month navigation
 let _budgetOffset=0;
 let _budgetEditCat=null;
+let _budgetBulkEdit=false;
+function toggleBudgetBulkEdit(){_budgetBulkEdit=!_budgetBulkEdit;renderBudget()}
 function budgetMonthNav(d){_budgetOffset+=d;renderBudget()}
 function budgetGoToday(){_budgetOffset=0;renderBudget()}
 function toggleRollover(){S.budgetRollover=$('budget-rollover').checked;save();renderBudget()}
@@ -5794,6 +5796,21 @@ function renderBudget(){
       <span style="font-size:11px;color:var(--t3)">Gasto total incluyendo sin límite</span>
       <span style="font-family:'DM Mono',monospace;font-size:13px;color:var(--exp)">${fmt(totalUnlimitedSpend)}</span>
     </div>`:''}
+  </div>`;
+
+  // Aviso: categorías de gasto que todavía no tienen ningún límite
+  // puesto — para notar de un vistazo que falta presupuestar algo, sin
+  // tener que revisar categoría por categoría.
+  const noBudgetCats=catStats.filter(cs=>!S.budgets.find(b=>b.category===cs.cat.name));
+  if(noBudgetCats.length){
+    html+=`<div style="display:flex;align-items:center;gap:10px;background:rgba(255,179,64,.08);border:1px solid rgba(255,179,64,.25);border-radius:12px;padding:10px 14px;margin-bottom:14px">
+      <span style="font-size:16px">💡</span>
+      <span style="font-size:12px;color:var(--t2);flex:1">${noBudgetCats.length} categoría${noBudgetCats.length===1?'':'s'} sin límite todavía: <strong>${noBudgetCats.map(cs=>esc(cs.cat.name)).join(', ')}</strong></span>
+    </div>`;
+  }
+
+  html+=`<div style="display:flex;justify-content:flex-end;margin-bottom:10px">
+    <button class="btn bg_ sm" onclick="toggleBudgetBulkEdit()">${_budgetBulkEdit?'✓ Listo':'✎ Editar todos'}</button>
   </div>
   <div style="display:flex;flex-direction:column;gap:8px">`;
 
@@ -5804,7 +5821,7 @@ function renderBudget(){
     const statusColor=catOver?'var(--exp)':catP>70?'var(--yel)':'var(--ac)';
     const hasSubs=subs.length>0;
 
-    html+=`<div class="card-click" style="background:var(--bg3);border-radius:14px;padding:14px 16px" onclick="openBudgetEditM('${esc(cat.name)}')">
+    html+=`<div style="background:var(--bg3);border-radius:14px;padding:14px 16px">
       <div style="display:flex;align-items:center;gap:12px">
         <div style="width:38px;height:38px;border-radius:50%;background:${catLimit>0?statusColor+'1f':'var(--bg4)'};display:flex;align-items:center;justify-content:center;font-size:18px;flex-shrink:0">${cat.icon}</div>
         <div style="flex:1;min-width:0">
@@ -5820,6 +5837,9 @@ function renderBudget(){
             ${catLimit>0?`<div style="position:absolute;left:0;top:0;height:100%;width:${catPct}%;background:${barColor};border-radius:4px;transition:width .5s cubic-bezier(.4,0,.2,1)"></div>`:''}
           </div>
         </div>
+        ${_budgetBulkEdit
+          ?`<input type="number" placeholder="Sin límite" value="${S.budgets.find(b=>b.category===cat.name)?S.budgets.find(b=>b.category===cat.name).limit:''}" data-had-limit="${S.budgets.find(b=>b.category===cat.name)?'1':'0'}" min="0" step="0.01" style="width:100px;flex-shrink:0;padding:8px 10px;border-radius:8px;border:1px solid var(--bdr2);background:var(--bg4);color:var(--txt);font-size:13px;font-family:'DM Mono',monospace" onchange="setBudgetLimit('${esc(cat.name)}',this.value,this)">`
+          :`<button class="btn bg_ ico sm" style="flex-shrink:0" title="Más opciones" onclick="showRowMenu(this,[{label:'Editar límite',icon:'✎',onClick:()=>openBudgetEditM('${esc(cat.name)}')}])">⋮</button>`}
       </div>
     </div>`;
   });
