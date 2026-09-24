@@ -703,6 +703,29 @@ body.modal-open #bottom-nav{display:none !important}
   <div id="budget-list"></div>
 </div>
 
+<!-- EDITAR LÍMITE DE PRESUPUESTO — antes esto se abría como acordeón
+     dentro de la misma lista (mezclando "ver" con "editar" en la misma
+     pantalla); ahora es una ventana aparte, igual que el resto de la app
+     edita cuentas/categorías/etc. -->
+<div class="mo" id="mo-budget-edit">
+  <div class="md">
+    <div class="mh"><span class="mttl" id="bgted-title">Categoría</span><button class="btn bg_ ico sm" onclick="cM('mo-budget-edit')">✕</button></div>
+    <div class="mbody">
+      <div class="fg"><label class="fl">Límite mensual de la categoría</label>
+        <div style="display:flex;gap:8px">
+          <input class="fc" type="number" id="bgted-limit" placeholder="Sin límite" min="0" step="0.01" style="flex:1">
+          <button class="btn bd ico sm" id="bgted-del-btn" style="display:none" title="Quitar límite">✕</button>
+        </div>
+      </div>
+      <div id="bgted-subs-wrap" style="display:none">
+        <div class="slbl" style="margin:16px 0 8px">Subcategorías</div>
+        <div id="bgted-subs" style="display:flex;flex-direction:column;gap:10px"></div>
+      </div>
+    </div>
+    <div class="mfoot"><button class="btn bp sm" style="width:100%" onclick="cM('mo-budget-edit')">Listo</button></div>
+  </div>
+</div>
+
 <!-- SUBSCRIPTIONS -->
 <div id="page-subscriptions" class="page">
   <div class="ph"><div><div class="pt">Suscripciones</div><div class="ps">Gastos recurrentes</div></div><button class="btn bp" onclick="openSubM()">+ Agregar</button></div>
@@ -5662,6 +5685,7 @@ function saveBudget(){
 }
 // Budget month navigation
 let _budgetOffset=0;
+let _budgetEditCat=null;
 function budgetMonthNav(d){_budgetOffset+=d;renderBudget()}
 function budgetGoToday(){_budgetOffset=0;renderBudget()}
 function toggleRollover(){S.budgetRollover=$('budget-rollover').checked;save();renderBudget()}
@@ -5680,15 +5704,15 @@ function renderBudget(){
   const expCats=S.categories.filter(c=>c.type==='expense');
   if(!expCats.length){el.innerHTML=emptyState('📊','Sin categorías de gasto','Crea al menos una categoría de gasto en Ajustes → Categorías para poder definir presupuestos.','Ir a Categorías',"go('settings');cfgTab('categorias',document.querySelector('#cfg-tabs button[onclick*=categorias]'))");return}
 
-  // ---- Rediseño estilo MoneyCoach ----
-  // Paleta fija para identificar cada categoría en el anillo de arriba
-  // (colores de IDENTIDAD, no de estado — a diferencia de las tarjetas de
-  // abajo, que usan rojo/amarillo/verde para indicar SALUD del gasto).
+  // ---- Rediseño estilo MoneyCoach (v2) ----
+  // La v1 mezclaba "ver" con "editar" en la misma lista — cada categoría
+  // era un acordeón que se abría ahí mismo con un input adentro. Se veía
+  // recargado y no era obvio que había que darle clic para editar. Ahora
+  // la lista es solo de lectura (ícono, barra, monto) y tocar CUALQUIER
+  // categoría abre una ventana aparte para poner/quitar su límite — el
+  // mismo patrón que ya usa el resto de la app para editar cualquier cosa.
   const BUDGET_PALETTE=['#30d693','#4e9eff','#a855f7','#ffb340','#fb923c','#f472b6','#34d399','#818cf8','#facc15','#22d3ee'];
 
-  // Se calculan primero TODOS los datos por categoría — así el anillo de
-  // arriba y las tarjetas de abajo usan exactamente los mismos números
-  // (antes se recalculaba por separado en cada parte).
   const catStats=expCats.map((cat,i)=>{
     const subs=cat.subs||[];
     const catSpent=mtxs.filter(t=>t.category===cat.name||getCatParent(t.category)===cat.name).reduce((a,t)=>a+M(t.amount),0);
@@ -5699,7 +5723,7 @@ function renderBudget(){
       const prevSpent=prevMtxs.filter(t=>t.category===cat.name||getCatParent(t.category)===cat.name).reduce((a,t)=>a+M(t.amount),0);
       rolloverAmt=Math.max(0,catBgt.limit-prevSpent);
       catLimit=catBgt.limit+rolloverAmt;
-      if(rolloverAmt>0)rolloverNote=`<span style="font-size:10px;color:var(--inc);background:rgba(48,214,147,.12);padding:2px 7px;border-radius:20px">↩ +${fmt(rolloverAmt)}</span>`;
+      if(rolloverAmt>0)rolloverNote=`<span style="font-size:10px;color:var(--inc);background:rgba(48,214,147,.12);padding:2px 7px;border-radius:20px;white-space:nowrap">↩ +${fmt(rolloverAmt)}</span>`;
     }
     const catP=catLimit>0?Math.min(100,catSpent/catLimit*100):0;
     const catOver=catLimit>0&&catSpent>catLimit;
@@ -5711,18 +5735,12 @@ function renderBudget(){
   const totalUnlimitedSpend=mtxs.reduce((a,t)=>a+M(t.amount),0);
   const globalP=allLimited>0?Math.min(100,allSpent/allLimited*100):0;
   const globalPct=globalP.toFixed(0);
-  const remaining=Math.max(0,allLimited-allSpent);
+  const remaining=allLimited-allSpent;
   const overBudgetCats=catStats.filter(cs=>cs.catOver).length;
   const onTrackCats=catStats.filter(cs=>cs.catLimit>0&&cs.catP<=70).length;
   const donutColor=globalP>90?'var(--red)':globalP>70?'var(--yel)':'var(--ac)';
 
-  // ---- Anillo multi-segmento (look característico de MoneyCoach): un
-  // arco de color por categoría, proporcional a lo que ESA categoría
-  // gastó respecto al presupuesto total del mes — así de un vistazo se ve
-  // no solo cuánto se ha gastado, sino QUÉ categorías se lo están
-  // llevando. Se dibuja como círculos SVG apilados (mismo truco que ya
-  // usaba el anillo de un solo color), cada uno con su propio
-  // stroke-dashoffset para empezar donde terminó el anterior.
+  // ---- Anillo multi-segmento (look característico de MoneyCoach) ----
   const r=50,cx=64,cy=64,circ=2*Math.PI*r;
   const ringCats=catStats.filter(cs=>cs.catLimit>0&&cs.catSpent>0);
   let cumFrac=0;
@@ -5737,6 +5755,15 @@ function renderBudget(){
       stroke-dasharray="${segLen} ${circ}" stroke-dashoffset="${offset}"
       style="transition:stroke-dasharray .6s cubic-bezier(.4,0,.2,1)"/>`;
   }).join('');
+
+  // Una sola línea de estado en vez de 3 cajitas separadas — menos ruido.
+  const statusLine=allLimited<=0?'':remaining>=0
+    ?`<span style="color:var(--inc)">${fmt(remaining)} disponibles</span>`
+    :`<span style="color:var(--exp)">${fmt(Math.abs(remaining))} excedidos</span>`;
+  const catStatusLine=allLimited>0?[
+    onTrackCats>0?`${onTrackCats} al día`:'',
+    overBudgetCats>0?`${overBudgetCats} excedida${overBudgetCats===1?'':'s'}`:''
+  ].filter(Boolean).join(' · '):'';
 
   let html=`
   <div style="background:var(--bg3);border:1px solid var(--bdr);border-radius:20px;padding:22px;margin-bottom:18px">
@@ -5753,22 +5780,11 @@ function renderBudget(){
       </div>
       <div style="flex:1;min-width:170px">
         <div style="font-size:11px;color:var(--t3);text-transform:uppercase;letter-spacing:.6px;margin-bottom:3px">Gastado este mes</div>
-        <div style="font-family:'DM Mono',monospace;font-size:26px;font-weight:700;color:${allSpent>allLimited&&allLimited>0?'var(--exp)':'var(--txt)'};margin-bottom:2px">${fmt(allSpent)}</div>
-        ${allLimited>0?`<div style="font-size:12px;color:var(--t3);margin-bottom:14px">de ${fmt(allLimited)} presupuestado</div>`:'<div style="font-size:12px;color:var(--t3);margin-bottom:14px">sin límite global</div>'}
-        <div style="display:flex;gap:8px;flex-wrap:wrap">
-          ${remaining>0&&allLimited>0?`<div style="background:rgba(48,214,147,.1);border-radius:10px;padding:5px 10px">
-            <div style="font-size:9px;color:var(--inc);text-transform:uppercase;letter-spacing:.5px">Disponible</div>
-            <div style="font-family:'DM Mono',monospace;font-size:13px;font-weight:600;color:var(--inc)">${fmt(remaining)}</div>
-          </div>`:''}
-          ${overBudgetCats>0?`<div style="background:rgba(255,95,109,.1);border-radius:10px;padding:5px 10px">
-            <div style="font-size:9px;color:var(--exp);text-transform:uppercase;letter-spacing:.5px">Excedidas</div>
-            <div style="font-family:'DM Mono',monospace;font-size:13px;font-weight:600;color:var(--exp)">${overBudgetCats} cat.</div>
-          </div>`:''}
-          ${onTrackCats>0?`<div style="background:rgba(48,214,147,.08);border-radius:10px;padding:5px 10px">
-            <div style="font-size:9px;color:var(--inc);text-transform:uppercase;letter-spacing:.5px">Al día</div>
-            <div style="font-family:'DM Mono',monospace;font-size:13px;font-weight:600;color:var(--inc)">${onTrackCats} cat.</div>
-          </div>`:''}
+        <div style="font-family:'DM Mono',monospace;font-size:26px;font-weight:700;color:${allSpent>allLimited&&allLimited>0?'var(--exp)':'var(--txt)'};margin-bottom:4px">${fmt(allSpent)}</div>
+        <div style="font-size:13px;color:var(--t2)">
+          ${allLimited>0?`de ${fmt(allLimited)} · ${statusLine}`:'Sin límite global — toca una categoría abajo para ponerle límite'}
         </div>
+        ${catStatusLine?`<div style="font-size:11px;color:var(--t3);margin-top:4px">${catStatusLine}</div>`:''}
       </div>
     </div>
     ${ringCats.length?`<div style="display:flex;flex-wrap:wrap;gap:10px;margin-top:16px;padding-top:16px;border-top:1px solid var(--bdr)">
@@ -5779,89 +5795,30 @@ function renderBudget(){
       <span style="font-family:'DM Mono',monospace;font-size:13px;color:var(--exp)">${fmt(totalUnlimitedSpend)}</span>
     </div>`:''}
   </div>
-  <div style="display:flex;flex-direction:column;gap:10px">`;
+  <div style="display:flex;flex-direction:column;gap:8px">`;
 
   catStats.forEach(({cat,subs,catSpent,catLimit,rolloverNote,catP,catOver})=>{
-    const catId='bgt-acc-'+cat.name.replace(/\s/g,'_');
     const catPct=catP.toFixed(0);
     const catWarn=!catOver&&catP>70;
     const barColor=catOver?'var(--redg)':catP>70?'var(--yelg)':'var(--acg)';
     const statusColor=catOver?'var(--exp)':catP>70?'var(--yel)':'var(--ac)';
     const hasSubs=subs.length>0;
 
-    html+=`<div style="background:var(--bg3);border-radius:16px;overflow:hidden">
-      <div style="padding:15px 16px;cursor:pointer;user-select:none" onclick="toggleBudgetAcc('${catId}')">
-        <div style="display:flex;align-items:center;gap:12px">
-          <div style="width:38px;height:38px;border-radius:12px;background:${catLimit>0?statusColor+'1f':'var(--bg4)'};display:flex;align-items:center;justify-content:center;font-size:18px;flex-shrink:0">${cat.icon}</div>
-          <div style="flex:1;min-width:0">
-            <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-bottom:2px">
-              <span style="font-size:14px;font-weight:600;color:var(--txt)">${cat.name}</span>
+    html+=`<div class="card-click" style="background:var(--bg3);border-radius:14px;padding:14px 16px" onclick="openBudgetEditM('${esc(cat.name)}')">
+      <div style="display:flex;align-items:center;gap:12px">
+        <div style="width:38px;height:38px;border-radius:50%;background:${catLimit>0?statusColor+'1f':'var(--bg4)'};display:flex;align-items:center;justify-content:center;font-size:18px;flex-shrink:0">${cat.icon}</div>
+        <div style="flex:1;min-width:0">
+          <div style="display:flex;justify-content:space-between;align-items:baseline;gap:8px;margin-bottom:6px">
+            <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;min-width:0">
+              <span style="font-size:14px;font-weight:600;color:var(--txt);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${cat.name}</span>
               ${rolloverNote}
-              ${hasSubs?`<span style="font-size:10px;color:var(--t3);background:var(--bg4);padding:1px 6px;border-radius:10px">${subs.length} sub</span>`:''}
+              ${hasSubs?`<span style="font-size:10px;color:var(--t3);background:var(--bg4);padding:1px 6px;border-radius:10px;white-space:nowrap">${subs.length} sub</span>`:''}
             </div>
-            <div style="font-size:12px;font-family:'DM Mono',monospace">
-              <span style="color:${catOver?'var(--exp)':catWarn?'var(--yel)':'var(--t2)'};font-weight:${catOver?'600':'400'}">${fmt(catSpent)}</span>
-              ${catLimit>0?`<span style="color:var(--t3)"> / ${fmt(catLimit)}</span> · <span style="color:${catOver?'var(--exp)':'var(--inc)'}">${catOver?'excedido por '+fmt(catSpent-catLimit):fmt(catLimit-catSpent)+' disponibles'}</span>`:`<span style="color:var(--t3)"> — sin límite</span>`}
-            </div>
+            <span style="font-family:'DM Mono',monospace;font-size:12px;flex-shrink:0;color:${catOver?'var(--exp)':catWarn?'var(--yel)':'var(--t2)'};font-weight:${catOver?'600':'400'}">${fmt(catSpent)}${catLimit>0?`<span style="color:var(--t3)"> / ${fmt(catLimit)}</span>`:''}</span>
           </div>
-          <span id="${catId}-chevron" style="color:var(--t3);font-size:11px;transition:transform .2s;flex-shrink:0">▼</span>
-        </div>
-        <div style="margin-top:11px;position:relative;height:7px;background:var(--bg4);border-radius:4px;overflow:hidden">
-          ${catLimit>0?`<div style="position:absolute;left:0;top:0;height:100%;width:${catPct}%;background:${barColor};border-radius:4px;transition:width .5s cubic-bezier(.4,0,.2,1)"></div>`:''}
-        </div>
-      </div>
-      <div id="${catId}" style="display:none;border-top:1px solid var(--bdr)">
-        <div style="padding:14px 16px;display:flex;flex-direction:column;gap:8px;background:var(--bg4)">
-          <div style="background:var(--bg3);border-radius:10px;padding:12px;border:1px solid var(--bdr)">
-            <div style="font-size:11px;color:var(--t3);text-transform:uppercase;letter-spacing:.5px;margin-bottom:8px">${cat.icon} ${cat.name} — límite mensual</div>
-            <div style="display:flex;align-items:center;gap:8px">
-              <input type="number" placeholder="Sin límite" value="${S.budgets.find(b=>b.category===cat.name)?S.budgets.find(b=>b.category===cat.name).limit:''}" min="0" step="0.01"
-                data-had-limit="${S.budgets.find(b=>b.category===cat.name)?'1':'0'}"
-                style="flex:1;padding:8px 10px;border-radius:8px;border:1px solid var(--bdr2);background:var(--bg4);color:var(--txt);font-size:13px;font-family:'DM Mono',monospace"
-                onchange="setBudgetLimit('${cat.name}',this.value,this)">
-              ${S.budgets.find(b=>b.category===cat.name)?`<button class="btn bd ico sm" onclick="delBudget('${S.budgets.find(b=>b.category===cat.name).id}')" title="Quitar límite" style="border-radius:8px">✕</button>`:''}
-            </div>
+          <div style="position:relative;height:6px;background:var(--bg4);border-radius:4px;overflow:hidden">
+            ${catLimit>0?`<div style="position:absolute;left:0;top:0;height:100%;width:${catPct}%;background:${barColor};border-radius:4px;transition:width .5s cubic-bezier(.4,0,.2,1)"></div>`:''}
           </div>
-          ${subs.map(sub=>{
-            const subBgt=S.budgets.find(b=>b.category===sub);
-            const subSpent=mtxs.filter(t=>t.category===sub).reduce((a,t)=>a+M(t.amount),0);
-            let subLimit=subBgt?subBgt.limit:0;
-            let subRollNote='';
-            if(subBgt&&S.budgetRollover){
-              const ps=prevMtxs.filter(t=>t.category===sub).reduce((a,t)=>a+M(t.amount),0);
-              const sr=Math.max(0,subBgt.limit-ps);
-              subLimit=subBgt.limit+sr;
-              if(sr>0)subRollNote=`<span style="font-size:9px;color:var(--inc)">↩ +${fmt(sr)}</span>`;
-            }
-            const sp2=subLimit>0?Math.min(100,subSpent/subLimit*100):0;
-            const sp2Pct=sp2.toFixed(0);
-            const so=subLimit>0&&subSpent>subLimit;
-            const sbColor=sp2>90?'var(--redg)':sp2>70?'var(--yelg)':'var(--acg)';
-            return`<div style="background:var(--bg3);border-radius:10px;padding:12px;border:1px solid var(--bdr)">
-              <div style="display:flex;align-items:center;gap:8px;margin-bottom:${subLimit>0?'8':'0'}px">
-                <span style="color:var(--t3);font-size:12px;flex-shrink:0">↳</span>
-                <div style="flex:1;min-width:0">
-                  <div style="display:flex;align-items:center;gap:5px;flex-wrap:wrap">
-                    <span style="font-size:13px;font-weight:500">${sub}</span>
-                    ${subRollNote}
-                  </div>
-                  <div style="font-size:11px;color:var(--t3);font-family:'DM Mono',monospace">
-                    <span style="color:${so?'var(--exp)':'var(--t2)'}">${fmt(subSpent)}</span>
-                    ${subLimit>0?` / ${fmt(subLimit)}`:' — sin límite'}
-                  </div>
-                </div>
-                <div style="display:flex;align-items:center;gap:6px;flex-shrink:0">
-                  ${subLimit>0?`<span style="font-size:11px;font-weight:600;color:${so?'var(--exp)':sp2>70?'var(--yel)':'var(--t3)'}">${sp2Pct}%</span>`:''}
-                  <input type="number" placeholder="—" value="${subBgt?subBgt.limit:''}" min="0" step="0.01"
-                    data-had-limit="${subBgt?'1':'0'}"
-                    style="width:90px;padding:6px 8px;border-radius:8px;border:1px solid var(--bdr2);background:var(--bg4);color:var(--txt);font-size:12px;font-family:'DM Mono',monospace"
-                    onchange="setBudgetLimit('${sub}',this.value,this)">
-                  ${subBgt?`<button class="btn bd ico sm" onclick="delBudget('${subBgt.id}')" title="Quitar" style="border-radius:8px">✕</button>`:''}
-                </div>
-              </div>
-              ${subLimit>0?`<div style="height:5px;background:var(--bg4);border-radius:3px;overflow:hidden"><div style="height:5px;width:${sp2Pct}%;border-radius:3px;background:${sbColor};transition:width .4s"></div></div>`:''}
-            </div>`;
-          }).join('')}
         </div>
       </div>
     </div>`;
@@ -5871,20 +5828,46 @@ function renderBudget(){
   el.innerHTML=html;
 }
 
-function toggleBudgetAcc(id){
-  const body=$(id);
-  const chev=$(id+'-chevron');
-  if(!body)return;
-  const open=body.style.display==='block';
-  body.style.display=open?'none':'block';
-  if(chev)chev.style.transform=open?'':'rotate(180deg)';
+// Abre la ventana de edición de límite para UNA categoría — reemplaza el
+// acordeón inline que había antes. _budgetEditCat recuerda cuál está
+// abierta para poder refrescar sus campos sin cerrarla (ver
+// setBudgetLimitFromModal/delBudgetFromModal).
+function openBudgetEditM(catName){
+  const cat=S.categories.find(c=>c.name===catName&&c.type==='expense');if(!cat)return;
+  _budgetEditCat=catName;
+  $('bgted-title').textContent=cat.icon+' '+cat.name;
+  const bgt=S.budgets.find(b=>b.category===catName);
+  const limitInput=$('bgted-limit');
+  limitInput.value=bgt?bgt.limit:'';
+  limitInput.dataset.hadLimit=bgt?'1':'0';
+  limitInput.setAttribute('onchange',`setBudgetLimitFromModal('${esc(catName)}',this.value,this)`);
+  const delBtn=$('bgted-del-btn');
+  delBtn.style.display=bgt?'flex':'none';
+  if(bgt)delBtn.setAttribute('onclick',`delBudgetFromModal('${bgt.id}')`);
+  const subs=cat.subs||[];
+  $('bgted-subs-wrap').style.display=subs.length?'block':'none';
+  $('bgted-subs').innerHTML=subs.map(sub=>{
+    const subBgt=S.budgets.find(b=>b.category===sub);
+    return`<div class="fg" style="margin-bottom:0"><label class="fl">↳ ${esc(sub)}</label><div style="display:flex;gap:8px">
+      <input class="fc" type="number" placeholder="Sin límite" value="${subBgt?subBgt.limit:''}" min="0" step="0.01" data-had-limit="${subBgt?'1':'0'}" style="flex:1" onchange="setBudgetLimitFromModal('${esc(sub)}',this.value,this)">
+      ${subBgt?`<button class="btn bd ico sm" onclick="delBudgetFromModal('${subBgt.id}')" title="Quitar límite">✕</button>`:''}
+    </div></div>`;
+  }).join('');
+  oM('mo-budget-edit');
+}
+function setBudgetLimitFromModal(catName,val,inputEl){
+  setBudgetLimit(catName,val,inputEl);
+  if(_budgetEditCat)openBudgetEditM(_budgetEditCat);
+}
+async function delBudgetFromModal(id){
+  await delBudget(id);
+  if(_budgetEditCat)openBudgetEditM(_budgetEditCat);
 }
 function setBudgetLimit(catName,val,inputEl){
   const lim=M(val)||0;
   if(!lim){
     S.budgets=S.budgets.filter(b=>b.category!==catName);
     save();
-    // Only re-render if there was previously a limit (progress bar disappears)
     const hadLimit=inputEl?inputEl.dataset.hadLimit==='1':false;
     if(hadLimit)renderBudget();
     return;
@@ -5893,9 +5876,8 @@ function setBudgetLimit(catName,val,inputEl){
   const isNew=ex<0;
   if(ex>=0)S.budgets[ex].limit=lim;else S.budgets.push({id:uid(),category:catName,limit:lim});
   save();
-  // Re-render only if this is a brand new budget (to show the progress bar + ✕ button)
-  if(isNew)renderBudget();
-  else toast('Límite guardado');
+  renderBudget();
+  if(!isNew)toast('Límite guardado');
 }
 async function delBudget(id){const ok=await confirm_('¿Quitar límite?','');if(!ok)return;Store.deleteBudget(id);renderBudget();toast('Límite eliminado')}
 
