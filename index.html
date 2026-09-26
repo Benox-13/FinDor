@@ -716,6 +716,7 @@ body.modal-open #bottom-nav{display:none !important}
           <input class="fc" type="number" id="bgted-limit" placeholder="Sin límite" min="0" step="0.01" style="flex:1">
           <button class="btn bd ico sm" id="bgted-del-btn" style="display:none" title="Quitar límite">✕</button>
         </div>
+        <div id="bgted-inherit-hint" style="display:none;font-size:11px;color:var(--t3);margin-top:5px">Este número viene de un mes anterior — guárdalo (aunque sea igual) para que quede propio de este mes, sin afectar los demás.</div>
       </div>
       <div id="bgted-subs-wrap" style="display:none">
         <div class="slbl" style="margin:16px 0 8px">Subcategorías</div>
@@ -1948,13 +1949,13 @@ async function pullFromSupabase(){
   if(!sb)return;
   try{
     const tables=['accounts','categories','subcategories','transactions','debts','goals',
-      'subscriptions','budgets','vehicles','vehicle_records','investments','investment_records','custom_sections',
+      'subscriptions','budgets','budget_goals','vehicles','vehicle_records','investments','investment_records','custom_sections',
       'custom_section_members','custom_section_categories','custom_section_records',
       'settings','net_worth_snapshots'];
     const results={};
     for(const t of tables){
       const q=sb.from(t).select('*');
-      if(t!=='settings'&&t!=='net_worth_snapshots')q.is('deleted_at',null);
+      if(t!=='settings'&&t!=='net_worth_snapshots'&&t!=='budget_goals')q.is('deleted_at',null);
       const {data,error}=await q;
       if(error){console.warn(`Supabase: no se pudo leer "${t}":`,error.message);toast('No se pudo sincronizar con la nube — se sigue usando tus datos locales',false);return;}
       results[t]=data||[];
@@ -2035,19 +2036,16 @@ async function pullFromSupabase(){
       };
     });
 
-    // --- budgets: Postgres los versiona por mes (period_key); local NO
-    // tiene ese concepto, así que tomamos el del mes actual si existe, y si
-    // no, el más reciente que haya por categoría. ---
-    const curPeriod=new Date().toISOString().slice(0,7);
-    const budgetsByCategory={};
-    results.budgets.forEach(b=>{
-      const cat=catById[b.category_id];if(!cat)return;
-      const existing=budgetsByCategory[cat.name];
-      if(!existing||b.period_key===curPeriod||(existing.period_key!==curPeriod&&b.period_key>existing.period_key)){
-        budgetsByCategory[cat.name]={id:b.id,category:cat.name,limit:centsToAmt(b.limit_cents),period_key:b.period_key,rollover:!!b.rollover};
-      }
-    });
-    const newBudgets=Object.values(budgetsByCategory).map(({period_key,...rest})=>rest);
+    // --- budgets: ahora local SÍ tiene el concepto de mes (period), igual
+    // que Postgres (period_key) — se traen TODOS los periodos guardados,
+    // no solo uno, para que cada mes conserve su propio límite. ---
+    const newBudgets=results.budgets.map(b=>{
+      const cat=catById[b.category_id];if(!cat)return null;
+      return{id:b.id,category:cat.name,limit:centsToAmt(b.limit_cents),period:b.period_key};
+    }).filter(Boolean);
+
+    // --- budget_goals: ingreso esperado + % de ahorro esperado, por mes ---
+    const newBudgetGoals=(results.budget_goals||[]).map(g=>({id:g.id,period:g.period_key,expectedIncome:centsToAmt(g.expected_income_cents),savingsPct:g.savings_pct||0}));
 
     // --- vehicles + records anidados ---
     const newVehicles=results.vehicles.map(v=>({
@@ -2106,7 +2104,7 @@ async function pullFromSupabase(){
     // abajo evita que lleguemos a pisar los datos locales a medias.
     S.accounts=newAccounts;S.categories=newCategories;S.transactions=newTransactions;
     S.debts_owed=newDebtsOwed;S.debts_iowe=newDebtsIowe;S.goals=newGoals;
-    S.subscriptions=newSubscriptions;S.budgets=newBudgets;S.vehicles=newVehicles;S.investments=newInvestments;
+    S.subscriptions=newSubscriptions;S.budgets=newBudgets;S.budgetGoals=newBudgetGoals;S.vehicles=newVehicles;S.investments=newInvestments;
     S.customSections=newCustomSections;S.settings=newSettings;S.dw=newDw;S.notif=newNotif;
     S.nwHistory=newNwHistory;
     save();
@@ -2313,11 +2311,15 @@ async function pushAllToSupabase(){
       if(!error)s.id=data.id;else console.warn('Supabase: falló insertar suscripción',s.name,error.message);
     }
 
-    // 7. Presupuestos (versionados por mes en la nube — se suben con el mes actual)
-    const curPeriod=new Date().toISOString().slice(0,7);
+    // 7. Presupuestos (versionados por mes en la nube — cada uno ya trae
+    // su propio periodo desde que se creó, ver migración suave al cargar)
     for(const b of S.budgets){
       const catId=catByName[b.category];if(!catId)continue;
-      await cloudWrite(sb.from('budgets').insert({user_id:currentUserId,category_id:catId,period_key:curPeriod,limit_cents:amtToCents(b.limit),rollover:!!b.rollover}),`presupuesto ${b.category}`);
+      await cloudWrite(sb.from('budgets').insert({user_id:currentUserId,category_id:catId,period_key:b.period,limit_cents:amtToCents(b.limit)}),`presupuesto ${b.category}`);
+    }
+    // 7b. Metas de presupuesto (ingreso esperado + % de ahorro), por mes
+    for(const g of S.budgetGoals){
+      await cloudWrite(sb.from('budget_goals').insert({user_id:currentUserId,period_key:g.period,expected_income_cents:amtToCents(g.expectedIncome||0),savings_pct:g.savingsPct||0}),`meta de presupuesto ${g.period}`);
     }
 
     // 8. Vehículos + registros anidados
@@ -2642,7 +2644,7 @@ function emptyAppState(){
     settings:{name:'',currency:'MXN',theme:'dark',accent:'green'},
     dw:{metrics:true,txs:true,cats:true,accs:true,tdc:true,goals:true,budget:false,upcoming:true,subs:true,debts:true,health:true},
     notif:{budget:true,debts:true,subs:true,goals:true},
-    vehicles:[],investments:[],customSections:[],budgetRollover:false,nwHistory:[]
+    vehicles:[],investments:[],customSections:[],budgetRollover:false,nwHistory:[],budgetGoals:[]
   };
 }
 let S = JSON.parse(localStorage.getItem('finance_v4')||'null') || {
@@ -2665,7 +2667,7 @@ let S = JSON.parse(localStorage.getItem('finance_v4')||'null') || {
   settings:{name:'',currency:'MXN',theme:'dark',accent:'green'},
   dw:{metrics:true,txs:true,cats:true,accs:true,tdc:true,goals:true,budget:false,upcoming:true,subs:true,debts:true,health:true},
   notif:{budget:true,debts:true,subs:true,goals:true},
-  vehicles:[],investments:[],customSections:[],budgetRollover:false,nwHistory:[]
+  vehicles:[],investments:[],customSections:[],budgetRollover:false,nwHistory:[],budgetGoals:[]
 };
 
 function save(){
@@ -3067,32 +3069,55 @@ const Store = {
   },
 
   // ---------------- BUDGETS ----------------
-  // Nota: igual que hoy, el presupuesto se guarda por NOMBRE de categoría
-  // (no por id) localmente — en la nube sí se guarda por category_id y
-  // versionado por mes (period_key). upsertBudget siempre sube/actualiza
-  // el registro del MES ACTUAL.
+  // BUG REAL ENCONTRADO Y CORREGIDO: la UI de Presupuesto nunca llamaba a
+  // estos métodos — mutaba S.budgets directo y solo hacía save() (local).
+  // Los límites de presupuesto NUNCA se habían sincronizado con Supabase.
+  // Ahora sí: toda la UI pasa por aquí. Además, ahora cada presupuesto es
+  // por (categoría, periodo) — igual que la nube ya lo esperaba desde
+  // hace tiempo (period_key) — así cada mes tiene su propio límite, sin
+  // que cambiar uno afecte a los demás.
   getBudgets(){ return S.budgets; },
-  getBudgetByCategory(category){ return S.budgets.find(b=>b.category===category); },
-  upsertBudget(category,limit){
-    const ex=S.budgets.findIndex(b=>b.category===category);
+  getBudgetByCategory(category,period){ return S.budgets.find(b=>b.category===category&&b.period===period); },
+  upsertBudget(category,limit,period){
+    const ex=S.budgets.findIndex(b=>b.category===category&&b.period===period);
     if(ex>=0){ S.budgets[ex].limit=limit; }
-    else { S.budgets.push({id:uid(),category,limit}); }
+    else { S.budgets.push({id:uid(),category,limit,period}); }
     save();
     if(sb&&currentUserId){
       const cat=S.categories.find(c=>c.name===category);
       if(cat&&isUUID(cat.id)){
-        const curPeriod=new Date().toISOString().slice(0,7);
-        sb.from('budgets').upsert({user_id:currentUserId,category_id:cat.id,period_key:curPeriod,limit_cents:amtToCents(limit)},{onConflict:'user_id,category_id,period_key'})
-          .then(({error})=>{if(error)console.warn('Supabase: no se pudo sincronizar presupuesto',category,error.message)});
+        sb.from('budgets').upsert({user_id:currentUserId,category_id:cat.id,period_key:period,limit_cents:amtToCents(limit)},{onConflict:'user_id,category_id,period_key'})
+          .then(({error})=>{if(error)console.warn('Supabase: no se pudo sincronizar presupuesto',category,period,error.message)});
       }
     }
   },
-  deleteBudget(id){
+  deleteBudget(id,category,period){
     S.budgets=S.budgets.filter(b=>b.id!==id);
     save();
-    // Igual que subcategorías: local no guarda el id real de la nube para
-    // presupuestos de forma confiable tras un upsert, así que se borra por
-    // categoría + mes actual en vez de por id.
+    // Local no guarda el id real de la fila en la nube de forma
+    // confiable tras un upsert (mismo caso que subcategorías) — se borra
+    // por categoría + periodo, que es justo la llave única de esa tabla.
+    if(sb&&currentUserId&&category&&period){
+      const cat=S.categories.find(c=>c.name===category);
+      if(cat&&isUUID(cat.id)){
+        sb.from('budgets').delete().eq('user_id',currentUserId).eq('category_id',cat.id).eq('period_key',period)
+          .then(({error})=>{if(error)console.warn('Supabase: no se pudo borrar presupuesto',category,period,error.message)});
+      }
+    }
+  },
+
+  // ---------------- BUDGET GOALS (ingreso esperado + % de ahorro) ----------------
+  // Uno por mes (period), igual que los límites de categoría.
+  getBudgetGoal(period){ return S.budgetGoals.find(g=>g.period===period); },
+  upsertBudgetGoal(period,expectedIncome,savingsPct){
+    const ex=S.budgetGoals.findIndex(g=>g.period===period);
+    if(ex>=0){ S.budgetGoals[ex].expectedIncome=expectedIncome; S.budgetGoals[ex].savingsPct=savingsPct; }
+    else { S.budgetGoals.push({id:uid(),period,expectedIncome,savingsPct}); }
+    save();
+    if(sb&&currentUserId){
+      sb.from('budget_goals').upsert({user_id:currentUserId,period_key:period,expected_income_cents:amtToCents(expectedIncome||0),savings_pct:savingsPct||0},{onConflict:'user_id,period_key'})
+        .then(({error})=>{if(error)console.warn('Supabase: no se pudo sincronizar meta de presupuesto',period,error.message)});
+    }
   },
 
   // ---------------- DEBTS ----------------
@@ -4018,12 +4043,18 @@ function renderDash(){
   const buildHealth=()=>{
     const savScore=Math.max(0,Math.min(100,sav));
     let budgetScore=70; // neutral si no hay presupuestos configurados todavía
-    if(S.budgets.length){
-      const within=S.budgets.filter(b=>{
-        const sp=mtxs.filter(t=>t.type==='expense'&&(t.category===b.category||getCatParent(t.category)===b.category)).reduce((a,t)=>a+M(t.amount),0);
-        return sp<=b.limit;
+    // Usa el presupuesto RESUELTO de este mes (propio o heredado de un mes
+    // anterior) — antes recorría S.budgets tal cual, que ahora tiene una
+    // fila por cada mes histórico, no solo la de este mes.
+    const curPeriod=`${yr}-${String(mo+1).padStart(2,'0')}`;
+    const expCatsForHealth=S.categories.filter(c=>c.type==='expense');
+    const budgetsThisMonth=expCatsForHealth.map(c=>({category:c.name,bgt:budgetForPeriod(c.name,curPeriod)})).filter(x=>x.bgt&&x.bgt.limit>0);
+    if(budgetsThisMonth.length){
+      const within=budgetsThisMonth.filter(({category,bgt})=>{
+        const sp=mtxs.filter(t=>t.type==='expense'&&(t.category===category||getCatParent(t.category)===category)).reduce((a,t)=>a+M(t.amount),0);
+        return sp<=bgt.limit;
       }).length;
-      budgetScore=Math.round(within/S.budgets.length*100);
+      budgetScore=Math.round(within/budgetsThisMonth.length*100);
     }
     const last3Inc=[0,1,2].map(i=>{
       const d=new Date(yr,mo-i,1);
@@ -4052,8 +4083,13 @@ function renderDash(){
     </div>`];
   };
   const buildBudget=()=>{
-    if(!S.budgets.length)return[`<div class="card card-click" onclick="go('budget')"><div class="slbl">${slblBadge('📅','#22d3ee')} Presupuesto del mes</div><div style="color:var(--t3);font-size:13px;text-align:center;padding:8px">Sin presupuestos configurados</div></div>`];
-    const items=S.budgets.map(b=>{const sp=mtxs.filter(t=>t.type==='expense'&&(t.category===b.category||getCatParent(t.category)===b.category)).reduce((a,t)=>a+M(t.amount),0);const p=Math.min(100,sp/b.limit*100).toFixed(0);return`<div><div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:3px"><span>${getCatIcon(b.category)} ${esc(b.category)}</span><span style="font-family:'DM Mono',monospace;color:${p>90?'var(--red)':p>70?'var(--yel)':'var(--t2)'}">${fmt(sp)}/${fmt(b.limit)}</span></div><div class="pw"><div class="pb" style="width:${p}%;background:${p>90?'var(--redg)':p>70?'var(--yelg)':'var(--acg)'}"></div></div></div>`});
+    // Usa el presupuesto RESUELTO de este mes (propio o heredado) por
+    // categoría — antes recorría S.budgets tal cual, que ahora guarda una
+    // fila por cada mes histórico, no solo el actual.
+    const curPeriod=`${yr}-${String(mo+1).padStart(2,'0')}`;
+    const budgetsThisMonth=S.categories.filter(c=>c.type==='expense').map(c=>({category:c.name,bgt:budgetForPeriod(c.name,curPeriod)})).filter(x=>x.bgt&&x.bgt.limit>0);
+    if(!budgetsThisMonth.length)return[`<div class="card card-click" onclick="go('budget')"><div class="slbl">${slblBadge('📅','#22d3ee')} Presupuesto del mes</div><div style="color:var(--t3);font-size:13px;text-align:center;padding:8px">Sin presupuestos configurados</div></div>`];
+    const items=budgetsThisMonth.map(({category,bgt})=>{const sp=mtxs.filter(t=>t.type==='expense'&&(t.category===category||getCatParent(t.category)===category)).reduce((a,t)=>a+M(t.amount),0);const p=Math.min(100,sp/bgt.limit*100).toFixed(0);return`<div><div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:3px"><span>${getCatIcon(category)} ${esc(category)}</span><span style="font-family:'DM Mono',monospace;color:${p>90?'var(--red)':p>70?'var(--yel)':'var(--t2)'}">${fmt(sp)}/${fmt(bgt.limit)}</span></div><div class="pw"><div class="pb" style="width:${p}%;background:${p>90?'var(--redg)':p>70?'var(--yelg)':'var(--acg)'}"></div></div></div>`});
     return[`<div class="card card-click" onclick="go('budget')"><div class="slbl">${slblBadge('📅','#22d3ee')} Presupuesto del mes</div><div class="g2">${items.join('')}</div></div>`];
   };
   // Próximos pagos: suscripciones y préstamos (que yo debo) con fecha
@@ -5686,22 +5722,41 @@ function saveBudget(){
 // Budget month navigation
 let _budgetOffset=0;
 let _budgetEditCat=null;
+let _budgetEditPeriod=null;
 let _budgetBulkEdit=false;
 function toggleBudgetBulkEdit(){_budgetBulkEdit=!_budgetBulkEdit;renderBudget()}
 function budgetMonthNav(d){_budgetOffset+=d;renderBudget()}
 function budgetGoToday(){_budgetOffset=0;renderBudget()}
 function toggleRollover(){S.budgetRollover=$('budget-rollover').checked;save();renderBudget()}
 
+// Resuelve el límite de una categoría para un periodo exacto. Si no hay
+// un registro propio de ESE mes, hereda el más reciente de un mes
+// anterior (para no tener que volver a configurar todo cada mes) — pero
+// se marca como "inherited" para que la UI deje claro que todavía no es
+// un valor propio de este mes, y guardar algo (aunque sea el mismo
+// número) lo vuelve independiente sin tocar los meses anteriores.
+function budgetForPeriod(category,period){
+  const exact=S.budgets.find(b=>b.category===category&&b.period===period);
+  if(exact)return{...exact,inherited:false};
+  // Para heredar, se busca el registro real (>0) más reciente ANTERIOR —
+  // así un "quitar límite" explícito de un mes puntual (que se guarda
+  // como 0, ver setBudgetLimit) solo apaga ESE mes, sin arrastrar el
+  // "sin límite" hacia los meses futuros también.
+  const past=S.budgets.filter(b=>b.category===category&&b.period<period&&b.limit>0).sort((a,b)=>b.period.localeCompare(a.period))[0];
+  return past?{...past,inherited:true}:null;
+}
 function renderBudget(){
   const el=$('budget-list');
   if($('budget-rollover'))$('budget-rollover').checked=!!S.budgetRollover;
   const now=new Date();
   const target=new Date(now.getFullYear(),now.getMonth()+_budgetOffset,1);
   const mo=target.getMonth(),yr=target.getFullYear();
+  const period=`${yr}-${String(mo+1).padStart(2,'0')}`;
+  const prevTarget=new Date(yr,mo-1,1);
+  const prevPeriod=`${prevTarget.getFullYear()}-${String(prevTarget.getMonth()+1).padStart(2,'0')}`;
   const lbl=$('budget-month-lbl');
   if(lbl)lbl.textContent=target.toLocaleDateString('es-MX',{month:'long',year:'numeric'});
   const mtxs=S.transactions.filter(t=>{const d=dateLocal(t.date);return d.getMonth()===mo&&d.getFullYear()===yr&&t.type==='expense'});
-  const prevTarget=new Date(yr,mo-1,1);
   const prevMtxs=S.transactions.filter(t=>{const d=dateLocal(t.date);return d.getMonth()===prevTarget.getMonth()&&d.getFullYear()===prevTarget.getFullYear()&&t.type==='expense'});
   const expCats=S.categories.filter(c=>c.type==='expense');
   if(!expCats.length){el.innerHTML=emptyState('📊','Sin categorías de gasto','Crea al menos una categoría de gasto en Ajustes → Categorías para poder definir presupuestos.','Ir a Categorías',"go('settings');cfgTab('categorias',document.querySelector('#cfg-tabs button[onclick*=categorias]'))");return}
@@ -5718,18 +5773,21 @@ function renderBudget(){
   const catStats=expCats.map((cat,i)=>{
     const subs=cat.subs||[];
     const catSpent=mtxs.filter(t=>t.category===cat.name||getCatParent(t.category)===cat.name).reduce((a,t)=>a+M(t.amount),0);
-    const catBgt=S.budgets.find(b=>b.category===cat.name);
+    const catBgt=budgetForPeriod(cat.name,period);
     let catLimit=catBgt?catBgt.limit:0;
     let rolloverAmt=0,rolloverNote='';
     if(catBgt&&S.budgetRollover){
-      const prevSpent=prevMtxs.filter(t=>t.category===cat.name||getCatParent(t.category)===cat.name).reduce((a,t)=>a+M(t.amount),0);
-      rolloverAmt=Math.max(0,catBgt.limit-prevSpent);
-      catLimit=catBgt.limit+rolloverAmt;
-      if(rolloverAmt>0)rolloverNote=`<span style="font-size:10px;color:var(--inc);background:rgba(48,214,147,.12);padding:2px 7px;border-radius:20px;white-space:nowrap">↩ +${fmt(rolloverAmt)}</span>`;
+      const prevBgt=budgetForPeriod(cat.name,prevPeriod);
+      if(prevBgt){
+        const prevSpent=prevMtxs.filter(t=>t.category===cat.name||getCatParent(t.category)===cat.name).reduce((a,t)=>a+M(t.amount),0);
+        rolloverAmt=Math.max(0,prevBgt.limit-prevSpent);
+        catLimit=catBgt.limit+rolloverAmt;
+        if(rolloverAmt>0)rolloverNote=`<span style="font-size:10px;color:var(--inc);background:rgba(48,214,147,.12);padding:2px 7px;border-radius:20px;white-space:nowrap">↩ +${fmt(rolloverAmt)}</span>`;
+      }
     }
     const catP=catLimit>0?Math.min(100,catSpent/catLimit*100):0;
     const catOver=catLimit>0&&catSpent>catLimit;
-    return{cat,subs,catSpent,catLimit,rolloverAmt,rolloverNote,catP,catOver,color:BUDGET_PALETTE[i%BUDGET_PALETTE.length]};
+    return{cat,subs,catSpent,catLimit,catBgt,rolloverAmt,rolloverNote,catP,catOver,color:BUDGET_PALETTE[i%BUDGET_PALETTE.length]};
   });
 
   const allLimited=catStats.reduce((a,cs)=>a+cs.catLimit,0);
@@ -5767,7 +5825,36 @@ function renderBudget(){
     overBudgetCats>0?`${overBudgetCats} excedida${overBudgetCats===1?'':'s'}`:''
   ].filter(Boolean).join(' · '):'';
 
+  // ---- Ingreso esperado + % de ahorro esperado (por mes) ----
+  // Si este mes no tiene su propia meta guardada, se prellena con el
+  // promedio de ingresos reales de los últimos 3 meses — mismo criterio
+  // que ya usa la Proyección de flujo de caja en Análisis, para que los
+  // dos números no se contradigan entre sí.
+  const goal=Store.getBudgetGoal(period);
+  let prefillIncome=0;
+  if(!goal){
+    const last3=[0,1,2].map(i=>{const d=new Date(now.getFullYear(),now.getMonth()-i,1);return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')});
+    const incByMonth=last3.map(m=>S.transactions.filter(t=>t.type==='income'&&t.date.startsWith(m)).reduce((a,t)=>a+M(t.amount),0));
+    const monthsWithData=incByMonth.filter(v=>v>0).length;
+    prefillIncome=monthsWithData?M(incByMonth.reduce((a,v)=>a+v,0)/monthsWithData):0;
+  }
+  const expectedIncome=goal?goal.expectedIncome:prefillIncome;
+  const savingsPct=goal?goal.savingsPct:0;
+  const savingsGoalAmt=M(expectedIncome*(savingsPct||0)/100);
+  const zeroBasedLeft=M(expectedIncome-allLimited-savingsGoalAmt);
+
   let html=`
+  <div style="background:var(--bg3);border:1px solid var(--bdr);border-radius:16px;padding:16px;margin-bottom:14px">
+    <div class="slbl" style="margin-bottom:10px">💰 Ingreso esperado y meta de ahorro</div>
+    <div class="g2" style="margin-bottom:10px">
+      <div class="fg" style="margin-bottom:0"><label class="fl">Ingreso esperado este mes</label><input class="fc" type="number" min="0" step="0.01" value="${expectedIncome||''}" placeholder="0.00" onchange="saveBudgetGoal('${period}',this.value,null)"></div>
+      <div class="fg" style="margin-bottom:0"><label class="fl">% de ahorro esperado</label><input class="fc" type="number" min="0" max="100" step="1" value="${savingsPct||''}" placeholder="0" onchange="saveBudgetGoal('${period}',null,this.value)"></div>
+    </div>
+    ${expectedIncome>0?`<div style="display:flex;justify-content:space-between;flex-wrap:wrap;gap:6px;font-size:12px;padding-top:10px;border-top:1px solid var(--bdr)">
+      <span style="color:var(--t3)">Meta de ahorro: <strong style="color:var(--txt);font-family:'DM Mono',monospace">${fmt(savingsGoalAmt)}</strong></span>
+      <span style="color:var(--t3)">Después de gastos + ahorro: <strong style="font-family:'DM Mono',monospace;color:${zeroBasedLeft>=0?'var(--inc)':'var(--exp)'}">${zeroBasedLeft>=0?'':'-'}${fmt(Math.abs(zeroBasedLeft))}</strong></span>
+    </div>`:''}
+  </div>
   <div style="background:var(--bg3);border:1px solid var(--bdr);border-radius:20px;padding:22px;margin-bottom:18px">
     <div style="display:flex;align-items:center;gap:22px;flex-wrap:wrap">
       <div style="flex-shrink:0;position:relative;width:128px;height:128px">
@@ -5784,7 +5871,7 @@ function renderBudget(){
         <div style="font-size:11px;color:var(--t3);text-transform:uppercase;letter-spacing:.6px;margin-bottom:3px">Gastado este mes</div>
         <div style="font-family:'DM Mono',monospace;font-size:26px;font-weight:700;color:${allSpent>allLimited&&allLimited>0?'var(--exp)':'var(--txt)'};margin-bottom:4px">${fmt(allSpent)}</div>
         <div style="font-size:13px;color:var(--t2)">
-          ${allLimited>0?`de ${fmt(allLimited)} · ${statusLine}`:'Sin límite global — toca una categoría abajo para ponerle límite'}
+          ${allLimited>0?`de ${fmt(allLimited)} · ${statusLine}`:'Sin límite global — toca "Editar todos" abajo para ponerle límite a tus categorías'}
         </div>
         ${catStatusLine?`<div style="font-size:11px;color:var(--t3);margin-top:4px">${catStatusLine}</div>`:''}
       </div>
@@ -5799,9 +5886,10 @@ function renderBudget(){
   </div>`;
 
   // Aviso: categorías de gasto que todavía no tienen ningún límite
-  // puesto — para notar de un vistazo que falta presupuestar algo, sin
-  // tener que revisar categoría por categoría.
-  const noBudgetCats=catStats.filter(cs=>!S.budgets.find(b=>b.category===cs.cat.name));
+  // puesto (ni propio de este mes, ni heredado) — para notar de un
+  // vistazo que falta presupuestar algo, sin revisar categoría por
+  // categoría.
+  const noBudgetCats=catStats.filter(cs=>!cs.catBgt);
   if(noBudgetCats.length){
     html+=`<div style="display:flex;align-items:center;gap:10px;background:rgba(255,179,64,.08);border:1px solid rgba(255,179,64,.25);border-radius:12px;padding:10px 14px;margin-bottom:14px">
       <span style="font-size:16px">💡</span>
@@ -5814,12 +5902,13 @@ function renderBudget(){
   </div>
   <div style="display:flex;flex-direction:column;gap:8px">`;
 
-  catStats.forEach(({cat,subs,catSpent,catLimit,rolloverNote,catP,catOver})=>{
+  catStats.forEach(({cat,subs,catSpent,catLimit,catBgt,rolloverNote,catP,catOver})=>{
     const catPct=catP.toFixed(0);
     const catWarn=!catOver&&catP>70;
     const barColor=catOver?'var(--redg)':catP>70?'var(--yelg)':'var(--acg)';
     const statusColor=catOver?'var(--exp)':catP>70?'var(--yel)':'var(--ac)';
     const hasSubs=subs.length>0;
+    const inheritedNote=catBgt&&catBgt.inherited?`<span style="font-size:10px;color:var(--t3);background:var(--bg4);padding:1px 6px;border-radius:10px;white-space:nowrap" title="Heredado de un mes anterior — se vuelve propio de este mes en cuanto lo guardes">↳ heredado</span>`:'';
 
     html+=`<div style="background:var(--bg3);border-radius:14px;padding:14px 16px">
       <div style="display:flex;align-items:center;gap:12px">
@@ -5828,7 +5917,7 @@ function renderBudget(){
           <div style="display:flex;justify-content:space-between;align-items:baseline;gap:8px;margin-bottom:6px">
             <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;min-width:0">
               <span style="font-size:14px;font-weight:600;color:var(--txt);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${cat.name}</span>
-              ${rolloverNote}
+              ${rolloverNote}${inheritedNote}
               ${hasSubs?`<span style="font-size:10px;color:var(--t3);background:var(--bg4);padding:1px 6px;border-radius:10px;white-space:nowrap">${subs.length} sub</span>`:''}
             </div>
             <span style="font-family:'DM Mono',monospace;font-size:12px;flex-shrink:0;color:${catOver?'var(--exp)':catWarn?'var(--yel)':'var(--t2)'};font-weight:${catOver?'600':'400'}">${fmt(catSpent)}${catLimit>0?`<span style="color:var(--t3)"> / ${fmt(catLimit)}</span>`:''}</span>
@@ -5838,7 +5927,7 @@ function renderBudget(){
           </div>
         </div>
         ${_budgetBulkEdit
-          ?`<input type="number" placeholder="Sin límite" value="${S.budgets.find(b=>b.category===cat.name)?S.budgets.find(b=>b.category===cat.name).limit:''}" data-had-limit="${S.budgets.find(b=>b.category===cat.name)?'1':'0'}" min="0" step="0.01" style="width:100px;flex-shrink:0;padding:8px 10px;border-radius:8px;border:1px solid var(--bdr2);background:var(--bg4);color:var(--txt);font-size:13px;font-family:'DM Mono',monospace" onchange="setBudgetLimit('${esc(cat.name)}',this.value,this)">`
+          ?`<input type="number" placeholder="Sin límite" value="${catBgt?catBgt.limit:''}" data-had-limit="${catBgt&&!catBgt.inherited?'1':'0'}" data-inherited="${catBgt&&catBgt.inherited?'1':'0'}" min="0" step="0.01" style="width:100px;flex-shrink:0;padding:8px 10px;border-radius:8px;border:1px solid var(--bdr2);background:var(--bg4);color:var(--txt);font-size:13px;font-family:'DM Mono',monospace" onchange="setBudgetLimit('${esc(cat.name)}',this.value,this,'${period}')">`
           :`<button class="btn bg_ ico sm" style="flex-shrink:0" title="Más opciones" onclick="showRowMenu(this,[{label:'Editar límite',icon:'✎',onClick:()=>openBudgetEditM('${esc(cat.name)}')}])">⋮</button>`}
       </div>
     </div>`;
@@ -5847,59 +5936,89 @@ function renderBudget(){
   html+='</div>';
   el.innerHTML=html;
 }
+function saveBudgetGoal(period,incomeVal,pctVal){
+  const existing=Store.getBudgetGoal(period);
+  const income=incomeVal!==null?(M(incomeVal)||0):(existing?existing.expectedIncome:0);
+  const pct=pctVal!==null?(Math.max(0,Math.min(100,M(pctVal)||0))):(existing?existing.savingsPct:0);
+  Store.upsertBudgetGoal(period,income,pct);
+  renderBudget();
+}
 
 // Abre la ventana de edición de límite para UNA categoría — reemplaza el
 // acordeón inline que había antes. _budgetEditCat recuerda cuál está
 // abierta para poder refrescar sus campos sin cerrarla (ver
-// setBudgetLimitFromModal/delBudgetFromModal).
+// setBudgetLimitFromModal/delBudgetFromModal). Siempre edita el MES QUE
+// SE ESTÁ VIENDO (respeta _budgetOffset), no necesariamente el actual.
 function openBudgetEditM(catName){
   const cat=S.categories.find(c=>c.name===catName&&c.type==='expense');if(!cat)return;
+  const now=new Date();
+  const target=new Date(now.getFullYear(),now.getMonth()+_budgetOffset,1);
+  const period=`${target.getFullYear()}-${String(target.getMonth()+1).padStart(2,'0')}`;
   _budgetEditCat=catName;
-  $('bgted-title').textContent=cat.icon+' '+cat.name;
-  const bgt=S.budgets.find(b=>b.category===catName);
+  _budgetEditPeriod=period;
+  $('bgted-title').textContent=cat.icon+' '+cat.name+' — '+target.toLocaleDateString('es-MX',{month:'long',year:'numeric'});
+  const bgt=budgetForPeriod(catName,period);
   const limitInput=$('bgted-limit');
   limitInput.value=bgt?bgt.limit:'';
-  limitInput.dataset.hadLimit=bgt?'1':'0';
+  limitInput.dataset.hadLimit=bgt&&!bgt.inherited?'1':'0';
+  limitInput.dataset.inherited=bgt&&bgt.inherited?'1':'0';
   limitInput.setAttribute('onchange',`setBudgetLimitFromModal('${esc(catName)}',this.value,this)`);
+  const hint=$('bgted-inherit-hint');
+  if(hint)hint.style.display=bgt&&bgt.inherited?'block':'none';
   const delBtn=$('bgted-del-btn');
-  delBtn.style.display=bgt?'flex':'none';
-  if(bgt)delBtn.setAttribute('onclick',`delBudgetFromModal('${bgt.id}')`);
+  delBtn.style.display=(bgt&&!bgt.inherited)?'flex':'none';
+  if(bgt&&!bgt.inherited)delBtn.setAttribute('onclick',`delBudgetFromModal('${bgt.id}')`);
   const subs=cat.subs||[];
   $('bgted-subs-wrap').style.display=subs.length?'block':'none';
   $('bgted-subs').innerHTML=subs.map(sub=>{
-    const subBgt=S.budgets.find(b=>b.category===sub);
-    return`<div class="fg" style="margin-bottom:0"><label class="fl">↳ ${esc(sub)}</label><div style="display:flex;gap:8px">
-      <input class="fc" type="number" placeholder="Sin límite" value="${subBgt?subBgt.limit:''}" min="0" step="0.01" data-had-limit="${subBgt?'1':'0'}" style="flex:1" onchange="setBudgetLimitFromModal('${esc(sub)}',this.value,this)">
-      ${subBgt?`<button class="btn bd ico sm" onclick="delBudgetFromModal('${subBgt.id}')" title="Quitar límite">✕</button>`:''}
+    const subBgt=budgetForPeriod(sub,period);
+    return`<div class="fg" style="margin-bottom:0"><label class="fl">↳ ${esc(sub)}${subBgt&&subBgt.inherited?' <span style="color:var(--t3);font-weight:400">(heredado)</span>':''}</label><div style="display:flex;gap:8px">
+      <input class="fc" type="number" placeholder="Sin límite" value="${subBgt?subBgt.limit:''}" min="0" step="0.01" data-had-limit="${subBgt&&!subBgt.inherited?'1':'0'}" data-inherited="${subBgt&&subBgt.inherited?'1':'0'}" style="flex:1" onchange="setBudgetLimitFromModal('${esc(sub)}',this.value,this)">
+      ${subBgt&&!subBgt.inherited?`<button class="btn bd ico sm" onclick="delBudgetFromModal('${subBgt.id}')" title="Quitar límite">✕</button>`:''}
     </div></div>`;
   }).join('');
   oM('mo-budget-edit');
 }
 function setBudgetLimitFromModal(catName,val,inputEl){
-  setBudgetLimit(catName,val,inputEl);
+  setBudgetLimit(catName,val,inputEl,_budgetEditPeriod);
   if(_budgetEditCat)openBudgetEditM(_budgetEditCat);
 }
 async function delBudgetFromModal(id){
-  await delBudget(id);
+  const catName=_budgetEditCat,period=_budgetEditPeriod;
+  await delBudget(id,catName,period);
   if(_budgetEditCat)openBudgetEditM(_budgetEditCat);
 }
-function setBudgetLimit(catName,val,inputEl){
+// catName/val/inputEl/period — period es el mes que se está editando
+// (respeta el mes que se esté viendo, no siempre "ahora"). inputEl trae
+// data-had-limit (¿esta categoría ya tenía SU PROPIO límite en ESTE mes?)
+// y data-inherited (¿lo que se mostraba era heredado de un mes
+// anterior?) para decidir qué hacer al vaciar el campo: si había un
+// límite propio de este mes, se borra; si solo se estaba mostrando un
+// valor heredado, se guarda un 0 explícito para ESTE mes (así no vuelve
+// a heredar), sin tocar el mes del que venía.
+function setBudgetLimit(catName,val,inputEl,period){
   const lim=M(val)||0;
+  const hadOwn=inputEl?inputEl.dataset.hadLimit==='1':false;
+  const wasInherited=inputEl?inputEl.dataset.inherited==='1':false;
   if(!lim){
-    S.budgets=S.budgets.filter(b=>b.category!==catName);
-    save();
-    const hadLimit=inputEl?inputEl.dataset.hadLimit==='1':false;
-    if(hadLimit)renderBudget();
+    if(hadOwn){
+      const own=S.budgets.find(b=>b.category===catName&&b.period===period);
+      if(own)Store.deleteBudget(own.id,catName,period);
+      renderBudget();
+    } else if(wasInherited){
+      // Corta la herencia para este mes en particular sin tocar meses
+      // anteriores: guarda un límite explícito de $0 = "sin presupuesto
+      // este mes" para esta categoría.
+      Store.upsertBudget(catName,0,period);
+      renderBudget();
+    }
     return;
   }
-  const ex=S.budgets.findIndex(b=>b.category===catName);
-  const isNew=ex<0;
-  if(ex>=0)S.budgets[ex].limit=lim;else S.budgets.push({id:uid(),category:catName,limit:lim});
-  save();
+  Store.upsertBudget(catName,lim,period);
   renderBudget();
-  if(!isNew)toast('Límite guardado');
+  if(hadOwn)toast('Límite guardado');
 }
-async function delBudget(id){const ok=await confirm_('¿Quitar límite?','');if(!ok)return;Store.deleteBudget(id);renderBudget();toast('Límite eliminado')}
+async function delBudget(id,category,period){const ok=await confirm_('¿Quitar límite?','');if(!ok)return;Store.deleteBudget(id,category,period);renderBudget();toast('Límite eliminado')}
 
 // ==================== SUBSCRIPTIONS ====================
 function openSubM(editId=null){
@@ -6545,7 +6664,7 @@ async function nukeEverything(){
     toast('Borrando todo de la nube...');
     // Hijos antes que padres — aunque las FKs ya tienen on delete
     // cascade/set null en el esquema, este orden evita depender de eso.
-    const tables=['transactions','debts','goals','subscriptions','budgets',
+    const tables=['transactions','debts','goals','subscriptions','budgets','budget_goals',
       'vehicle_records','vehicles','custom_section_records','custom_section_members',
       'custom_section_categories','custom_sections','subcategories','categories',
       'accounts','settings','net_worth_snapshots'];
@@ -6579,6 +6698,18 @@ document.querySelectorAll('.ni').forEach(n=>n.addEventListener('click',()=>{
 if(!S.vehicles)S.vehicles=[];
 if(!S.customSections)S.customSections=[];
 if(S.budgetRollover===undefined)S.budgetRollover=false;
+if(!Array.isArray(S.budgetGoals))S.budgetGoals=[];
+// Migración suave: presupuestos guardados ANTES de que existiera el
+// concepto de mes (sin campo "period") se tratan como si fueran del mes
+// en que se esté abriendo la app por primera vez tras esta actualización
+// — así no se pierden, y de ahí en adelante cada mes ya queda
+// independiente.
+(function(){
+  const curP=new Date().toISOString().slice(0,7);
+  let migrated=false;
+  S.budgets.forEach(b=>{if(!b.period){b.period=curP;migrated=true;}});
+  if(migrated)save();
+})();
 if(!S.nwHistory)S.nwHistory=[];
 renderSbSections();
 renderDash();
@@ -7534,10 +7665,17 @@ function checkNotifications(){
   // Budget exceeded
   if(S.notif.bgt!==false){
     const mtxs=S.transactions.filter(t=>{const d=dateLocal(t.date);return d.getMonth()===mo&&d.getFullYear()===yr&&t.type==='expense'});
-    S.budgets.forEach(b=>{
-      const spent=mtxs.filter(t=>t.category===b.category||getCatParent(t.category)===b.category).reduce((a,t)=>a+M(t.amount),0);
-      if(spent>b.limit)alerts.push({type:'warn',msg:'⚠️ Presupuesto excedido: '+b.category+' ('+fmt(spent)+'/'+fmt(b.limit)+')',action:"go('budget')"});
-      else if(spent/b.limit>0.8)alerts.push({type:'info',msg:'📊 '+b.category+' al '+(spent/b.limit*100).toFixed(0)+'% del presupuesto',action:"go('budget')"});
+    // Presupuesto RESUELTO de este mes por categoría (propio o heredado)
+    // — S.budgets ahora tiene una fila por cada mes histórico, así que
+    // recorrerlo tal cual generaría alertas duplicadas o con límites de
+    // meses viejos.
+    const curPeriod=`${yr}-${String(mo+1).padStart(2,'0')}`;
+    S.categories.filter(c=>c.type==='expense').forEach(c=>{
+      const b=budgetForPeriod(c.name,curPeriod);
+      if(!b||!(b.limit>0))return;
+      const spent=mtxs.filter(t=>t.category===c.name||getCatParent(t.category)===c.name).reduce((a,t)=>a+M(t.amount),0);
+      if(spent>b.limit)alerts.push({type:'warn',msg:'⚠️ Presupuesto excedido: '+c.name+' ('+fmt(spent)+'/'+fmt(b.limit)+')',action:"go('budget')"});
+      else if(spent/b.limit>0.8)alerts.push({type:'info',msg:'📊 '+c.name+' al '+(spent/b.limit*100).toFixed(0)+'% del presupuesto',action:"go('budget')"});
     });
   }
   // Subs due in 3 days
