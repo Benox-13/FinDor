@@ -693,37 +693,35 @@ body.modal-open #bottom-nav{display:none !important}
       <input type="checkbox" id="budget-rollover" onchange="toggleRollover()" style="accent-color:var(--ac)"> ↩ Rollover
     </label>
   </div>
-  <!-- Month navigator -->
-  <div style="display:flex;align-items:center;justify-content:center;gap:12px;margin-bottom:20px">
-    <button class="btn bg_ sm" onclick="budgetMonthNav(-1)" style="width:34px;height:34px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:16px">‹</button>
-    <span id="budget-month-lbl" style="font-size:14px;font-weight:600;min-width:150px;text-align:center;text-transform:capitalize"></span>
-    <button class="btn bg_ sm" onclick="budgetMonthNav(1)" style="width:34px;height:34px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:16px">›</button>
-    <button class="btn bg_ sm" onclick="budgetGoToday()" style="font-size:11px;padding:4px 10px;border-radius:20px">Hoy</button>
+  <!-- VISTA: navegador de mes + resumen informativo (o botón de crear si
+       el mes todavía no tiene presupuesto propio) -->
+  <div id="budget-view">
+    <div style="display:flex;align-items:center;justify-content:center;gap:12px;margin-bottom:20px">
+      <button class="btn bg_ sm" onclick="budgetMonthNav(-1)" style="width:34px;height:34px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:16px">‹</button>
+      <span id="budget-month-lbl" style="font-size:14px;font-weight:600;min-width:150px;text-align:center;text-transform:capitalize"></span>
+      <button class="btn bg_ sm" onclick="budgetMonthNav(1)" style="width:34px;height:34px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:16px">›</button>
+      <button class="btn bg_ sm" onclick="budgetGoToday()" style="font-size:11px;padding:4px 10px;border-radius:20px">Hoy</button>
+    </div>
+    <div id="budget-list"></div>
   </div>
-  <div id="budget-list"></div>
-</div>
-
-<!-- EDITAR LÍMITE DE PRESUPUESTO — antes esto se abría como acordeón
-     dentro de la misma lista (mezclando "ver" con "editar" en la misma
-     pantalla); ahora es una ventana aparte, igual que el resto de la app
-     edita cuentas/categorías/etc. -->
-<div class="mo" id="mo-budget-edit">
-  <div class="md">
-    <div class="mh"><span class="mttl" id="bgted-title">Categoría</span><button class="btn bg_ ico sm" onclick="cM('mo-budget-edit')">✕</button></div>
-    <div class="mbody">
-      <div class="fg"><label class="fl">Límite mensual de la categoría</label>
-        <div style="display:flex;gap:8px">
-          <input class="fc" type="number" id="bgted-limit" placeholder="Sin límite" min="0" step="0.01" style="flex:1">
-          <button class="btn bd ico sm" id="bgted-del-btn" style="display:none" title="Quitar límite">✕</button>
-        </div>
-        <div id="bgted-inherit-hint" style="display:none;font-size:11px;color:var(--t3);margin-top:5px">Este número viene de un mes anterior — guárdalo (aunque sea igual) para que quede propio de este mes, sin afectar los demás.</div>
-      </div>
-      <div id="bgted-subs-wrap" style="display:none">
-        <div class="slbl" style="margin:16px 0 8px">Subcategorías</div>
-        <div id="bgted-subs" style="display:flex;flex-direction:column;gap:10px"></div>
+  <!-- CREAR/EDITAR PRESUPUESTO — un solo formulario largo (ingreso, % de
+       ahorro, y el límite de cada categoría y subcategoría), con un solo
+       botón de Guardar al final. Reemplaza el flujo anterior de editar
+       categoría por categoría. -->
+  <div id="budget-wizard" style="display:none">
+    <div style="display:flex;align-items:center;gap:10px;margin-bottom:18px;flex-wrap:wrap">
+      <button class="btn bg_ sm" onclick="closeBudgetWizard()">← Cancelar</button>
+      <div class="pt" id="budget-wizard-title" style="font-size:18px"></div>
+    </div>
+    <div class="ss"><h3>💰 Ingreso y ahorro esperados</h3>
+      <div class="g2">
+        <div class="fg" style="margin-bottom:0"><label class="fl">Ingreso esperado este mes</label><input class="fc" type="number" id="bw-income" min="0" step="0.01" placeholder="0.00"></div>
+        <div class="fg" style="margin-bottom:0"><label class="fl">% de ahorro esperado</label><input class="fc" type="number" id="bw-savings-pct" min="0" max="100" step="1" placeholder="0"></div>
       </div>
     </div>
-    <div class="mfoot"><button class="btn bp sm" style="width:100%" onclick="cM('mo-budget-edit')">Listo</button></div>
+    <div class="slbl" style="margin:20px 0 10px">LÍMITES POR CATEGORÍA</div>
+    <div id="bw-categories" style="display:flex;flex-direction:column;gap:10px;margin-bottom:18px"></div>
+    <button class="btn bp" style="width:100%" onclick="saveBudgetWizard()">Guardar presupuesto</button>
   </div>
 </div>
 
@@ -1949,15 +1947,30 @@ async function pullFromSupabase(){
   if(!sb)return;
   try{
     const tables=['accounts','categories','subcategories','transactions','debts','goals',
-      'subscriptions','budgets','budget_goals','vehicles','vehicle_records','investments','investment_records','custom_sections',
+      'subscriptions','budgets','budget_goals','subcategory_budgets','vehicles','vehicle_records','investments','investment_records','custom_sections',
       'custom_section_members','custom_section_categories','custom_section_records',
       'settings','net_worth_snapshots'];
+    // Tablas OPCIONALES: se agregaron después (metas de presupuesto y
+    // límites de subcategoría). Si todavía no existen en Supabase (aún no
+    // se corre su SQL), NO se aborta toda la sincronización — se avisa en
+    // consola, se dejan los datos locales de esa parte tal cual, y todo
+    // lo demás se sincroniza normal.
+    const OPTIONAL_TABLES=new Set(['budget_goals','subcategory_budgets']);
+    const optionalMissing=new Set();
     const results={};
     for(const t of tables){
       const q=sb.from(t).select('*');
-      if(t!=='settings'&&t!=='net_worth_snapshots'&&t!=='budget_goals')q.is('deleted_at',null);
+      if(t!=='settings'&&t!=='net_worth_snapshots'&&!OPTIONAL_TABLES.has(t))q.is('deleted_at',null);
       const {data,error}=await q;
-      if(error){console.warn(`Supabase: no se pudo leer "${t}":`,error.message);toast('No se pudo sincronizar con la nube — se sigue usando tus datos locales',false);return;}
+      if(error){
+        if(OPTIONAL_TABLES.has(t)){
+          console.warn(`Supabase: la tabla opcional "${t}" todavía no está disponible (${error.message}) — se conservan tus datos locales de esa parte.`);
+          optionalMissing.add(t);
+          results[t]=[];
+          continue;
+        }
+        console.warn(`Supabase: no se pudo leer "${t}":`,error.message);toast('No se pudo sincronizar con la nube — se sigue usando tus datos locales',false);return;
+      }
       results[t]=data||[];
     }
 
@@ -2036,16 +2049,33 @@ async function pullFromSupabase(){
       };
     });
 
-    // --- budgets: ahora local SÍ tiene el concepto de mes (period), igual
-    // que Postgres (period_key) — se traen TODOS los periodos guardados,
-    // no solo uno, para que cada mes conserve su propio límite. ---
+    // --- budgets: cada fila es (categoría, mes) — igual que Postgres
+    // (period_key). Los límites de SUBCATEGORÍA viven en su propia tabla
+    // (subcategory_budgets, porque una subcategoría no tiene id propio
+    // localmente — solo existe como nombre dentro de cat.subs) pero se
+    // guardan aquí mismo en S.budgets, planos, igual que cualquier
+    // categoría — con category = el nombre de la subcategoría, sin campo
+    // "sub": así budgetForPeriod/setBudgetLimit no necesitan distinguir
+    // uno de otro. Si esa tabla opcional todavía no existe en Supabase,
+    // se conservan los límites de subcategoría que ya había localmente en
+    // vez de borrarlos.
     const newBudgets=results.budgets.map(b=>{
       const cat=catById[b.category_id];if(!cat)return null;
       return{id:b.id,category:cat.name,limit:centsToAmt(b.limit_cents),period:b.period_key};
     }).filter(Boolean);
+    if(optionalMissing.has('subcategory_budgets')){
+      S.budgets.filter(b=>getCatParent(b.category)).forEach(b=>newBudgets.push(b));
+    } else {
+      results.subcategory_budgets.forEach(sb2=>{
+        const sub=subcatById[sb2.subcategory_id];if(!sub)return;
+        newBudgets.push({id:sb2.id,category:sub.name,limit:centsToAmt(sb2.limit_cents),period:sb2.period_key});
+      });
+    }
 
     // --- budget_goals: ingreso esperado + % de ahorro esperado, por mes ---
-    const newBudgetGoals=(results.budget_goals||[]).map(g=>({id:g.id,period:g.period_key,expectedIncome:centsToAmt(g.expected_income_cents),savingsPct:g.savings_pct||0}));
+    const newBudgetGoals=optionalMissing.has('budget_goals')
+      ?S.budgetGoals
+      :(results.budget_goals||[]).map(g=>({id:g.id,period:g.period_key,expectedIncome:centsToAmt(g.expected_income_cents),savingsPct:g.savings_pct||0}));
 
     // --- vehicles + records anidados ---
     const newVehicles=results.vehicles.map(v=>({
@@ -3083,27 +3113,50 @@ const Store = {
     if(ex>=0){ S.budgets[ex].limit=limit; }
     else { S.budgets.push({id:uid(),category,limit,period}); }
     save();
-    if(sb&&currentUserId){
-      const cat=S.categories.find(c=>c.name===category);
-      if(cat&&isUUID(cat.id)){
-        sb.from('budgets').upsert({user_id:currentUserId,category_id:cat.id,period_key:period,limit_cents:amtToCents(limit)},{onConflict:'user_id,category_id,period_key'})
-          .then(({error})=>{if(error)console.warn('Supabase: no se pudo sincronizar presupuesto',category,period,error.message)});
-      }
+    if(!sb||!currentUserId)return;
+    const topCat=S.categories.find(c=>c.name===category&&c.type==='expense');
+    if(topCat){
+      if(!isUUID(topCat.id))return;
+      sb.from('budgets').upsert({user_id:currentUserId,category_id:topCat.id,period_key:period,limit_cents:amtToCents(limit)},{onConflict:'user_id,category_id,period_key'})
+        .then(({error})=>{if(error)console.warn('Supabase: no se pudo sincronizar presupuesto',category,period,error.message)});
+      return;
     }
+    // No es una categoría de nivel superior — debe ser una subcategoría.
+    // Una subcategoría no tiene id propio localmente (solo vive como
+    // nombre dentro de cat.subs), así que se usa el mismo mecanismo que
+    // ya usa el resto de la app para este caso (findOrCreateByName), y se
+    // guarda en su propia tabla (subcategory_budgets).
+    const parentName=getCatParent(category);
+    const parentCat=parentName?S.categories.find(c=>c.name===parentName):null;
+    if(!parentCat||!isUUID(parentCat.id))return;
+    findOrCreateByName('subcategories','category_id',parentCat.id,category).then(subId=>{
+      if(!subId)return;
+      sb.from('subcategory_budgets').upsert({user_id:currentUserId,subcategory_id:subId,period_key:period,limit_cents:amtToCents(limit)},{onConflict:'user_id,subcategory_id,period_key'})
+        .then(({error})=>{if(error)console.warn('Supabase: no se pudo sincronizar presupuesto de subcategoría',category,period,error.message)});
+    });
   },
   deleteBudget(id,category,period){
     S.budgets=S.budgets.filter(b=>b.id!==id);
     save();
+    if(!sb||!currentUserId||!category||!period)return;
     // Local no guarda el id real de la fila en la nube de forma
-    // confiable tras un upsert (mismo caso que subcategorías) — se borra
-    // por categoría + periodo, que es justo la llave única de esa tabla.
-    if(sb&&currentUserId&&category&&period){
-      const cat=S.categories.find(c=>c.name===category);
-      if(cat&&isUUID(cat.id)){
-        sb.from('budgets').delete().eq('user_id',currentUserId).eq('category_id',cat.id).eq('period_key',period)
-          .then(({error})=>{if(error)console.warn('Supabase: no se pudo borrar presupuesto',category,period,error.message)});
-      }
+    // confiable tras un upsert — se borra por categoría + periodo, que es
+    // justo la llave única de cada tabla.
+    const topCat=S.categories.find(c=>c.name===category&&c.type==='expense');
+    if(topCat){
+      if(!isUUID(topCat.id))return;
+      sb.from('budgets').delete().eq('user_id',currentUserId).eq('category_id',topCat.id).eq('period_key',period)
+        .then(({error})=>{if(error)console.warn('Supabase: no se pudo borrar presupuesto',category,period,error.message)});
+      return;
     }
+    const parentName=getCatParent(category);
+    const parentCat=parentName?S.categories.find(c=>c.name===parentName):null;
+    if(!parentCat||!isUUID(parentCat.id))return;
+    findOrCreateByName('subcategories','category_id',parentCat.id,category).then(subId=>{
+      if(!subId)return;
+      sb.from('subcategory_budgets').delete().eq('user_id',currentUserId).eq('subcategory_id',subId).eq('period_key',period)
+        .then(({error})=>{if(error)console.warn('Supabase: no se pudo borrar presupuesto de subcategoría',category,period,error.message)});
+    });
   },
 
   // ---------------- BUDGET GOALS (ingreso esperado + % de ahorro) ----------------
@@ -5721,10 +5774,7 @@ function saveBudget(){
 }
 // Budget month navigation
 let _budgetOffset=0;
-let _budgetEditCat=null;
 let _budgetEditPeriod=null;
-let _budgetBulkEdit=false;
-function toggleBudgetBulkEdit(){_budgetBulkEdit=!_budgetBulkEdit;renderBudget()}
 function budgetMonthNav(d){_budgetOffset+=d;renderBudget()}
 function budgetGoToday(){_budgetOffset=0;renderBudget()}
 function toggleRollover(){S.budgetRollover=$('budget-rollover').checked;save();renderBudget()}
@@ -5761,13 +5811,19 @@ function renderBudget(){
   const expCats=S.categories.filter(c=>c.type==='expense');
   if(!expCats.length){el.innerHTML=emptyState('📊','Sin categorías de gasto','Crea al menos una categoría de gasto en Ajustes → Categorías para poder definir presupuestos.','Ir a Categorías',"go('settings');cfgTab('categorias',document.querySelector('#cfg-tabs button[onclick*=categorias]'))");return}
 
-  // ---- Rediseño estilo MoneyCoach (v2) ----
-  // La v1 mezclaba "ver" con "editar" en la misma lista — cada categoría
-  // era un acordeón que se abría ahí mismo con un input adentro. Se veía
-  // recargado y no era obvio que había que darle clic para editar. Ahora
-  // la lista es solo de lectura (ícono, barra, monto) y tocar CUALQUIER
-  // categoría abre una ventana aparte para poner/quitar su límite — el
-  // mismo patrón que ya usa el resto de la app para editar cualquier cosa.
+  // ---- Rediseño estilo MoneyCoach (v3) ----
+  // Ahora cada mes empieza SIN presupuesto propio — se ve un botón para
+  // "Crear presupuesto de [mes]" en vez de la lista. Crear (o Editar) abre
+  // un solo formulario largo (ingreso, % de ahorro, y el límite de cada
+  // categoría/subcategoría) con un solo botón de Guardar al final — ya no
+  // se edita categoría por categoría. Una vez guardado, esta vista vuelve
+  // a ser de solo lectura.
+  const hasOwnBudget=!!Store.getBudgetGoal(period)||S.budgets.some(b=>b.period===period);
+  if(!hasOwnBudget){
+    el.innerHTML=emptyState('📅','Sin presupuesto para '+target.toLocaleDateString('es-MX',{month:'long',year:'numeric'}),'Ponle un ingreso esperado, una meta de ahorro y límites a tus categorías.','Crear presupuesto',"openBudgetWizard()");
+    return;
+  }
+
   const BUDGET_PALETTE=['#30d693','#4e9eff','#a855f7','#ffb340','#fb923c','#f472b6','#34d399','#818cf8','#facc15','#22d3ee'];
 
   const catStats=expCats.map((cat,i)=>{
@@ -5825,36 +5881,28 @@ function renderBudget(){
     overBudgetCats>0?`${overBudgetCats} excedida${overBudgetCats===1?'':'s'}`:''
   ].filter(Boolean).join(' · '):'';
 
-  // ---- Ingreso esperado + % de ahorro esperado (por mes) ----
-  // Si este mes no tiene su propia meta guardada, se prellena con el
-  // promedio de ingresos reales de los últimos 3 meses — mismo criterio
-  // que ya usa la Proyección de flujo de caja en Análisis, para que los
-  // dos números no se contradigan entre sí.
   const goal=Store.getBudgetGoal(period);
-  let prefillIncome=0;
-  if(!goal){
-    const last3=[0,1,2].map(i=>{const d=new Date(now.getFullYear(),now.getMonth()-i,1);return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')});
-    const incByMonth=last3.map(m=>S.transactions.filter(t=>t.type==='income'&&t.date.startsWith(m)).reduce((a,t)=>a+M(t.amount),0));
-    const monthsWithData=incByMonth.filter(v=>v>0).length;
-    prefillIncome=monthsWithData?M(incByMonth.reduce((a,v)=>a+v,0)/monthsWithData):0;
-  }
-  const expectedIncome=goal?goal.expectedIncome:prefillIncome;
+  const expectedIncome=goal?goal.expectedIncome:0;
   const savingsPct=goal?goal.savingsPct:0;
   const savingsGoalAmt=M(expectedIncome*(savingsPct||0)/100);
   const zeroBasedLeft=M(expectedIncome-allLimited-savingsGoalAmt);
 
-  let html=`
-  <div style="background:var(--bg3);border:1px solid var(--bdr);border-radius:16px;padding:16px;margin-bottom:14px">
-    <div class="slbl" style="margin-bottom:10px">💰 Ingreso esperado y meta de ahorro</div>
-    <div class="g2" style="margin-bottom:10px">
-      <div class="fg" style="margin-bottom:0"><label class="fl">Ingreso esperado este mes</label><input class="fc" type="number" min="0" step="0.01" value="${expectedIncome||''}" placeholder="0.00" onchange="saveBudgetGoal('${period}',this.value,null)"></div>
-      <div class="fg" style="margin-bottom:0"><label class="fl">% de ahorro esperado</label><input class="fc" type="number" min="0" max="100" step="1" value="${savingsPct||''}" placeholder="0" onchange="saveBudgetGoal('${period}',null,this.value)"></div>
-    </div>
-    ${expectedIncome>0?`<div style="display:flex;justify-content:space-between;flex-wrap:wrap;gap:6px;font-size:12px;padding-top:10px;border-top:1px solid var(--bdr)">
-      <span style="color:var(--t3)">Meta de ahorro: <strong style="color:var(--txt);font-family:'DM Mono',monospace">${fmt(savingsGoalAmt)}</strong></span>
-      <span style="color:var(--t3)">Después de gastos + ahorro: <strong style="font-family:'DM Mono',monospace;color:${zeroBasedLeft>=0?'var(--inc)':'var(--exp)'}">${zeroBasedLeft>=0?'':'-'}${fmt(Math.abs(zeroBasedLeft))}</strong></span>
-    </div>`:''}
-  </div>
+  let html=`<div style="display:flex;justify-content:flex-end;margin-bottom:12px">
+    <button class="btn bg_ sm" onclick="openBudgetWizard()">✎ Editar presupuesto</button>
+  </div>`;
+
+  if(expectedIncome>0||savingsPct>0){
+    html+=`<div style="background:var(--bg3);border:1px solid var(--bdr);border-radius:16px;padding:16px;margin-bottom:14px">
+      <div class="slbl" style="margin-bottom:10px">💰 Ingreso esperado y meta de ahorro</div>
+      <div style="display:flex;justify-content:space-between;flex-wrap:wrap;gap:10px">
+        <div><div style="font-size:11px;color:var(--t3)">Ingreso esperado</div><div style="font-family:'DM Mono',monospace;font-size:18px;color:var(--inc)">${fmt(expectedIncome)}</div></div>
+        <div><div style="font-size:11px;color:var(--t3)">Meta de ahorro (${savingsPct}%)</div><div style="font-family:'DM Mono',monospace;font-size:18px">${fmt(savingsGoalAmt)}</div></div>
+        <div style="text-align:right"><div style="font-size:11px;color:var(--t3)">Después de gastos + ahorro</div><div style="font-family:'DM Mono',monospace;font-size:18px;color:${zeroBasedLeft>=0?'var(--inc)':'var(--exp)'}">${zeroBasedLeft>=0?'':'-'}${fmt(Math.abs(zeroBasedLeft))}</div></div>
+      </div>
+    </div>`;
+  }
+
+  html+=`
   <div style="background:var(--bg3);border:1px solid var(--bdr);border-radius:20px;padding:22px;margin-bottom:18px">
     <div style="display:flex;align-items:center;gap:22px;flex-wrap:wrap">
       <div style="flex-shrink:0;position:relative;width:128px;height:128px">
@@ -5871,7 +5919,7 @@ function renderBudget(){
         <div style="font-size:11px;color:var(--t3);text-transform:uppercase;letter-spacing:.6px;margin-bottom:3px">Gastado este mes</div>
         <div style="font-family:'DM Mono',monospace;font-size:26px;font-weight:700;color:${allSpent>allLimited&&allLimited>0?'var(--exp)':'var(--txt)'};margin-bottom:4px">${fmt(allSpent)}</div>
         <div style="font-size:13px;color:var(--t2)">
-          ${allLimited>0?`de ${fmt(allLimited)} · ${statusLine}`:'Sin límite global — toca "Editar todos" abajo para ponerle límite a tus categorías'}
+          ${allLimited>0?`de ${fmt(allLimited)} · ${statusLine}`:'Sin límite en tus categorías'}
         </div>
         ${catStatusLine?`<div style="font-size:11px;color:var(--t3);margin-top:4px">${catStatusLine}</div>`:''}
       </div>
@@ -5883,32 +5931,15 @@ function renderBudget(){
       <span style="font-size:11px;color:var(--t3)">Gasto total incluyendo sin límite</span>
       <span style="font-family:'DM Mono',monospace;font-size:13px;color:var(--exp)">${fmt(totalUnlimitedSpend)}</span>
     </div>`:''}
-  </div>`;
-
-  // Aviso: categorías de gasto que todavía no tienen ningún límite
-  // puesto (ni propio de este mes, ni heredado) — para notar de un
-  // vistazo que falta presupuestar algo, sin revisar categoría por
-  // categoría.
-  const noBudgetCats=catStats.filter(cs=>!cs.catBgt);
-  if(noBudgetCats.length){
-    html+=`<div style="display:flex;align-items:center;gap:10px;background:rgba(255,179,64,.08);border:1px solid rgba(255,179,64,.25);border-radius:12px;padding:10px 14px;margin-bottom:14px">
-      <span style="font-size:16px">💡</span>
-      <span style="font-size:12px;color:var(--t2);flex:1">${noBudgetCats.length} categoría${noBudgetCats.length===1?'':'s'} sin límite todavía: <strong>${noBudgetCats.map(cs=>esc(cs.cat.name)).join(', ')}</strong></span>
-    </div>`;
-  }
-
-  html+=`<div style="display:flex;justify-content:flex-end;margin-bottom:10px">
-    <button class="btn bg_ sm" onclick="toggleBudgetBulkEdit()">${_budgetBulkEdit?'✓ Listo':'✎ Editar todos'}</button>
   </div>
   <div style="display:flex;flex-direction:column;gap:8px">`;
 
-  catStats.forEach(({cat,subs,catSpent,catLimit,catBgt,rolloverNote,catP,catOver})=>{
+  catStats.forEach(({cat,subs,catSpent,catLimit,rolloverNote,catP,catOver})=>{
     const catPct=catP.toFixed(0);
     const catWarn=!catOver&&catP>70;
     const barColor=catOver?'var(--redg)':catP>70?'var(--yelg)':'var(--acg)';
     const statusColor=catOver?'var(--exp)':catP>70?'var(--yel)':'var(--ac)';
     const hasSubs=subs.length>0;
-    const inheritedNote=catBgt&&catBgt.inherited?`<span style="font-size:10px;color:var(--t3);background:var(--bg4);padding:1px 6px;border-radius:10px;white-space:nowrap" title="Heredado de un mes anterior — se vuelve propio de este mes en cuanto lo guardes">↳ heredado</span>`:'';
 
     html+=`<div style="background:var(--bg3);border-radius:14px;padding:14px 16px">
       <div style="display:flex;align-items:center;gap:12px">
@@ -5917,7 +5948,7 @@ function renderBudget(){
           <div style="display:flex;justify-content:space-between;align-items:baseline;gap:8px;margin-bottom:6px">
             <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;min-width:0">
               <span style="font-size:14px;font-weight:600;color:var(--txt);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${cat.name}</span>
-              ${rolloverNote}${inheritedNote}
+              ${rolloverNote}
               ${hasSubs?`<span style="font-size:10px;color:var(--t3);background:var(--bg4);padding:1px 6px;border-radius:10px;white-space:nowrap">${subs.length} sub</span>`:''}
             </div>
             <span style="font-family:'DM Mono',monospace;font-size:12px;flex-shrink:0;color:${catOver?'var(--exp)':catWarn?'var(--yel)':'var(--t2)'};font-weight:${catOver?'600':'400'}">${fmt(catSpent)}${catLimit>0?`<span style="color:var(--t3)"> / ${fmt(catLimit)}</span>`:''}</span>
@@ -5926,9 +5957,6 @@ function renderBudget(){
             ${catLimit>0?`<div style="position:absolute;left:0;top:0;height:100%;width:${catPct}%;background:${barColor};border-radius:4px;transition:width .5s cubic-bezier(.4,0,.2,1)"></div>`:''}
           </div>
         </div>
-        ${_budgetBulkEdit
-          ?`<input type="number" placeholder="Sin límite" value="${catBgt?catBgt.limit:''}" data-had-limit="${catBgt&&!catBgt.inherited?'1':'0'}" data-inherited="${catBgt&&catBgt.inherited?'1':'0'}" min="0" step="0.01" style="width:100px;flex-shrink:0;padding:8px 10px;border-radius:8px;border:1px solid var(--bdr2);background:var(--bg4);color:var(--txt);font-size:13px;font-family:'DM Mono',monospace" onchange="setBudgetLimit('${esc(cat.name)}',this.value,this,'${period}')">`
-          :`<button class="btn bg_ ico sm" style="flex-shrink:0" title="Más opciones" onclick="showRowMenu(this,[{label:'Editar límite',icon:'✎',onClick:()=>openBudgetEditM('${esc(cat.name)}')}])">⋮</button>`}
       </div>
     </div>`;
   });
@@ -5936,67 +5964,83 @@ function renderBudget(){
   html+='</div>';
   el.innerHTML=html;
 }
-function saveBudgetGoal(period,incomeVal,pctVal){
-  const existing=Store.getBudgetGoal(period);
-  const income=incomeVal!==null?(M(incomeVal)||0):(existing?existing.expectedIncome:0);
-  const pct=pctVal!==null?(Math.max(0,Math.min(100,M(pctVal)||0))):(existing?existing.savingsPct:0);
-  Store.upsertBudgetGoal(period,income,pct);
-  renderBudget();
-}
 
-// Abre la ventana de edición de límite para UNA categoría — reemplaza el
-// acordeón inline que había antes. _budgetEditCat recuerda cuál está
-// abierta para poder refrescar sus campos sin cerrarla (ver
-// setBudgetLimitFromModal/delBudgetFromModal). Siempre edita el MES QUE
-// SE ESTÁ VIENDO (respeta _budgetOffset), no necesariamente el actual.
-function openBudgetEditM(catName){
-  const cat=S.categories.find(c=>c.name===catName&&c.type==='expense');if(!cat)return;
+// ==================== ASISTENTE DE PRESUPUESTO ====================
+// Reemplaza el flujo anterior de editar categoría por categoría: un solo
+// formulario largo (ingreso esperado, % de ahorro, límite de cada
+// categoría y subcategoría) con un único botón de Guardar al final.
+// Sirve tanto para CREAR el presupuesto del mes como para EDITARLO — la
+// única diferencia es qué tan prellenados vienen los campos.
+function openBudgetWizard(){
   const now=new Date();
   const target=new Date(now.getFullYear(),now.getMonth()+_budgetOffset,1);
   const period=`${target.getFullYear()}-${String(target.getMonth()+1).padStart(2,'0')}`;
-  _budgetEditCat=catName;
   _budgetEditPeriod=period;
-  $('bgted-title').textContent=cat.icon+' '+cat.name+' — '+target.toLocaleDateString('es-MX',{month:'long',year:'numeric'});
-  const bgt=budgetForPeriod(catName,period);
-  const limitInput=$('bgted-limit');
-  limitInput.value=bgt?bgt.limit:'';
-  limitInput.dataset.hadLimit=bgt&&!bgt.inherited?'1':'0';
-  limitInput.dataset.inherited=bgt&&bgt.inherited?'1':'0';
-  limitInput.setAttribute('onchange',`setBudgetLimitFromModal('${esc(catName)}',this.value,this)`);
-  const hint=$('bgted-inherit-hint');
-  if(hint)hint.style.display=bgt&&bgt.inherited?'block':'none';
-  const delBtn=$('bgted-del-btn');
-  delBtn.style.display=(bgt&&!bgt.inherited)?'flex':'none';
-  if(bgt&&!bgt.inherited)delBtn.setAttribute('onclick',`delBudgetFromModal('${bgt.id}')`);
-  const subs=cat.subs||[];
-  $('bgted-subs-wrap').style.display=subs.length?'block':'none';
-  $('bgted-subs').innerHTML=subs.map(sub=>{
-    const subBgt=budgetForPeriod(sub,period);
-    return`<div class="fg" style="margin-bottom:0"><label class="fl">↳ ${esc(sub)}${subBgt&&subBgt.inherited?' <span style="color:var(--t3);font-weight:400">(heredado)</span>':''}</label><div style="display:flex;gap:8px">
-      <input class="fc" type="number" placeholder="Sin límite" value="${subBgt?subBgt.limit:''}" min="0" step="0.01" data-had-limit="${subBgt&&!subBgt.inherited?'1':'0'}" data-inherited="${subBgt&&subBgt.inherited?'1':'0'}" style="flex:1" onchange="setBudgetLimitFromModal('${esc(sub)}',this.value,this)">
-      ${subBgt&&!subBgt.inherited?`<button class="btn bd ico sm" onclick="delBudgetFromModal('${subBgt.id}')" title="Quitar límite">✕</button>`:''}
-    </div></div>`;
+  const monthLabel=target.toLocaleDateString('es-MX',{month:'long',year:'numeric'});
+  $('budget-wizard-title').textContent='Presupuesto de '+monthLabel;
+
+  const goal=Store.getBudgetGoal(period);
+  let prefillIncome=0;
+  if(!goal){
+    // Mismo criterio que ya usa la Proyección de flujo de caja en
+    // Análisis, para que los números no se contradigan entre sí.
+    const last3=[0,1,2].map(i=>{const d=new Date(now.getFullYear(),now.getMonth()-i,1);return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')});
+    const incByMonth=last3.map(m=>S.transactions.filter(t=>t.type==='income'&&t.date.startsWith(m)).reduce((a,t)=>a+M(t.amount),0));
+    const monthsWithData=incByMonth.filter(v=>v>0).length;
+    prefillIncome=monthsWithData?M(incByMonth.reduce((a,v)=>a+v,0)/monthsWithData):0;
+  }
+  $('bw-income').value=goal?(goal.expectedIncome||''):(prefillIncome||'');
+  $('bw-savings-pct').value=goal?(goal.savingsPct||''):'';
+
+  const expCats=S.categories.filter(c=>c.type==='expense');
+  $('bw-categories').innerHTML=expCats.map(cat=>{
+    const bgt=budgetForPeriod(cat.name,period);
+    const subs=cat.subs||[];
+    const subsHtml=subs.map(sub=>{
+      const sBgt=budgetForPeriod(sub,period);
+      return`<div class="fg" style="margin-bottom:0;margin-top:8px"><label class="fl">↳ ${esc(sub)}${sBgt&&sBgt.inherited?' <span style="color:var(--t3);font-weight:400">(heredado)</span>':''}</label><input class="fc" type="number" min="0" step="0.01" placeholder="Sin límite" value="${sBgt?sBgt.limit:''}" data-cat="${esc(sub)}" data-had-limit="${sBgt&&!sBgt.inherited?'1':'0'}" data-inherited="${sBgt&&sBgt.inherited?'1':'0'}"></div>`;
+    }).join('');
+    return`<div style="background:var(--bg3);border-radius:12px;padding:14px">
+      <div class="fg" style="margin-bottom:0"><label class="fl">${cat.icon} ${esc(cat.name)}${bgt&&bgt.inherited?' <span style="color:var(--t3);font-weight:400">(heredado)</span>':''}</label><input class="fc" type="number" min="0" step="0.01" placeholder="Sin límite" value="${bgt?bgt.limit:''}" data-cat="${esc(cat.name)}" data-had-limit="${bgt&&!bgt.inherited?'1':'0'}" data-inherited="${bgt&&bgt.inherited?'1':'0'}"></div>
+      ${subsHtml}
+    </div>`;
   }).join('');
-  oM('mo-budget-edit');
+
+  $('budget-view').style.display='none';
+  $('budget-wizard').style.display='block';
 }
-function setBudgetLimitFromModal(catName,val,inputEl){
-  setBudgetLimit(catName,val,inputEl,_budgetEditPeriod);
-  if(_budgetEditCat)openBudgetEditM(_budgetEditCat);
+function closeBudgetWizard(){
+  $('budget-wizard').style.display='none';
+  $('budget-view').style.display='block';
 }
-async function delBudgetFromModal(id){
-  const catName=_budgetEditCat,period=_budgetEditPeriod;
-  await delBudget(id,catName,period);
-  if(_budgetEditCat)openBudgetEditM(_budgetEditCat);
+function saveBudgetWizard(){
+  const period=_budgetEditPeriod;
+  saveBudgetGoal(period,$('bw-income').value,$('bw-savings-pct').value,true);
+  document.querySelectorAll('#bw-categories input[data-cat]').forEach(inp=>{
+    setBudgetLimit(inp.dataset.cat,inp.value,inp,period,true);
+  });
+  closeBudgetWizard();
+  renderBudget();
+  toast('Presupuesto guardado');
 }
-// catName/val/inputEl/period — period es el mes que se está editando
-// (respeta el mes que se esté viendo, no siempre "ahora"). inputEl trae
+function saveBudgetGoal(period,incomeVal,pctVal,skipRender){
+  const existing=Store.getBudgetGoal(period);
+  const income=incomeVal!==null&&incomeVal!==undefined?(M(incomeVal)||0):(existing?existing.expectedIncome:0);
+  const pct=pctVal!==null&&pctVal!==undefined?(Math.max(0,Math.min(100,M(pctVal)||0))):(existing?existing.savingsPct:0);
+  Store.upsertBudgetGoal(period,income,pct);
+  if(!skipRender)renderBudget();
+}
+// catName/val/inputEl/period/skipRender — period es el mes que se está
+// editando (respeta el mes que se esté viendo). inputEl trae
 // data-had-limit (¿esta categoría ya tenía SU PROPIO límite en ESTE mes?)
 // y data-inherited (¿lo que se mostraba era heredado de un mes
-// anterior?) para decidir qué hacer al vaciar el campo: si había un
+// anterior?) para decidir qué hacer al dejar el campo vacío: si había un
 // límite propio de este mes, se borra; si solo se estaba mostrando un
 // valor heredado, se guarda un 0 explícito para ESTE mes (así no vuelve
-// a heredar), sin tocar el mes del que venía.
-function setBudgetLimit(catName,val,inputEl,period){
+// a heredar), sin tocar el mes del que venía. skipRender evita volver a
+// dibujar la lista en cada campo mientras el asistente guarda varios de
+// golpe (ver saveBudgetWizard) — se dibuja una sola vez al final.
+function setBudgetLimit(catName,val,inputEl,period,skipRender){
   const lim=M(val)||0;
   const hadOwn=inputEl?inputEl.dataset.hadLimit==='1':false;
   const wasInherited=inputEl?inputEl.dataset.inherited==='1':false;
@@ -6004,21 +6048,15 @@ function setBudgetLimit(catName,val,inputEl,period){
     if(hadOwn){
       const own=S.budgets.find(b=>b.category===catName&&b.period===period);
       if(own)Store.deleteBudget(own.id,catName,period);
-      renderBudget();
     } else if(wasInherited){
-      // Corta la herencia para este mes en particular sin tocar meses
-      // anteriores: guarda un límite explícito de $0 = "sin presupuesto
-      // este mes" para esta categoría.
       Store.upsertBudget(catName,0,period);
-      renderBudget();
     }
+    if(!skipRender)renderBudget();
     return;
   }
   Store.upsertBudget(catName,lim,period);
-  renderBudget();
-  if(hadOwn)toast('Límite guardado');
+  if(!skipRender)renderBudget();
 }
-async function delBudget(id,category,period){const ok=await confirm_('¿Quitar límite?','');if(!ok)return;Store.deleteBudget(id,category,period);renderBudget();toast('Límite eliminado')}
 
 // ==================== SUBSCRIPTIONS ====================
 function openSubM(editId=null){
