@@ -2658,9 +2658,32 @@ function sparklineSVG(vals,color,w=180,h=56){
 // botón "Guardar". Ahora se oculta mientras haya al menos un modal
 // abierto (contador, por si hay un modal de confirmación sobre otro
 // modal) y vuelve a aparecer cuando se cierran todos.
+// BUG REAL ENCONTRADO (el que reportaste — el menú inferior desaparece y
+// ya no deja navegar): oM()/cM() sumaban y restaban _openModalCount cada
+// vez que se llamaban, sin fijarse si el modal YA estaba abierto. En
+// celular, tocar dos veces seguido un botón que abre un modal (muy común
+// por el "delay" táctil) sumaba 2 pero al cerrar solo restaba 1 — el
+// contador se quedaba atorado en 1 para siempre, y el menú inferior
+// (que se esconde mientras _openModalCount>0) nunca volvía a aparecer.
+// Ahora solo cuenta una vez por modal, sin importar cuántas veces se
+// llame oM()/cM() seguidas para el mismo id.
 let _openModalCount=0;
-const oM=id=>{$(id).classList.add('op');_openModalCount++;document.body.classList.add('modal-open')};
-const cM=id=>{$(id).classList.remove('op');_openModalCount=Math.max(0,_openModalCount-1);if(_openModalCount===0)document.body.classList.remove('modal-open')};
+const oM=id=>{
+  const el=$(id);
+  if(!el.classList.contains('op')){
+    el.classList.add('op');
+    _openModalCount++;
+    document.body.classList.add('modal-open');
+  }
+};
+const cM=id=>{
+  const el=$(id);
+  if(el.classList.contains('op')){
+    el.classList.remove('op');
+    _openModalCount=Math.max(0,_openModalCount-1);
+    if(_openModalCount===0)document.body.classList.remove('modal-open');
+  }
+};
 
 // ==================== STATE ====================
 // Mismo esqueleto que el estado default de más abajo, pero SIN las
@@ -3614,11 +3637,20 @@ function reverseBalance(tx){ return Store.reverseBalance(tx); }
 let _confirmCb=null;
 function confirm_(title,msg,btnLabel='Eliminar'){
   return new Promise(res=>{
+    // Mismo bug que oM/cM: si confirm_() se llama dos veces seguidas
+    // (doble toque en un botón de "Eliminar", por ejemplo) antes de que
+    // se responda la primera, ya no se vuelve a sumar al contador — se
+    // cancela la pregunta anterior y se muestra la nueva, sin desincronizar
+    // el contador que controla si el menú inferior se ve o no.
+    if(_confirmCb){
+      const prevCb=_confirmCb;_confirmCb=null;prevCb(false);
+    } else {
+      _openModalCount++;document.body.classList.add('modal-open');
+    }
     _confirmCb=res;
     $('confirm-title').textContent=title;
     $('confirm-msg').textContent=msg;
     $('confirm-ok-btn').textContent=btnLabel;
-    _openModalCount++;document.body.classList.add('modal-open');
     $('confirm-overlay').classList.add('op');
   });
 }
@@ -3672,6 +3704,14 @@ function toast(msg,ok=true){const t=$('toast');$('t-ic').textContent=ok?'✓':'�
 
 // ==================== NAVIGATION ====================
 function go(page){
+  // Revisión de seguridad: si por lo que sea el contador de modales
+  // quedó desincronizado (ej. algún otro flujo que no pasó por oM/cM),
+  // esto lo autocorrige en cada cambio de página comparando contra la
+  // realidad del DOM — así el menú inferior nunca se queda escondido
+  // para siempre, incluso si algo se nos escapó.
+  if(_openModalCount>0&&!document.querySelector('.mo.op,.confirm-overlay.op')){
+    _openModalCount=0;document.body.classList.remove('modal-open');
+  }
   document.querySelectorAll('.page').forEach(p=>p.classList.remove('on'));
   document.querySelectorAll('.ni').forEach(n=>n.classList.remove('on'));
   document.querySelectorAll('.bn-item').forEach(n=>n.classList.remove('on'));
