@@ -1892,6 +1892,28 @@ function dateLocal(iso){
   const[y,m,d]=parts.map(Number);
   return new Date(y,m-1,d);
 }
+// Suma n meses (puede ser negativo) SIN desbordar: si el día no existe en el
+// mes destino, se queda en el último día de ese mes. BUG REAL: con
+// setMonth() directo, 31-ene + 1 mes = 3-mar (salta febrero), y "hace 3
+// meses" desde el 31 caía en otro mes. Conserva la hora del día.
+function addMonthsLocal(d,n){
+  const r=new Date(d.getFullYear(),d.getMonth()+n,1,d.getHours(),d.getMinutes(),d.getSeconds());
+  const last=new Date(r.getFullYear(),r.getMonth()+1,0).getDate();
+  r.setDate(Math.min(d.getDate(),last));
+  return r;
+}
+function monthsAgo(n){return addMonthsLocal(new Date(),-n)}
+// "AAAA-MM-DD" con los componentes LOCALES de un Date (nunca toISOString,
+// que convierte a UTC y de 6pm a medianoche en México da el día siguiente).
+function ymdLocal(d){return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0')}
+// Días de calendario que faltan para una fecha "AAAA-MM-DD" (0 = hoy,
+// negativo = ya pasó). Compara medianoche local contra medianoche local;
+// Math.round absorbe cambios de horario de verano en otros países.
+function daysUntil(iso){
+  if(!iso)return null;
+  const t=dateLocal(iso),n=new Date();
+  return Math.round((t-new Date(n.getFullYear(),n.getMonth(),n.getDate()))/864e5);
+}
 function fmtTime(hms){
   if(!hms)return '';
   const parts=hms.split(':');
@@ -5441,8 +5463,8 @@ function setPeriod(p,el){anPeriod=p;document.querySelectorAll('.p2b').forEach(b=
 function daysElapsedInPeriod(){
   const now=new Date();
   if(anPeriod==='month')return now.getDate();
-  if(anPeriod==='3m'){const c=new Date();c.setMonth(c.getMonth()-3);return Math.max(1,Math.round((now-c)/864e5))}
-  if(anPeriod==='6m'){const c=new Date();c.setMonth(c.getMonth()-6);return Math.max(1,Math.round((now-c)/864e5))}
+  if(anPeriod==='3m'){const c=monthsAgo(3);return Math.max(1,Math.round((now-c)/864e5))}
+  if(anPeriod==='6m'){const c=monthsAgo(6);return Math.max(1,Math.round((now-c)/864e5))}
   if(anPeriod==='year'){const start=new Date(now.getFullYear(),0,1);return Math.max(1,Math.round((now-start)/864e5)+1)}
   // 'all': desde la transacción más vieja hasta hoy
   if(!S.transactions.length)return 0;
@@ -5453,8 +5475,8 @@ function daysElapsedInPeriod(){
 function getPeriodTxs(){
   const now=new Date();const all=S.transactions;
   if(anPeriod==='month'){const m=now.getMonth(),y=now.getFullYear();return all.filter(t=>{const d=dateLocal(t.date);return d.getMonth()===m&&d.getFullYear()===y})}
-  if(anPeriod==='3m'){const c=new Date();c.setMonth(c.getMonth()-3);return all.filter(t=>dateLocal(t.date)>=c)}
-  if(anPeriod==='6m'){const c=new Date();c.setMonth(c.getMonth()-6);return all.filter(t=>dateLocal(t.date)>=c)}
+  if(anPeriod==='3m'){const c=monthsAgo(3);return all.filter(t=>dateLocal(t.date)>=c)}
+  if(anPeriod==='6m'){const c=monthsAgo(6);return all.filter(t=>dateLocal(t.date)>=c)}
   if(anPeriod==='year')return all.filter(t=>dateLocal(t.date).getFullYear()===now.getFullYear());
   return all;
 }
@@ -5470,13 +5492,13 @@ function getPreviousPeriodTxs(){
     return all.filter(t=>{const dt=dateLocal(t.date);return dt.getMonth()===d.getMonth()&&dt.getFullYear()===d.getFullYear()});
   }
   if(anPeriod==='3m'){
-    const end=new Date();end.setMonth(end.getMonth()-3);
-    const start=new Date();start.setMonth(start.getMonth()-6);
+    const end=monthsAgo(3);
+    const start=monthsAgo(6);
     return all.filter(t=>{const dt=dateLocal(t.date);return dt>=start&&dt<end});
   }
   if(anPeriod==='6m'){
-    const end=new Date();end.setMonth(end.getMonth()-6);
-    const start=new Date();start.setMonth(start.getMonth()-12);
+    const end=monthsAgo(6);
+    const start=monthsAgo(12);
     return all.filter(t=>{const dt=dateLocal(t.date);return dt>=start&&dt<end});
   }
   if(anPeriod==='year')return all.filter(t=>dateLocal(t.date).getFullYear()===now.getFullYear()-1);
@@ -5540,14 +5562,14 @@ function renderAnalysis(){
   let months,labels;
   if(anPeriod==='month'||anPeriod==='3m'||anPeriod==='6m'){
     const n=anPeriod==='month'?1:anPeriod==='3m'?3:6;
-    months=[];for(let i=n-1;i>=0;i--){const x=new Date();x.setMonth(x.getMonth()-i);months.push(x.getFullYear()+'-'+String(x.getMonth()+1).padStart(2,'0'))};
-    labels=months.map(m=>{const d=new Date(m+'-01');return d.toLocaleDateString('es-MX',{month:'short',year:'2-digit'})});
+    months=[];for(let i=n-1;i>=0;i--){const x=monthsAgo(i);months.push(x.getFullYear()+'-'+String(x.getMonth()+1).padStart(2,'0'))};
+    labels=months.map(m=>{const d=dateLocal(m+'-01');return d.toLocaleDateString('es-MX',{month:'short',year:'2-digit'})});
   } else if(anPeriod==='year'){
     months=[];for(let i=0;i<12;i++){months.push(new Date().getFullYear()+'-'+String(i+1).padStart(2,'0'))};
     labels=['Ene','Feb','Mar','Abr','May','Jun','Jul','Ago','Sep','Oct','Nov','Dic'];
   } else {
     months=getLast6Months();
-    labels=months.map(m=>{const d=new Date(m+'-01');return d.toLocaleDateString('es-MX',{month:'short',year:'2-digit'})});
+    labels=months.map(m=>{const d=dateLocal(m+'-01');return d.toLocaleDateString('es-MX',{month:'short',year:'2-digit'})});
   }
   const incM=months.map(m=>S.transactions.filter(t=>t.type==='income'&&t.date.startsWith(m)).reduce((a,t)=>a+M(t.amount),0));
   const expM=months.map(m=>S.transactions.filter(t=>t.type==='expense'&&t.date.startsWith(m)).reduce((a,t)=>a+M(t.amount),0));
@@ -5578,7 +5600,7 @@ function renderAnalysis(){
   if(ch4)ch4.destroy();
   const nwHist=[...(S.nwHistory||[])].sort((a,b)=>a.k.localeCompare(b.k));
   if(nwHist.length>=2){
-    const nwLabels=nwHist.map(h=>{const d=new Date(h.k+'-01');return d.toLocaleDateString('es-MX',{month:'short',year:'2-digit'})});
+    const nwLabels=nwHist.map(h=>{const d=dateLocal(h.k+'-01');return d.toLocaleDateString('es-MX',{month:'short',year:'2-digit'})});
     const nwVals=nwHist.map(h=>h.nw);
     ch4=new Chart($('ch-nw-report'),{type:'line',data:{labels:nwLabels,datasets:[{label:'Patrimonio neto',data:nwVals,borderColor:'#60a5fa',backgroundColor:'rgba(96,165,250,0.08)',fill:true,tension:0.35,pointRadius:4,pointBackgroundColor:'#60a5fa'}]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false}},scales:{x:{grid:{color:gridC}},y:{grid:{color:gridC},ticks:{callback:v=>fmt(v)}}}}});
   } else {
@@ -5691,7 +5713,7 @@ function renderAnalysisVehiclesInvestments(){
   const vehicles=Store.getVehicles();
   const allVRecs=vehicles.flatMap(v=>(v.records||[]).map(r=>({...r,vName:v.name})));
   const months=getLast6Months();
-  const monthLabels=months.map(m=>{const d=new Date(m+'-01');return d.toLocaleDateString('es-MX',{month:'short'})});
+  const monthLabels=months.map(m=>{const d=dateLocal(m+'-01');return d.toLocaleDateString('es-MX',{month:'short'})});
   const monthVals=months.map(m=>allVRecs.filter(r=>r.dt&&r.dt.startsWith(m)).reduce((a,r)=>a+M(r.cost||0),0));
   const lifetimeTotal=allVRecs.reduce((a,r)=>a+M(r.cost||0),0);
   cards.push(`<div class="card"><div class="slbl" style="margin-bottom:10px">🚗 Vehículos${vehicles.length>1?` (${vehicles.length})`:''}</div>
@@ -5760,7 +5782,7 @@ function renderCatTrendChart(){
   const sel=$('an-cat-select');if(!sel||!sel.value)return;
   const catName=sel.value;
   const months=getLast6Months();
-  const labels=months.map(m=>{const d=new Date(m+'-01');return d.toLocaleDateString('es-MX',{month:'short',year:'2-digit'})});
+  const labels=months.map(m=>{const d=dateLocal(m+'-01');return d.toLocaleDateString('es-MX',{month:'short',year:'2-digit'})});
   const vals=months.map(m=>S.transactions.filter(t=>t.type==='expense'&&t.category===catName&&t.date.startsWith(m)).reduce((a,t)=>a+M(t.amount),0));
   const dark=!S.settings.theme||S.settings.theme==='dark';
   const gridC=dark?'rgba(255,255,255,0.06)':'rgba(0,0,0,0.06)';
@@ -5801,7 +5823,7 @@ function renderAnalysisCommitments(){
   const upcoming=[...owed.map(d=>({...d,kind:'owed'})),...iowe.map(d=>({...d,kind:'iowe'}))]
     .filter(d=>d.due).sort((a,b)=>new Date(a.due)-new Date(b.due)).slice(0,4);
   const debtRows=upcoming.length?upcoming.map(d=>{
-    const dl=Math.ceil((new Date(d.due)-new Date())/864e5);
+    const dl=daysUntil(d.due);
     const ov=dl<0;
     return`<div style="display:flex;justify-content:space-between;align-items:center;padding:6px 0;border-bottom:1px solid var(--bdr)"><div style="font-size:12px;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(d.person)}<span style="color:var(--t3)"> · ${d.kind==='owed'?'te debe':'debes'}</span></div><span class="bdg ${ov?'bdg-r':dl<7?'bdg-y':'bdg-n'}" style="flex-shrink:0;margin-left:8px">${ov?'Vencida':dl+'d'}</span></div>`;
   }).join(''):'<div style="font-size:12px;color:var(--t3);padding:8px 0">Sin vencimientos próximos</div>';
@@ -6214,7 +6236,7 @@ function renderSubs(){
   if(!allSubs.length){el.innerHTML=emptyState('↻','Sin suscripciones registradas','Agrega tus suscripciones recurrentes (streaming, software, membresías) para no perder de vista cuánto gastas en ellas al mes.','+ Nueva suscripción',"openSubM()");return}
   const cardHTML=(s)=>{
     const status=s.status||'active';
-    const dl=Math.ceil((new Date(s.nextDate)-new Date())/864e5);
+    const dl=daysUntil(s.nextDate);
     const monthlyCost=s.freq==='monthly'?s.cost:s.freq==='annual'?s.cost/12:s.cost*4.33;
     const annualCost=monthlyCost*12;
     const hist=Store.getSubscriptionHistory(s.id);
@@ -6265,18 +6287,20 @@ function openSubHistory(id){
 }
 async function renewSub(id){
   const s=Store.getSubscriptionById(id);if(!s)return;
-  const daysUntilDue=Math.ceil((new Date(s.nextDate)-new Date())/864e5);
+  const daysUntilDue=daysUntil(s.nextDate);
   const early=daysUntilDue>2;
   const msg=early
     ? `Aún faltan ${daysUntilDue} días para la fecha esperada de cobro (${fmtDate(s.nextDate)}). Se registrará un gasto de ${fmt(s.cost)} y se adelantará la fecha — confirma solo si ya se cobró de verdad.`
     : `Se registrará un gasto de ${fmt(s.cost)} y se adelantará la fecha de "${s.name}".`;
   const ok=await confirm_('¿Confirmar renovación?',msg,'Renovar');
   if(!ok)return;
-  const d=new Date(s.nextDate);
-  if(s.freq==='monthly')d.setMonth(d.getMonth()+1);
-  else if(s.freq==='annual')d.setFullYear(d.getFullYear()+1);
-  else d.setDate(d.getDate()+7);
-  Store.updateSubscription(id,{nextDate:d.toISOString().split('T')[0]});
+  // Fecha LOCAL (no UTC) y sin desbordar fin de mes (31-ene -> 28/29-feb).
+  const d=dateLocal(s.nextDate);
+  let nd;
+  if(s.freq==='monthly')nd=addMonthsLocal(d,1);
+  else if(s.freq==='annual')nd=addMonthsLocal(d,12);
+  else{nd=new Date(d.getFullYear(),d.getMonth(),d.getDate()+7);}
+  Store.updateSubscription(id,{nextDate:ymdLocal(nd)});
   Store.addTransaction({type:'expense',amount:s.cost,date:td_(),time:tnow_(),description:s.name+' (suscripción)',category:s.category||'Entretenimiento',accountId:s.accountId,notes:'Renovación manual',subscriptionId:s.id});
   // Bug real encontrado: el filtro de mes de Transacciones (las flechitas
   // ‹ › arriba de la tabla) NO se resetea al cambiar de pantalla — si el
@@ -6418,7 +6442,7 @@ function renderDebts(k){
   const cardHTML=(d)=>{
     const rem=Math.max(0,d.amount-(d.paid||0));const pct=Math.min(100,((d.paid||0)/d.amount)*100).toFixed(0);
     const done=rem<=0;
-    const dl=d.due?Math.ceil((new Date(d.due)-new Date())/864e5):null;const ov=d.due&&new Date(d.due)<new Date()&&rem>0;
+    const dl=d.due?daysUntil(d.due):null;const ov=d.due&&dl<0&&rem>0;
     const extraLine=(d.capital!=null||d.installments)?`<div style="font-size:11px;color:var(--t3);margin-top:2px">${d.capital!=null?`Capital: ${fmt(d.capital)} · Intereses: ${fmt(d.interest||0)}`:''}${d.capital!=null&&d.installments?' · ':''}${d.installments?`Mensualidad ${d.installments.paid||0}/${d.installments.months} (${fmt(d.amount/d.installments.months)}/mes)`:''}</div>`:'';
     // "Liquidada" reemplaza cualquier otro badge una vez saldada — ya no
     // tiene caso mostrar días restantes de algo que ya se terminó de pagar.
@@ -6521,7 +6545,7 @@ function renderGoals(){
   const finalized=allGoals.filter(g=>g.finalized);
   const cardHTML=(g)=>{
     const reached=(g.saved||0)>=g.target;
-    const p=Math.min(100,(g.saved||0)/g.target*100).toFixed(0);const rem=Math.max(0,g.target-(g.saved||0));const dl=g.due?Math.ceil((new Date(g.due)-new Date())/864e5):null;
+    const p=Math.min(100,(g.saved||0)/g.target*100).toFixed(0);const rem=Math.max(0,g.target-(g.saved||0));const dl=g.due?daysUntil(g.due):null;
     const statusBadge=g.finalized?'<span class="bdg bdg-g">✓ Finalizada</span>':reached?'<span class="bdg bdg-g">🎯 Alcanzada</span>':(dl!==null?`<span class="bdg ${dl<0?'bdg-r':dl<30?'bdg-y':'bdg-b'}">${dl<0?'Vencido':dl+'d'}</span>`:'');
     const menuItems=g.finalized
       ?`[{label:'Reabrir',icon:'↺',onClick:()=>toggleGoalFinalized('${g.id}')},{label:'Editar',icon:'✎',onClick:()=>openGoalM('${g.id}')},{label:'Eliminar',icon:'✕',danger:true,onClick:()=>delG('${g.id}')}]`
@@ -6847,7 +6871,7 @@ if(!Array.isArray(S.budgetGoals))S.budgetGoals=[];
 // — así no se pierden, y de ahí en adelante cada mes ya queda
 // independiente.
 (function(){
-  const curP=new Date().toISOString().slice(0,7);
+  const curP=td_().slice(0,7);
   let migrated=false;
   S.budgets.forEach(b=>{if(!b.period){b.period=curP;migrated=true;}});
   if(migrated)save();
@@ -7438,7 +7462,7 @@ function renderSecPage(){
   const now=new Date();const mo=now.getMonth(),yr=now.getFullYear();
   const recs=sec.records||[];
   const totalAll=recs.reduce((a,r)=>a+M(r.amt||0),0);
-  const totalMo=recs.filter(r=>{const d=new Date(r.dt);return d.getMonth()===mo&&d.getFullYear()===yr}).reduce((a,r)=>a+M(r.amt||0),0);
+  const totalMo=recs.filter(r=>{const d=dateLocal(r.dt);return d.getMonth()===mo&&d.getFullYear()===yr}).reduce((a,r)=>a+M(r.amt||0),0);
   // Per member stats
   const statsCards=(sec.members||[]).map(m=>{
     const mt=recs.filter(r=>r.member===m).reduce((a,r)=>a+M(r.amt||0),0);
@@ -7824,7 +7848,7 @@ function checkNotifications(){
   if(S.notif.sub!==false){
     S.subscriptions.forEach(s=>{
       if(s.status&&s.status!=='active')return;
-      const dl=Math.ceil((new Date(s.nextDate)-now)/864e5);
+      const dl=daysUntil(s.nextDate);
       if(dl>=0&&dl<=3)alerts.push({type:'warn',msg:'🔔 '+s.name+' vence en '+dl+'d ('+fmt(s.cost)+')',action:"go('subscriptions')"});
     });
   }
@@ -7832,7 +7856,7 @@ function checkNotifications(){
   if(S.notif.dbt!==false){
     [...S.debts_iowe,...S.debts_owed].forEach(d=>{
       if(!d.due)return;const rem=d.amount-(d.paid||0);if(rem<=0)return;
-      const dl=Math.ceil((new Date(d.due)-now)/864e5);
+      const dl=daysUntil(d.due);
       if(dl>=0&&dl<=7)alerts.push({type:'warn',msg:'📅 Deuda con '+d.person+' vence en '+dl+'d',action:"go('loans')"});
     });
   }
@@ -7896,7 +7920,7 @@ function exportCSV(){
     rows.push([t.date,t.description||'',t.type,t.category||'',acc?acc.name:'',t.amount,t.msi?t.msi.months+'MSI':'']);
   });
   const csv=rows.map(r=>r.map(v=>'"'+String(v).replace(/"/g,'""')+'"').join(',')).join('\r\n');
-  const a=document.createElement('a');a.href='data:text/csv;charset=utf-8,\uFEFF'+encodeURIComponent(csv);a.download='finance-'+new Date().toISOString().split('T')[0]+'.csv';a.click();toast('CSV exportado');
+  const a=document.createElement('a');a.href='data:text/csv;charset=utf-8,\uFEFF'+encodeURIComponent(csv);a.download='finance-'+td_()+'.csv';a.click();toast('CSV exportado');
 }
 
 // ==================== EXPORT TEXT REPORT ====================
@@ -7934,7 +7958,7 @@ SUSCRIPCIONES ACTIVAS: ${S.subscriptions.length} (${fmt(S.subscriptions.reduce((
 OBJETIVOS ACTIVOS: ${S.goals.filter(g=>g.saved<g.target).length}
 PRÉSTAMOS PENDIENTES: Me deben ${fmt(S.debts_owed.reduce((a,d)=>a+Math.max(0,d.amount-(d.paid||0)),0))} · Debo ${fmt(S.debts_iowe.reduce((a,d)=>a+Math.max(0,d.amount-(d.paid||0)),0))}
 ${'═'.repeat(50)}`;
-  const a=document.createElement('a');a.href='data:text/plain;charset=utf-8,'+encodeURIComponent(report);a.download='reporte-'+new Date().toISOString().split('T')[0]+'.txt';a.click();toast('Reporte exportado');
+  const a=document.createElement('a');a.href='data:text/plain;charset=utf-8,'+encodeURIComponent(report);a.download='reporte-'+td_()+'.txt';a.click();toast('Reporte exportado');
 }
 
 // ==================== INIT SECTIONS IN SIDEBAR ====================
