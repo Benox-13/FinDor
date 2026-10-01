@@ -1943,6 +1943,37 @@ async function pushSettings(){
 function accountTypeToCloud(t){return t==='debit'?'checking':t}
 function accountTypeFromCloud(t){return t==='checking'?'debit':t}
 
+// Supabase corta CADA consulta en 1,000 filas por defecto, sin avisar ni
+// dar error. Antes, pullFromSupabase() pedía todo con un solo select(): al
+// pasar de 1,000 transacciones (o de 1,000 filas en cualquier tabla) la app
+// recibía solo una parte, y luego REEMPLAZABA tu estado local con ese pedazo
+// — parecía que "se borraban" datos al sincronizar. Esta función lee por
+// páginas de 1,000 (ordenadas por id para que el orden sea estable) hasta
+// agotar las filas. Devuelve {data,error} igual que una consulta normal.
+async function fetchAllRows(table,{softDelete=true,paged=true}={}){
+  if(!paged){
+    // Tablas de una sola fila (ajustes) o muy chicas (historial de patrimonio).
+    const q=sb.from(table).select('*');
+    return await q;
+  }
+  const PAGE=1000,MAX_PAGES=200;
+  const rows=[],seen=new Set();
+  for(let p=0;p<MAX_PAGES;p++){
+    let q=sb.from(table).select('*').order('id',{ascending:true}).range(p*PAGE,p*PAGE+PAGE-1);
+    if(softDelete)q=q.is('deleted_at',null);
+    const {data,error}=await q;
+    if(error)return{data:null,error};
+    const batch=data||[];
+    for(const r of batch){
+      // Por seguridad: si una fila llegara repetida entre páginas, se ignora.
+      if(r&&r.id!==undefined){if(seen.has(r.id))continue;seen.add(r.id);}
+      rows.push(r);
+    }
+    if(batch.length<PAGE)return{data:rows,error:null};
+  }
+  return{data:null,error:{message:'se superó el máximo de páginas ('+MAX_PAGES+') leyendo '+table}};
+}
+
 async function pullFromSupabase(){
   if(!sb)return;
   try{
@@ -1959,9 +1990,10 @@ async function pullFromSupabase(){
     const optionalMissing=new Set();
     const results={};
     for(const t of tables){
-      const q=sb.from(t).select('*');
-      if(t!=='settings'&&t!=='net_worth_snapshots'&&!OPTIONAL_TABLES.has(t))q.is('deleted_at',null);
-      const {data,error}=await q;
+      // Las tablas opcionales y las de una fila no filtran por deleted_at
+      // (igual que antes); el resto se lee paginado y sin borrados lógicos.
+      const singleRowish=(t==='settings'||t==='net_worth_snapshots');
+      const {data,error}=await fetchAllRows(t,{softDelete:!singleRowish&&!OPTIONAL_TABLES.has(t),paged:!singleRowish});
       if(error){
         if(OPTIONAL_TABLES.has(t)){
           console.warn(`Supabase: la tabla opcional "${t}" todavía no está disponible (${error.message}) — se conservan tus datos locales de esa parte.`);
@@ -2125,9 +2157,19 @@ async function pullFromSupabase(){
     const newNotif=setRow?.preferences?.notifications||S.notif;
 
     // --- net worth history ---
-    const newNwHistory=results.net_worth_snapshots.map(n=>({
-      k:n.period_key,nw:centsToAmt(n.net_worth_cents),assets:centsToAmt(n.assets_cents),debts:centsToAmt(n.debts_cents),
-    }));
+    // Historial de patrimonio: se FUSIONA con lo local en vez de reemplazarlo.
+    // BUG REAL ENCONTRADO: los snapshots mensuales nunca se subían a la
+    // nube, y este pull reemplazaba S.nwHistory por lo que hubiera allá
+    // (vacío) — el historial acumulado se perdía. Ahora: la nube manda
+    // cuando ambos tienen el mismo mes; los meses que solo existen en local
+    // se conservan y se suben después de guardar (syncNWHistoryUp).
+    const nwByKey=new Map();
+    results.net_worth_snapshots.forEach(n=>{
+      nwByKey.set(n.period_key,{k:n.period_key,nw:centsToAmt(n.net_worth_cents),assets:centsToAmt(n.assets_cents),debts:centsToAmt(n.debts_cents)});
+    });
+    const localOnlyNW=(S.nwHistory||[]).filter(h=>h&&h.k&&!nwByKey.has(h.k));
+    localOnlyNW.forEach(h=>nwByKey.set(h.k,h));
+    const newNwHistory=[...nwByKey.values()].sort((a,b)=>a.k<b.k?-1:a.k>b.k?1:0).slice(-24);
 
     // Todo convertido con éxito — ahora sí reemplazamos S y refrescamos la
     // pantalla. Si algo de arriba hubiera lanzado un error, el catch de
@@ -2140,10 +2182,32 @@ async function pullFromSupabase(){
     save();
     refreshAllUI();
     toast('Datos sincronizados desde la nube');
+    if(localOnlyNW.length)syncNWHistoryUp(localOnlyNW); // sin await a propósito: es "best-effort"
   }catch(err){
     console.error('Error al traer datos de Supabase:',err);
     toast('No se pudo sincronizar — se sigue usando tus datos locales',false);
   }
+}
+
+// Sube UN snapshot mensual de patrimonio. Es "best-effort" A PROPÓSITO: no
+// usa retryableWrites, porque la guarda de safeSyncPull() frena TODOS los
+// pulls mientras haya algo pendiente ahí — y un fallo en esta tabla (por
+// ejemplo, si aún no tiene su restricción única) no debe bloquear la
+// sincronización de lo importante. Si falla, solo avisa en consola; el
+// snapshot sigue en local y se vuelve a intentar en el siguiente pull.
+async function pushNWSnapshot(h){
+  if(!sb||!currentUserId||!h||!h.k)return false;
+  try{
+    const {error}=await sb.from('net_worth_snapshots').upsert({
+      user_id:currentUserId,period_key:h.k,
+      net_worth_cents:amtToCents(h.nw||0),assets_cents:amtToCents(h.assets||0),debts_cents:amtToCents(h.debts||0),
+    },{onConflict:'user_id,period_key'});
+    if(error){console.warn('Supabase: no se pudo subir el historial de patrimonio',h.k,error.message);return false;}
+    return true;
+  }catch(err){console.warn('Supabase: error de red subiendo historial de patrimonio',h.k,err);return false;}
+}
+async function syncNWHistoryUp(list){
+  for(const h of list)await pushNWSnapshot(h);
 }
 
 function refreshAllUI(){
@@ -7802,9 +7866,13 @@ function snapshotNW(){
   const assets=S.accounts.reduce((a,x)=>a+(x.type==='credit'?0:M(x.balance||0)),0);
   const owedToMe=S.debts_owed.reduce((a,d)=>a+Math.max(0,d.amount-(d.paid||0)),0);
   const iOwe=S.debts_iowe.reduce((a,d)=>a+Math.max(0,d.amount-(d.paid||0)),0);
-  S.nwHistory.push({k:key,nw:assets+owedToMe-iOwe,assets,debts:iOwe});
+  const entry={k:key,nw:assets+owedToMe-iOwe,assets,debts:iOwe};
+  S.nwHistory.push(entry);
   if(S.nwHistory.length>24)S.nwHistory.shift();
   save();
+  // Antes este snapshot se quedaba SOLO en local. Si aún no hay sesión
+  // (esta función corre al abrir la app), el siguiente pull lo sube.
+  if(sb&&currentUserId)pushNWSnapshot(entry);
 }
 let _chNW=null;
 function renderNWHistory(){
