@@ -1944,6 +1944,18 @@ function renderAll_(){
 // localStorage y nunca llegaba a la nube después de la subida inicial, así
 // que no se veía reflejado entre Mac y iPhone. upsert con onConflict en
 // user_id porque es una fila única por usuario.
+// Las preferencias de notificaciones tuvieron DOS formas de claves: la
+// original ({budget,debts,subs,goals}) y la que realmente usa la pantalla
+// de Configuración ({bgt,dbt,sub,gol}). BUG REAL: el interruptor de metas
+// guardaba "gol" pero checkNotifications() leía "goals", así que nunca
+// surtía efecto. Esta función unifica TODO a las claves de la pantalla
+// (bgt/dbt/sub/gol), aceptando cualquiera de las dos formas de entrada
+// (local viejo o lo que venga de la nube desde otro dispositivo).
+function normNotif(n){
+  n=n||{};
+  const pick=(...vals)=>{for(const v of vals)if(typeof v==='boolean')return v;return true};
+  return{bgt:pick(n.bgt,n.budget),dbt:pick(n.dbt,n.debts),sub:pick(n.sub,n.subs),gol:pick(n.gol,n.goals)};
+}
 async function pushSettings(){
   if(!sb||!currentUserId)return;
   await cloudWrite(sb.from('settings').upsert({
@@ -1952,7 +1964,7 @@ async function pushSettings(){
       theme:S.settings.theme||'dark',accent:S.settings.accent||'green',
       dateFormat:S.settings.dateFormat||'dmy',timeFormat:S.settings.timeFormat||'24h',
       showDailyBalance:!!S.settings.showDailyBalance,
-      dashboardWidgets:S.dw||{},notifications:S.notif||{}},
+      dashboardWidgets:S.dw||{},notifications:normNotif(S.notif),budgetRollover:!!S.budgetRollover},
   },{onConflict:'user_id'}),'ajustes');
 }
 // La tabla `accounts` en Supabase tiene un CHECK constraint que solo
@@ -2176,7 +2188,10 @@ async function pullFromSupabase(){
       showDailyBalance:!!setRow.preferences?.showDailyBalance,
     }:S.settings;
     const newDw=setRow?.preferences?.dashboardWidgets?{upcoming:true,subs:true,debts:true,goals:true,...setRow.preferences.dashboardWidgets}:S.dw;
-    const newNotif=setRow?.preferences?.notifications||S.notif;
+    const newNotif=normNotif(setRow?.preferences?.notifications||S.notif);
+    // Si la nube aún no tiene esta preferencia (se guardó antes de este
+    // cambio), se conserva la local y se sube en el siguiente pushSettings.
+    const newRollover=typeof setRow?.preferences?.budgetRollover==='boolean'?setRow.preferences.budgetRollover:!!S.budgetRollover;
 
     // --- net worth history ---
     // Historial de patrimonio: se FUSIONA con lo local en vez de reemplazarlo.
@@ -2199,7 +2214,7 @@ async function pullFromSupabase(){
     S.accounts=newAccounts;S.categories=newCategories;S.transactions=newTransactions;
     S.debts_owed=newDebtsOwed;S.debts_iowe=newDebtsIowe;S.goals=newGoals;
     S.subscriptions=newSubscriptions;S.budgets=newBudgets;S.budgetGoals=newBudgetGoals;S.vehicles=newVehicles;S.investments=newInvestments;
-    S.customSections=newCustomSections;S.settings=newSettings;S.dw=newDw;S.notif=newNotif;
+    S.customSections=newCustomSections;S.settings=newSettings;S.dw=newDw;S.notif=newNotif;S.budgetRollover=newRollover;
     S.nwHistory=newNwHistory;
     save();
     refreshAllUI();
@@ -2782,7 +2797,7 @@ function emptyAppState(){
     debts_owed:[],debts_iowe:[],goals:[],ev_records:[],budgets:[],subscriptions:[],
     settings:{name:'',currency:'MXN',theme:'dark',accent:'green'},
     dw:{metrics:true,txs:true,cats:true,accs:true,tdc:true,goals:true,budget:false,upcoming:true,subs:true,debts:true,health:true},
-    notif:{budget:true,debts:true,subs:true,goals:true},
+    notif:{bgt:true,dbt:true,sub:true,gol:true},
     vehicles:[],investments:[],customSections:[],budgetRollover:false,nwHistory:[],budgetGoals:[]
   };
 }
@@ -2805,7 +2820,7 @@ let S = JSON.parse(localStorage.getItem('finance_v4')||'null') || {
   debts_owed:[],debts_iowe:[],goals:[],ev_records:[],budgets:[],subscriptions:[],
   settings:{name:'',currency:'MXN',theme:'dark',accent:'green'},
   dw:{metrics:true,txs:true,cats:true,accs:true,tdc:true,goals:true,budget:false,upcoming:true,subs:true,debts:true,health:true},
-  notif:{budget:true,debts:true,subs:true,goals:true},
+  notif:{bgt:true,dbt:true,sub:true,gol:true},
   vehicles:[],investments:[],customSections:[],budgetRollover:false,nwHistory:[],budgetGoals:[]
 };
 
@@ -5903,7 +5918,7 @@ let _budgetOffset=0;
 let _budgetEditPeriod=null;
 function budgetMonthNav(d){_budgetOffset+=d;renderBudget()}
 function budgetGoToday(){_budgetOffset=0;renderBudget()}
-function toggleRollover(){S.budgetRollover=$('budget-rollover').checked;save();renderBudget()}
+function toggleRollover(){S.budgetRollover=$('budget-rollover').checked;save();pushSettings();renderBudget()}
 
 // Resuelve el límite de una categoría para un periodo exacto. Si no hay
 // un registro propio de ESE mes, hereda el más reciente de un mes
@@ -6776,7 +6791,7 @@ function moveDashWidget(key,dir){
   renderDashOrderList();renderDash();
 }
 function saveDW(){['txs','cats','accs','tdc','goals','budget','upcoming','subs','debts','health'].forEach(k=>{const el=$('w-'+k);if(el)S.dw[k]=el.checked});save();pushSettings();renderDash();toast('Dashboard actualizado')}
-function saveNotif(){if(!S.notif)S.notif={};['bgt','dbt','sub','gol'].forEach(k=>{const el=$('n-'+k);if(el)S.notif[k]=el.checked});save();toast('Preferencias guardadas')}
+function saveNotif(){S.notif=normNotif(S.notif);['bgt','dbt','sub','gol'].forEach(k=>{const el=$('n-'+k);if(el)S.notif[k]=el.checked});save();pushSettings();toast('Preferencias guardadas')}
 function exportData(){const a=document.createElement('a');a.href='data:application/json,'+encodeURIComponent(JSON.stringify(S,null,2));a.download='finance-backup.json';a.click();toast('Datos exportados')}
 function importData(e){const f=e.target.files[0];if(!f)return;const r=new FileReader();r.onload=ev=>{try{S=JSON.parse(ev.target.result);save();renderDash();toast('Datos importados')}catch{toast('Archivo inválido',false)}};r.readAsText(f)}
 // Por seguridad, antes de borrar cualquier cosa se pide confirmar la
@@ -6864,6 +6879,8 @@ document.querySelectorAll('.ni').forEach(n=>n.addEventListener('click',()=>{
 if(!S.vehicles)S.vehicles=[];
 if(!S.customSections)S.customSections=[];
 if(S.budgetRollover===undefined)S.budgetRollover=false;
+// Unifica las claves de notificaciones de instalaciones anteriores (ver normNotif).
+S.notif=normNotif(S.notif);
 if(!Array.isArray(S.budgetGoals))S.budgetGoals=[];
 // Migración suave: presupuestos guardados ANTES de que existiera el
 // concepto de mes (sin campo "period") se tratan como si fueran del mes
@@ -7861,7 +7878,7 @@ function checkNotifications(){
     });
   }
   // Goals close to target
-  if(S.notif.goals!==false){
+  if(S.notif.gol!==false){
     S.goals.forEach(g=>{
       const p=(g.saved||0)/g.target;
       if(p>=1)alerts.push({type:'ok',msg:'🎉 ¡Meta alcanzada! '+g.name,action:"go('goals')"});
