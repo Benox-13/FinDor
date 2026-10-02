@@ -3896,6 +3896,13 @@ function billingCardHTML(a){
       daysToPayment=Math.ceil((payDate-now)/864e5);
     }
   }
+  // MSI por facturar: lo que falta de las compras a meses sin intereses de
+  // ESTA tarjeta y que todavía no ha llegado a ninguna factura. Ese monto ya
+  // se descontó de "Disponible" el día de la compra (el crédito se consume
+  // completo), pero "Gastado" y "Factura pendiente" solo cuentan cada
+  // mensualidad cuando su periodo cierra con el corte. De ahí la diferencia
+  // entre los números (ver la nota informativa más abajo).
+  const msiPending=M(S.transactions.filter(t=>t.accountId===a.id&&t.type==='expense'&&t.msi).reduce((sum,t)=>sum+msiStatus(t).remainingBalance,0));
   const used=a.limit?a.limit-M(a.balance):null;
   const usedP=a.limit?Math.min(100,used/a.limit*100).toFixed(0):0;
   const urgencyColor=daysToPayment!==null?(daysToPayment<=3?'var(--exp)':daysToPayment<=7?'var(--yel)':'var(--inc)'):'var(--t3)';
@@ -3935,6 +3942,7 @@ function billingCardHTML(a){
         ${invoiceAmt>0?`<button class="btn bg_ sm" style="margin-top:8px;font-size:11px;width:100%" onclick="openBillingPay('${a.id}',${invoiceAmt})">Pagar ${fmt(invoiceAmt)}</button>`:''}
       </div>
     </div>
+    ${msiPending>0?`<div style="border-top:1px solid var(--bdr);padding:11px 16px;font-size:11px;line-height:1.55;color:var(--t3)">ⓘ <strong style="color:var(--t2)">Compras a MSI por facturar: ${fmt(msiPending)}.</strong> Ese monto ya se descontó de tu <em>Disponible</em> el día de cada compra, pero <em>Gastado</em> y <em>Factura pendiente</em> solo incluyen cada mensualidad cuando su periodo cierra con el corte. Por eso estos números no suman igual: es lo esperado, no un error.</div>`:''}
     <!-- Recent transactions for this card -->
     <div style="border-top:1px solid var(--bdr);padding:12px 16px">
       <div style="font-size:11px;color:var(--t3);text-transform:uppercase;letter-spacing:.7px;margin-bottom:8px">Últimos movimientos</div>
