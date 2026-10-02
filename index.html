@@ -1089,6 +1089,22 @@ body.modal-open #bottom-nav{display:none !important}
   </div>
 </div>
 
+<!-- CONCILIAR SALDO — compara el saldo de la app con el saldo real (banco o
+     cartera) y, si hay diferencia, registra un movimiento "Ajuste de saldo". -->
+<div class="mo" id="mo-recon">
+  <div class="md">
+    <div class="mh"><span class="mttl" id="rc-title">Conciliar saldo</span><button class="btn bg_ ico sm" onclick="cM('mo-recon')">✕</button></div>
+    <div class="mbody">
+      <input type="hidden" id="rc-id">
+      <div class="fg"><label class="fl">Saldo en la app</label><div id="rc-app" style="font-family:'DM Mono',monospace;font-size:20px">—</div></div>
+      <div class="fg"><label class="fl">Saldo real (lo que ves en tu banco o cartera)</label><input class="fc" type="number" id="rc-real" placeholder="0.00" step="0.01" inputmode="decimal" oninput="updateReconDiff()"></div>
+      <div id="rc-diff" style="font-size:13px;line-height:1.5;padding:10px 12px;border-radius:var(--r);background:var(--bg3);border:1px solid var(--bdr);color:var(--t2)">Escribe el saldo real para compararlo.</div>
+      <div style="font-size:11px;color:var(--t3);margin-top:8px">El ajuste se guarda como una transferencia de un solo lado: no cuenta como ingreso ni gasto, así que no altera tu presupuesto ni tus análisis.</div>
+    </div>
+    <div class="mfoot"><button class="btn bg_ sm" onclick="cM('mo-recon')">Cancelar</button><button class="btn bp sm" id="rc-btn" onclick="applyRecon()" disabled>Aplicar ajuste</button></div>
+  </div>
+</div>
+
 <!-- MSI ADVANCE PAYMENT MODAL — antes era "Pago mensual MSI" (una
      mecánica que creaba una transacción cada mes y duplicaba el pago ya
      cubierto por la factura normal). Ahora es solo para adelantos
@@ -5037,7 +5053,7 @@ function onAccTypeChg(){
   const isCr=$('ac-type').value==='credit';
   $('ac-lim-g').style.display=isCr?'block':'none';
   $('ac-credit-dates').style.display=isCr?'block':'none';
-  $('ac-bal-lbl').textContent=isCr?'Crédito disponible ahora':'Saldo inicial';
+  $('ac-bal-lbl').textContent=isCr?'Crédito disponible ahora':($('ac-eid').value?'Saldo actual':'Saldo inicial');
   $('ac-bal-hint').style.display=isCr?'block':'none';
 }
 function selAccColor(c,el){accColor=c;document.querySelectorAll('#ac-colors .swatch').forEach(s=>s.classList.remove('sel'));el.classList.add('sel')}
@@ -5059,10 +5075,74 @@ function openAccM(editId=null){
   const isCr=$('ac-type').value==='credit';
   $('ac-lim-g').style.display=isCr?'block':'none';
   $('ac-credit-dates').style.display=isCr?'block':'none';
-  $('ac-bal-lbl').textContent=isCr?'Crédito disponible ahora':'Saldo inicial';
+  $('ac-bal-lbl').textContent=isCr?'Crédito disponible ahora':(editId?'Saldo actual':'Saldo inicial');
   $('ac-bal-hint').style.display=isCr?'block':'none';
   document.querySelectorAll('#ac-colors .swatch').forEach(s=>{s.classList.toggle('sel',s.dataset.c===accColor)});
   oM('mo-acc');
+}
+
+// ==================== CONCILIAR SALDO ====================
+// Calcula la diferencia entre el saldo real y el de la app, redondeada a
+// centavos (M) para que 0.1+0.2 no deje un "0.00000000000000004" fantasma.
+function reconDiff(a,realStr){
+  if(realStr===''||realStr===null||realStr===undefined)return null;
+  const real=parseFloat(realStr);
+  if(!Number.isFinite(real)||Math.abs(real)>=1e12)return null;
+  return{real:M(real),diff:M(M(real)-M(a.balance))};
+}
+function openReconM(id){
+  const a=Store.getAccountById(id);
+  if(!a)return;
+  // Las tarjetas de crédito NO se concilian aquí: su saldo es "crédito
+  // disponible" y se mezcla con facturación y MSI.
+  if(a.type==='credit'){toast('Las tarjetas de crédito se concilian desde Facturación.',false);return}
+  if(a.locked){toast('Esta cuenta está bloqueada — desbloquéala para conciliar el saldo.',false);return}
+  if(a.balanceHidden){toast('Muestra el saldo de la cuenta (👁) para poder conciliarlo.',false);return}
+  $('rc-id').value=id;
+  $('rc-title').textContent='Conciliar saldo — '+a.name;
+  $('rc-app').textContent=fmt(a.balance);
+  $('rc-real').value='';
+  updateReconDiff();
+  oM('mo-recon');
+}
+function updateReconDiff(){
+  const a=Store.getAccountById($('rc-id').value);
+  const box=$('rc-diff'),btn=$('rc-btn');
+  if(!a){box.textContent='La cuenta ya no existe.';btn.disabled=true;return}
+  const r=reconDiff(a,$('rc-real').value);
+  if(!r){box.textContent='Escribe el saldo real para compararlo.';box.style.color='var(--t2)';btn.disabled=true;return}
+  if(r.diff===0){box.textContent='✓ Cuadra: no hay diferencia. No se registra nada.';box.style.color='var(--inc)';btn.disabled=true;return}
+  box.style.color='var(--yel)';
+  box.textContent=r.diff>0
+    ?`Faltan ${fmt(r.diff)} en la app. Se registrará un ajuste de +${fmt(r.diff)} y el saldo quedará en ${fmt(r.real)}.`
+    :`Sobran ${fmt(-r.diff)} en la app. Se registrará un ajuste de −${fmt(-r.diff)} y el saldo quedará en ${fmt(r.real)}.`;
+  btn.disabled=false;
+}
+let _reconBusy=false;
+function applyRecon(){
+  if(_reconBusy)return; // doble toque en móvil
+  const a=Store.getAccountById($('rc-id').value);
+  if(!a||a.type==='credit'||a.locked)return;
+  const r=reconDiff(a,$('rc-real').value);
+  if(!r||r.diff===0){updateReconDiff();return}
+  // Si el saldo de la app cambió mientras la ventana estaba abierta (por
+  // ejemplo, una sincronización), la diferencia que viste ya no es la
+  // real: se recalcula, se muestra de nuevo y NO se aplica nada hasta que
+  // vuelvas a confirmar.
+  const shown=$('rc-diff').textContent;
+  updateReconDiff();
+  if($('rc-diff').textContent!==shown){toast('El saldo cambió mientras tenías abierta la ventana — revisa la diferencia y confirma de nuevo.',false);return}
+  _reconBusy=true;
+  try{
+    const transferCat=ensureCategory('Transferencia','expense');
+    Store.addTransaction({type:'transfer',amount:Math.abs(r.diff),date:td_(),time:tnow_(),
+      description:'Ajuste de saldo',category:transferCat.name,accountId:a.id,
+      transferDirection:r.diff>0?'in':'out',
+      notes:`Conciliación de saldo: la app tenía ${fmt(M(a.balance))} y el saldo real era ${fmt(r.real)}`});
+    cM('mo-recon');
+    renderAccounts();renderDash();
+    toast('Saldo conciliado: '+fmt(r.real));
+  }finally{_reconBusy=false}
 }
 
 async function saveAcc(){
@@ -5158,6 +5238,7 @@ function accountSummaryHTML(a){
         <span class="bdg ${tc[a.type]||'bdg-n'}">${tl[a.type]||a.type}</span>
         <div style="font-family:'DM Mono',monospace;font-size:28px;margin-top:8px;color:${a.balanceHidden?'var(--t3)':M(a.balance)>=0?'var(--inc)':'var(--exp)'}">${accBalanceLabel(a)}</div>
         <div style="font-size:12px;color:var(--t3);margin-top:2px">Saldo actual${a.locked?' · 🔒 Cuenta bloqueada':''}</div>
+        <button class="btn bg_ sm" style="margin-top:10px" onclick="openReconM('${a.id}')">✓ Conciliar saldo</button>
       </div>
       <div style="display:flex;gap:6px">
         <button class="btn bg_ ico sm" title="${a.locked?'Desbloquear cuenta':'Bloquear cuenta'}" onclick="toggleAccLocked('${a.id}')">${a.locked?'🔒':'🔓'}</button>
