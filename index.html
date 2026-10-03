@@ -1072,6 +1072,11 @@ body.modal-open #bottom-nav{display:none !important}
           <div class="fg"><label class="fl">Día de corte</label><input class="fc" type="number" id="ac-cutday" placeholder="Ej: 15" min="1" max="31"></div>
           <div class="fg"><label class="fl">Día de pago</label><input class="fc" type="number" id="ac-payday" placeholder="Ej: 5" min="1" max="31"></div>
         </div>
+        <div class="g2">
+          <div class="fg"><label class="fl">Pago mínimo: % de la factura</label><input class="fc" type="number" id="ac-minpct" placeholder="Ej: 5" min="0" max="100" step="0.01" inputmode="decimal"></div>
+          <div class="fg"><label class="fl">Pago mínimo: monto fijo</label><input class="fc" type="number" id="ac-minfix" placeholder="Ej: 300" min="0" step="0.01" inputmode="decimal"></div>
+        </div>
+        <div style="font-size:11px;color:var(--t3);margin:-4px 0 12px">Opcional. El pago mínimo estimado es el mayor de los dos, sin pasar de la factura. No incluye intereses, IVA ni comisiones. Déjalos vacíos si no quieres verlo.</div>
       </div>
       <div class="fg"><label class="fl">Color</label>
         <div id="ac-colors" style="display:flex;gap:7px;margin-top:4px">
@@ -2078,6 +2083,11 @@ async function pullFromSupabase(){
       limit:a.limit_cents?centsToAmt(a.limit_cents):0,color:a.color||null,
       cutDay:a.cut_day||null,payDay:a.pay_day||null,
       locked:!!a.locked,balanceHidden:!!a.balance_hidden,archived:!!a.archived,
+      // Si las columnas aún no existen en Supabase, llegan como undefined y
+      // todo queda en null (sin pago mínimo), sin romper nada.
+      minPayPct:a.min_pay_pct!=null?Number(a.min_pay_pct):null,
+      minPayFixed:a.min_pay_fixed_cents!=null?centsToAmt(a.min_pay_fixed_cents):null,
+      minPayTouched:a.min_pay_pct!=null||a.min_pay_fixed_cents!=null,
     }));
 
     // --- transactions (category_id/subcategory_id -> nombre, igual que
@@ -2304,7 +2314,24 @@ async function cloudWrite(promise,label){
 function accountToCloud(a){
   return{id:a.id,user_id:currentUserId,name:a.name,type:accountTypeToCloud(a.type),balance_cents:amtToCents(a.balance),
     limit_cents:a.limit?amtToCents(a.limit):null,color:a.color||null,cut_day:a.cutDay||null,pay_day:a.payDay||null,
-    locked:!!a.locked,balance_hidden:!!a.balanceHidden,archived:!!a.archived};
+    locked:!!a.locked,balance_hidden:!!a.balanceHidden,archived:!!a.archived,
+    // Las columnas del pago mínimo SOLO se envían si esta tarjeta lo usa (o
+    // lo usó antes y se está borrando). Así, una cuenta sin pago mínimo
+    // nunca depende de que esas columnas existan en Supabase.
+    ...((a.minPayTouched||a.minPayPct!=null||a.minPayFixed!=null)?{
+      min_pay_pct:a.minPayPct!=null?a.minPayPct:null,
+      min_pay_fixed_cents:a.minPayFixed!=null?amtToCents(a.minPayFixed):null}:{})};
+}
+// Pago mínimo estimado de una tarjeta: el MAYOR entre el monto fijo y el
+// porcentaje de la factura pendiente, sin pasar nunca de la factura.
+// Devuelve null si no aplica (no es tarjeta, no hay factura o no hay mínimo
+// configurado). Es una referencia: no incluye intereses, IVA ni comisiones.
+function tdcMinPayment(a,invoiceAmt){
+  const inv=M(invoiceAmt);
+  if(!a||a.type!=='credit'||!(inv>0))return null;
+  const pct=a.minPayPct>0?a.minPayPct:0,fix=a.minPayFixed>0?a.minPayFixed:0;
+  if(!pct&&!fix)return null;
+  return Math.min(inv,M(Math.max(fix,M(inv*pct/100))));
 }
 function categoryToCloud(c){
   return{id:c.id,user_id:currentUserId,name:c.name,icon:c.icon||null,type:c.type};
@@ -3940,6 +3967,9 @@ function billingCardHTML(a){
         <div style="font-family:'DM Mono',monospace;font-size:22px;color:${invoiceAmt>0?'var(--yel)':'var(--t3)'};font-weight:500">${fmt(invoiceAmt)}</div>
         <div style="font-size:11px;color:var(--t3);margin-top:3px">${invoiceAmt>0?`pagar antes del día ${a.payDay||'—'}`:'sin factura pendiente'}</div>
         ${invoiceAmt>0?`<button class="btn bg_ sm" style="margin-top:8px;font-size:11px;width:100%" onclick="openBillingPay('${a.id}',${invoiceAmt})">Pagar ${fmt(invoiceAmt)}</button>`:''}
+        ${(()=>{const mp=tdcMinPayment(a,invoiceAmt);if(mp===null)return'';
+          return `<div style="font-size:11px;color:var(--t3);margin-top:10px">Pago mínimo estimado: <strong style="color:var(--t2);font-family:'DM Mono',monospace">${fmt(mp)}</strong></div>`
+            +(mp<M(invoiceAmt)?`<button class="btn bg_ sm" style="margin-top:6px;font-size:11px;width:100%" onclick="openBillingPay('${a.id}',${mp})">Pagar mínimo ${fmt(mp)}</button>`:'');})()}
       </div>
     </div>
     ${msiPending>0?`<div style="border-top:1px solid var(--bdr);padding:11px 16px;font-size:11px;line-height:1.55;color:var(--t3)">ⓘ <strong style="color:var(--t2)">Compras a MSI por facturar: ${fmt(msiPending)}.</strong> Ese monto ya se descontó de tu <em>Disponible</em> el día de cada compra, pero <em>Gastado</em> y <em>Factura pendiente</em> solo incluyen cada mensualidad cuando su periodo cierra con el corte. Por eso estos números no suman igual: es lo esperado, no un error.</div>`:''}
@@ -5073,11 +5103,13 @@ function openAccM(editId=null){
     $('acc-modal-title').textContent='Editar cuenta';
     $('ac-name').value=a.name;$('ac-type').value=a.type;$('ac-bal').value=a.balance;$('ac-lim').value=a.limit||'';
     $('ac-cutday').value=a.cutDay||'';$('ac-payday').value=a.payDay||'';
+    $('ac-minpct').value=a.minPayPct||'';$('ac-minfix').value=a.minPayFixed||'';
     accColor=a.color||'#6ee7b7';
   } else {
     $('acc-modal-title').textContent='Nueva cuenta';
     $('ac-name').value='';$('ac-bal').value='';$('ac-lim').value='';$('ac-type').value='cash';
     $('ac-cutday').value='';$('ac-payday').value='';
+    $('ac-minpct').value='';$('ac-minfix').value='';
     accColor='#6ee7b7';
   }
   const isCr=$('ac-type').value==='credit';
@@ -5158,13 +5190,35 @@ async function saveAcc(){
   const eid=$('ac-eid').value;
   const cutDay=parseInt($('ac-cutday').value)||null;
   const payDay=parseInt($('ac-payday').value)||null;
+  // Pago mínimo estimado (solo tarjetas de crédito). Vacío = sin pago mínimo.
+  const isCredit=$('ac-type').value==='credit';
+  let minPayPct=null,minPayFixed=null;
+  if(isCredit){
+    const rawPct=$('ac-minpct').value.trim(),rawFix=$('ac-minfix').value.trim();
+    if(rawPct!==''){
+      minPayPct=parseFloat(rawPct);
+      if(!Number.isFinite(minPayPct)||minPayPct<=0||minPayPct>100){toast('El porcentaje del pago mínimo debe estar entre 0 y 100',false);return}
+      minPayPct=Math.round(minPayPct*100)/100;
+    }
+    if(rawFix!==''){
+      minPayFixed=parseFloat(rawFix);
+      if(!Number.isFinite(minPayFixed)||minPayFixed<=0||minPayFixed>=1e12){toast('El monto fijo del pago mínimo debe ser mayor a 0',false);return}
+      minPayFixed=M(minPayFixed);
+    }
+  }
+  const minPay=isCredit?{minPayPct,minPayFixed}:{};
   if(eid){
     const ok=await confirm_('¿Guardar cambios?','Se actualizará esta cuenta.','Guardar');
     if(!ok)return;
-    Store.updateAccount(eid,{name,type:$('ac-type').value,balance:M($('ac-bal').value)||0,limit:M($('ac-lim').value)||0,color:accColor,cutDay,payDay});
+    // minPayTouched: una vez configurado, se sigue enviando a la nube
+    // (aunque luego lo vacíes) para que el borrado también se sincronice.
+    const prev=Store.getAccountById(eid);
+    if(isCredit)minPay.minPayTouched=minPayPct!==null||minPayFixed!==null||!!(prev&&prev.minPayTouched);
+    Store.updateAccount(eid,{name,type:$('ac-type').value,balance:M($('ac-bal').value)||0,limit:M($('ac-lim').value)||0,color:accColor,cutDay,payDay,...minPay});
     toast('Cuenta actualizada');
   } else {
-    Store.addAccount({name,balance:M($('ac-bal').value)||0,type:$('ac-type').value,limit:M($('ac-lim').value)||0,color:accColor,cutDay,payDay});
+    if(isCredit)minPay.minPayTouched=minPayPct!==null||minPayFixed!==null;
+    Store.addAccount({name,balance:M($('ac-bal').value)||0,type:$('ac-type').value,limit:M($('ac-lim').value)||0,color:accColor,cutDay,payDay,...minPay});
     toast('Cuenta agregada');
   }
   cM('mo-acc');renderAccounts();renderDash();populateTxAccFilter();
