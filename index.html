@@ -595,7 +595,6 @@ body.modal-open #bottom-nav{display:none !important}
     <!-- Loan totals summary -->
     <div class="g2" style="margin-bottom:18px" id="acc-loan-summary"></div>
     <div id="acc-grid" style="margin-bottom:22px"></div>
-    <div class="slbl">MESES SIN INTERESES ACTIVOS</div>
     <div id="msi-list"></div>
   </div>
   <!-- ACCOUNT DETAIL — resumen (efectivo/débito) o Facturación (tarjeta de
@@ -1808,6 +1807,7 @@ async function execRetryableWrite(desc){
       const r=(s.records||[]).find(x=>x.id===desc.recordId);if(!r)return true;
       return await Store._pushSectionRecord(desc.sectionId,r,true);
     }
+    case 'settings':return await pushSettingsNow();
   }
   return true;
 }
@@ -1917,11 +1917,21 @@ function dateLocal(iso){
 // mes destino, se queda en el último día de ese mes. BUG REAL: con
 // setMonth() directo, 31-ene + 1 mes = 3-mar (salta febrero), y "hace 3
 // meses" desde el 31 caía en otro mes. Conserva la hora del día.
-function addMonthsLocal(d,n){
+function addMonthsLocal(d,n,anchorDay){
   const r=new Date(d.getFullYear(),d.getMonth()+n,1,d.getHours(),d.getMinutes(),d.getSeconds());
   const last=new Date(r.getFullYear(),r.getMonth()+1,0).getDate();
-  r.setDate(Math.min(d.getDate(),last));
+  // anchorDay (opcional): el día de cobro ORIGINAL. Sin él, el día se toma de
+  // la fecha recibida y, tras un mes corto, se "encogería" para siempre
+  // (31 -> 28 -> 28...). Con él, vuelve a 31 en cuanto el mes lo permite.
+  r.setDate(Math.min(anchorDay||d.getDate(),last));
   return r;
+}
+// Día de cobro a recordar de una suscripción: solo importa cuando es 29, 30
+// o 31 (los días que no existen en todos los meses). Para el resto, null.
+function billingDayOf(dateStr,freq){
+  if(freq!=='monthly'&&freq!=='annual')return null;
+  const d=parseInt(String(dateStr||'').slice(8,10),10);
+  return d>=29&&d<=31?d:null;
 }
 function monthsAgo(n){return addMonthsLocal(new Date(),-n)}
 // "AAAA-MM-DD" con los componentes LOCALES de un Date (nunca toISOString,
@@ -1977,9 +1987,22 @@ function normNotif(n){
   const pick=(...vals)=>{for(const v of vals)if(typeof v==='boolean')return v;return true};
   return{bgt:pick(n.bgt,n.budget),dbt:pick(n.dbt,n.debts),sub:pick(n.sub,n.subs),gol:pick(n.gol,n.goals)};
 }
-async function pushSettings(){
+// Los ajustes ahora usan la MISMA cola de reintentos persistida que el resto
+// de las entidades. BUG REAL: pushSettings() subía una sola vez y, si no había
+// internet, el cambio (tema, formato de fecha, notificaciones, rollover...) se
+// perdía en silencio: el siguiente pull traía de la nube el valor viejo y lo
+// pisaba. Ahora el cambio queda pendiente (sobrevive aunque cierres la app) y
+// mientras siga pendiente safeSyncPull() NO trae nada de la nube.
+// El descriptor no lleva datos: al reintentar se suben los ajustes ACTUALES,
+// así que varios cambios seguidos se juntan en una sola subida.
+function pushSettings(){
   if(!sb||!currentUserId)return;
-  await cloudWrite(sb.from('settings').upsert({
+  queueRetryableWrite('settings',{fn:'settings'});
+}
+// Subida real; devuelve true si salió bien (lo usa la cola y la migración inicial).
+async function pushSettingsNow(){
+  if(!sb||!currentUserId)return true;
+  return await cloudWrite(sb.from('settings').upsert({
     user_id:currentUserId,currency:S.settings.currency||'MXN',
     preferences:{name:S.settings.name||'',email:S.settings.email||'',photo:S.settings.photo||null,
       theme:S.settings.theme||'dark',accent:S.settings.accent||'green',
@@ -2138,6 +2161,9 @@ async function pullFromSupabase(){
         id:s.id,name:s.name,cost:centsToAmt(s.cost_cents),freq:s.freq,nextDate:s.next_date,
         accountId:s.account_id||'',icon:s.icon||'📦',category:cat?cat.name:'',since:(s.created_at||'').slice(0,10)||'',
         status:s.status||'active',
+        // Si la columna aún no existe en Supabase llega undefined -> null.
+        billingDay:s.billing_day!=null?Number(s.billing_day):null,
+        billingDayTouched:s.billing_day!=null,
       };
     });
 
@@ -2369,7 +2395,10 @@ function goalToCloud(g){
 }
 function subscriptionToCloud(s,catId){
   return{id:s.id,user_id:currentUserId,name:s.name,icon:s.icon||null,cost_cents:amtToCents(s.cost),
-    freq:s.freq,next_date:s.nextDate,account_id:s.accountId||null,category_id:catId||null,status:s.status||'active'};
+    freq:s.freq,next_date:s.nextDate,account_id:s.accountId||null,category_id:catId||null,status:s.status||'active',
+    // billing_day SOLO se envía si esta suscripción lo usa (día 29-31) o lo
+    // usó antes y se está borrando: el resto no depende de que la columna exista.
+    ...((s.billingDay!=null||s.billingDayTouched)?{billing_day:s.billingDay!=null?s.billingDay:null}:{})};
 }
 function vehicleToCloud(v){
   const hasExtra=v.financed||v.monthlyPayment!=null||v.totalMonths!=null;
@@ -2535,7 +2564,7 @@ async function pushAllToSupabase(){
     }
 
     // 10. Settings (fila única por usuario)
-    await pushSettings();
+    await pushSettingsNow();
 
     save(); // persistimos localmente los ids ya reconciliados
     toast('¡Listo! Tus datos ya están en la nube.');
@@ -5552,10 +5581,22 @@ function msiPeriodAmount(t,periodDateStr,cutDay){
   const pIdx=periodKeyForDate(periodDateStr,cutDay)-periodKeyForDate(t.date,cutDay);
   return(pIdx>=0&&pIdx<msiStatus(t).effectiveMonths)?M(t.msi.monthly):0;
 }
+// Lista de MSI desplegable: empieza CERRADA (la pantalla de Cuentas queda
+// más corta) y recuerda lo que elijas en este dispositivo. Es solo preferencia
+// de pantalla: no se sincroniza ni toca datos.
+let _msiOpen=(()=>{try{return localStorage.getItem('finance_v4_ui_msi_open')==='1'}catch(e){return false}})();
+function toggleMsiList(){
+  _msiOpen=!_msiOpen;
+  try{localStorage.setItem('finance_v4_ui_msi_open',_msiOpen?'1':'0')}catch(e){}
+  const body=$('msi-body'),arrow=$('msi-arrow'),head=$('msi-head');
+  if(body)body.style.display=_msiOpen?'block':'none';
+  if(arrow)arrow.textContent=_msiOpen?'▾':'▸';
+  if(head)head.setAttribute('aria-expanded',_msiOpen?'true':'false');
+}
 function renderMSI(){
   const activeTx=S.transactions.filter(t=>t.msi&&msiStatus(t).remainingBalance>0);
   const el=$('msi-list');
-  if(!activeTx.length){el.innerHTML='<div style="color:var(--t3);font-size:13px">Sin MSI activos</div>';return}
+  if(!activeTx.length){el.innerHTML='<div class="slbl">MESES SIN INTERESES ACTIVOS</div><div style="color:var(--t3);font-size:13px">Sin MSI activos</div>';return}
   let totalThisMonth=0,totalRemaining=0;
   const rows=activeTx.map(t=>{
     const st=msiStatus(t);
@@ -5573,7 +5614,10 @@ function renderMSI(){
     <div class="m_ m_-exp"><div class="ml">Total este mes</div><div class="mv">${fmt(totalThisMonth)}</div></div>
     <div class="m_ m_-exp"><div class="ml">Total por pagar</div><div class="mv">${fmt(totalRemaining)}</div></div>
   </div>`;
-  el.innerHTML=summary+rows;
+  // Encabezado clicable (también con teclado): muestra cuántos MSI hay y
+  // cuánto falta por pagar aun con la lista cerrada.
+  const head=`<div class="slbl" id="msi-head" role="button" tabindex="0" aria-expanded="${_msiOpen}" style="cursor:pointer;user-select:none" onclick="toggleMsiList()" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();toggleMsiList()}"><span>MESES SIN INTERESES ACTIVOS (${activeTx.length})</span><span style="color:var(--pur)">· Por pagar ${fmt(totalRemaining)}</span><span id="msi-arrow" style="font-size:13px">${_msiOpen?'▾':'▸'}</span></div>`;
+  el.innerHTML=head+`<div id="msi-body" style="display:${_msiOpen?'block':'none'}">${summary+rows}</div>`;
 }
 function openMsiAdvanceM(txId){
   const tx=S.transactions.find(t=>t.id===txId);if(!tx||!tx.msi)return;
@@ -6373,9 +6417,21 @@ async function saveSub(){
   if(eid){
     const ok=await confirm_('¿Guardar cambios?','Se actualizará esta suscripción.','Guardar');
     if(!ok)return;
+    // Día de cobro: si NO cambiaste la fecha ni la frecuencia se conserva el
+    // guardado (la fecha puede estar "encogida" a 28 por un mes corto y
+    // recalcularlo aquí lo perdería); si cambiaste la fecha, manda la nueva.
+    const prev=Store.getSubscriptionById(eid);
+    if(!prev||prev.nextDate!==obj.nextDate||prev.freq!==obj.freq){
+      obj.billingDay=billingDayOf(obj.nextDate,obj.freq);
+      obj.billingDayTouched=obj.billingDay!==null||!!(prev&&prev.billingDayTouched);
+    }
     Store.updateSubscription(eid,obj);toast('Suscripción actualizada');
   }
-  else{Store.addSubscription(obj);toast('Suscripción agregada')}
+  else{
+    obj.billingDay=billingDayOf(obj.nextDate,obj.freq);
+    obj.billingDayTouched=obj.billingDay!==null;
+    Store.addSubscription(obj);toast('Suscripción agregada');
+  }
   cM('mo-sub');renderSubs();
 }
 function renderSubs(){
@@ -6455,10 +6511,15 @@ async function renewSub(id){
   // Fecha LOCAL (no UTC) y sin desbordar fin de mes (31-ene -> 28/29-feb).
   const d=dateLocal(s.nextDate);
   let nd;
-  if(s.freq==='monthly')nd=addMonthsLocal(d,1);
-  else if(s.freq==='annual')nd=addMonthsLocal(d,12);
+  // Día de cobro original: el guardado, o (en suscripciones creadas antes de
+  // este cambio) el de la fecha actual si es 29-31.
+  const anchor=s.billingDay||billingDayOf(s.nextDate,s.freq);
+  if(s.freq==='monthly')nd=addMonthsLocal(d,1,anchor);
+  else if(s.freq==='annual')nd=addMonthsLocal(d,12,anchor);
   else{nd=new Date(d.getFullYear(),d.getMonth(),d.getDate()+7);}
-  Store.updateSubscription(id,{nextDate:ymdLocal(nd)});
+  const patch={nextDate:ymdLocal(nd)};
+  if(anchor||s.billingDayTouched){patch.billingDay=anchor||null;patch.billingDayTouched=!!anchor||!!s.billingDayTouched}
+  Store.updateSubscription(id,patch);
   Store.addTransaction({type:'expense',amount:s.cost,date:td_(),time:tnow_(),description:s.name+' (suscripción)',category:s.category||'Entretenimiento',accountId:s.accountId,notes:'Renovación manual',subscriptionId:s.id});
   // Bug real encontrado: el filtro de mes de Transacciones (las flechitas
   // ‹ › arriba de la tabla) NO se resetea al cambiar de pantalla — si el
