@@ -2271,6 +2271,7 @@ async function pullFromSupabase(){
     save();
     refreshAllUI();
     toast('Datos sincronizados desde la nube');
+    shrinkExistingPhoto();
     if(localOnlyNW.length)syncNWHistoryUp(localOnlyNW); // sin await a propósito: es "best-effort"
   }catch(err){
     console.error('Error al traer datos de Supabase:',err);
@@ -2873,7 +2874,8 @@ function emptyAppState(){
     vehicles:[],investments:[],customSections:[],budgetRollover:false,nwHistory:[],budgetGoals:[]
   };
 }
-let S = JSON.parse(localStorage.getItem('finance_v4')||'null') || {
+// Estado inicial de una instalación nueva (con las categorías de ejemplo).
+function defaultAppState(){ return {
   accounts:[],transactions:[],
   categories:[
     {id:'ci1',name:'Sueldo',icon:'💼',type:'income',subs:['Salario','Freelance','Bono','Comisión']},
@@ -2894,7 +2896,50 @@ let S = JSON.parse(localStorage.getItem('finance_v4')||'null') || {
   dw:{metrics:true,txs:true,cats:true,accs:true,tdc:true,goals:true,budget:false,upcoming:true,subs:true,debts:true,health:true},
   notif:{bgt:true,dbt:true,sub:true,gol:true},
   vehicles:[],investments:[],customSections:[],budgetRollover:false,nwHistory:[],budgetGoals:[]
-};
+}; }
+
+// Carga del estado local, a prueba de datos dañados o incompletos.
+// BUGS REALES encontrados en la revisión: (1) un JSON dañado en localStorage
+// lanzaba una excepción al arrancar y dejaba la app inerte (ni siquiera la
+// pantalla de inicio de sesión respondía); (2) un estado guardado al que le
+// faltara cualquier clave (por ejemplo, una que agreguemos en el futuro)
+// rompía todas las pantallas. Ahora: si está dañado se guarda una COPIA en
+// 'finance_v4_corrupt_backup' y se arranca limpio (al iniciar sesión se
+// recupera lo sincronizado); si solo faltan claves o tienen un tipo
+// equivocado, se completan con los valores por defecto sin tocar el resto.
+function loadAppState(){
+  const def=defaultAppState();
+  let raw=null,loaded=null,corrupt=false;
+  try{raw=localStorage.getItem('finance_v4');}catch(e){raw=null}
+  if(raw){
+    try{loaded=JSON.parse(raw)}catch(err){corrupt=true;console.error('Datos locales dañados:',err)}
+  }
+  const isObj=v=>v!==null&&typeof v==='object'&&!Array.isArray(v);
+  if(!corrupt&&loaded!==null&&!isObj(loaded))corrupt=true; // p. ej. un número, un texto o una lista
+  if(corrupt){
+    try{localStorage.setItem('finance_v4_corrupt_backup',raw)}catch(e){}
+    window.__stateRecovery={kind:'corrupt'};
+    return def;
+  }
+  if(loaded===null)return def; // primera vez
+  const fixed=[];
+  for(const k of Object.keys(def)){
+    const d=def[k],v=loaded[k];
+    if(v===undefined||v===null){loaded[k]=d;fixed.push(k);continue}
+    if(Array.isArray(d)&&!Array.isArray(v)){loaded[k]=d;fixed.push(k);continue}
+    if(isObj(d)){
+      if(!isObj(v)){loaded[k]=d;fixed.push(k);continue}
+      for(const sk of Object.keys(d))if(v[sk]===undefined)v[sk]=d[sk]; // completa subclaves (settings, dw, notif)
+      continue;
+    }
+    if(typeof d==='boolean'&&typeof v!=='boolean'){loaded[k]=d;fixed.push(k)}
+  }
+  if(fixed.length){console.info('Estado local completado con valores por defecto:',fixed.join(', '));window.__stateRecovery={kind:'repaired',keys:fixed}}
+  return loaded;
+}
+let S = loadAppState();
+// Aviso (solo si hubo datos dañados; completar claves nuevas es normal y silencioso).
+setTimeout(()=>{if(window.__stateRecovery&&window.__stateRecovery.kind==='corrupt'&&typeof toast==='function')toast('Los datos locales estaban dañados: se guardó una copia y se empezó limpio. Inicia sesión para recuperar lo sincronizado.',false)},1500);
 
 function save(){
   try{
@@ -6912,9 +6957,52 @@ function saveProfileFull(){
   save();pushSettings();renderSettings();toggleProfileEdit();toast('Perfil guardado');
 }
 function saveProfile(){saveProfileFull()}
-function onProfPhotoChange(e){
-  const f=e.target.files[0];if(!f)return;
-  const r=new FileReader();r.onload=ev=>{S.settings.photo=ev.target.result;save();pushSettings();renderProfAvatar();toast('Foto actualizada')};r.readAsDataURL(f);
+// La foto de perfil vive en localStorage Y se sube a la nube dentro de los
+// ajustes. BUG REAL: se guardaba tal cual la elegías (una foto de celular
+// puede pesar más de 5 MB en base64) y al pasarse del límite del navegador
+// save() fallaba para TODO, incluidos los movimientos nuevos. Ahora se recorta
+// al cuadrado central y se reduce a 256×256 (JPEG): unos 15–30 KB.
+function shrinkImageToDataURL(src,max=256,quality=0.85){
+  return new Promise((resolve,reject)=>{
+    const img=new Image();
+    img.onload=()=>{
+      try{
+        const w=img.naturalWidth||img.width,h=img.naturalHeight||img.height;
+        const side=Math.min(w,h);
+        if(!side){reject(new Error('imagen vacía'));return}
+        const out=Math.min(max,side);
+        const c=document.createElement('canvas');c.width=out;c.height=out;
+        const ctx=c.getContext('2d');
+        ctx.fillStyle='#fff';ctx.fillRect(0,0,out,out); // fondo blanco por si es PNG con transparencia
+        ctx.drawImage(img,(w-side)/2,(h-side)/2,side,side,0,0,out,out);
+        resolve(c.toDataURL('image/jpeg',quality));
+      }catch(err){reject(err)}
+    };
+    img.onerror=()=>reject(new Error('no se pudo leer la imagen'));
+    img.src=src;
+  });
+}
+async function onProfPhotoChange(e){
+  const input=e.target,f=input.files[0];if(!f)return;
+  if(!/^image\//.test(f.type||'')){toast('Elige un archivo de imagen',false);input.value='';return}
+  const url=URL.createObjectURL(f); // evita crear en memoria el base64 completo de la foto original
+  try{
+    S.settings.photo=await shrinkImageToDataURL(url);
+    save();pushSettings();renderProfAvatar();toast('Foto actualizada');
+  }catch(err){
+    console.error('Foto de perfil:',err);
+    toast('No se pudo procesar la foto — prueba con otra imagen',false);
+  }finally{URL.revokeObjectURL(url);input.value=''}
+}
+// Fotos grandes ya guardadas (de antes de este cambio, o traídas de la nube):
+// se reducen una sola vez y se vuelve a subir la versión chica.
+async function shrinkExistingPhoto(){
+  const p=S.settings&&S.settings.photo;
+  if(typeof p!=='string'||p.length<150000)return;
+  try{
+    S.settings.photo=await shrinkImageToDataURL(p);
+    save();pushSettings();renderProfAvatar();
+  }catch(err){console.warn('No se pudo reducir la foto guardada:',err)}
 }
 function renderProfAvatar(){
   const img=$('prof-avatar-img');const emoji=$('prof-avatar-emoji');
@@ -7085,6 +7173,7 @@ if(!S.customSections)S.customSections=[];
 if(S.budgetRollover===undefined)S.budgetRollover=false;
 // Unifica las claves de notificaciones de instalaciones anteriores (ver normNotif).
 S.notif=normNotif(S.notif);
+setTimeout(()=>{shrinkExistingPhoto()},0);
 if(!Array.isArray(S.budgetGoals))S.budgetGoals=[];
 // Migración suave: presupuestos guardados ANTES de que existiera el
 // concepto de mes (sin campo "period") se tratan como si fueran del mes
