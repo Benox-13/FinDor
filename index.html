@@ -556,7 +556,7 @@ body.modal-open #bottom-nav{display:none !important}
   <div class="card">
     <div style="display:flex;gap:8px;margin-bottom:8px;flex-wrap:wrap">
       <div class="search-wrap" style="flex:1;min-width:160px"><span class="si">⌕</span><input class="fc" type="text" id="tx-search" placeholder="Buscar..." oninput="renderTxP()" style="padding-left:32px"></div>
-      <select class="fc" id="txft" onchange="renderTxP()" style="width:125px"><option value="">Tipo: todos</option><option value="income">Ingresos</option><option value="expense">Gastos</option><option value="transfer">Transferencias</option></select>
+      <select class="fc" id="txft" onchange="renderTxP()" style="width:125px"><option value="">Tipo: todos</option><option value="income">Ingresos</option><option value="expense">Gastos</option><option value="transfer">Transferencias</option><option value="tp">Terceros</option></select>
       <select class="fc" id="txacc" onchange="onTxAccChange()" style="width:160px"><option value="">Todas las cuentas</option></select>
       <select class="fc" id="txcat" onchange="renderTxP()" style="width:160px"><option value="">Todas las categorías</option></select>
     </div>
@@ -577,6 +577,7 @@ body.modal-open #bottom-nav{display:none !important}
         <span style="font-size:11px;color:var(--t3)">Periodo de facturación</span>
       </div>
     </div>
+    <div id="tp-ops-card"></div>
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;flex-wrap:wrap;gap:8px">
       <div id="tx-summary-bar" style="font-size:12px;color:var(--t3)"></div>
       <div style="display:flex;gap:6px">
@@ -1021,6 +1022,21 @@ body.modal-open #bottom-nav{display:none !important}
       <div class="g2">
         <div class="fg"><label class="fl" id="tx-acc-lbl">Cuenta</label><select class="fc" id="tx-acc" onchange="onAccChange()"></select></div>
         <div class="fg" id="tx-acc2-g" style="display:none"><label class="fl">Cuenta destino</label><select class="fc" id="tx-acc2"></select></div>
+      </div>
+      <!-- OPERACIÓN CON TERCEROS (solo en Transferencia) -->
+      <div id="tx-tp-wrap" style="display:none;margin-bottom:12px">
+        <div style="display:flex;align-items:center;gap:8px;padding:9px 12px;background:var(--bg3);border-radius:var(--r2);border:1px solid var(--bdr2);margin-bottom:8px">
+          <input type="checkbox" id="tx-tp" onchange="togTp()">
+          <label for="tx-tp" style="font-size:13px;color:var(--t2);cursor:pointer">🤝 Operación con terceros (dinero que no es mío)</label>
+        </div>
+        <div id="tx-tp-opts" style="display:none">
+          <div class="fg"><label class="fl">Operación</label><select class="fc" id="tx-tp-op" onchange="onTpOpChange()"></select></div>
+          <div class="g2">
+            <div class="fg"><label class="fl">Dirección</label><select class="fc" id="tx-tp-dir"><option value="in">Entrada (me llega dinero)</option><option value="out">Salida (envío / entrego dinero)</option></select></div>
+            <div class="fg"><label class="fl">Tercero</label><input class="fc" type="text" id="tx-tp-name" maxlength="60" placeholder="Ej: Luis"></div>
+          </div>
+          <div style="font-size:11px;color:var(--t3);line-height:1.5">Actualiza el saldo y el historial de la cuenta, pero NO cuenta como ingreso, gasto, presupuesto, estadística ni patrimonio. La operación queda "Completada" sola cuando registras una entrada y una salida del mismo monto.</div>
+        </div>
       </div>
       <!-- MSI SECTION -->
       <div id="tx-msi-wrap" style="display:none;margin-bottom:12px">
@@ -2126,6 +2142,7 @@ async function pullFromSupabase(){
         notes:t.notes||'',msi:t.msi||null,subscriptionId:t.subscription_id||undefined,
         debtId:t.debt_id||undefined,goalId:t.goal_id||undefined,
         transferDirection:t.transfer_direction||undefined,linkedTxId:t.linked_tx_id||undefined,
+        thirdPartyRef:t.third_party_ref||undefined,thirdPartyStatus:t.third_party_status||undefined,thirdPartyName:t.third_party_name||undefined,
       };
     });
 
@@ -2372,7 +2389,11 @@ function transactionToCloud(t,catId,subcatId){
     account_id:t.accountId||null,related_account_id:t.accountId2||null,notes:t.notes||null,
     msi:t.msi||null,updated_at:timeNorm?`${t.date}T${timeNorm}`:new Date().toISOString(),
     debt_id:t.debtId||null,goal_id:t.goalId||null,subscription_id:t.subscriptionId||null,
-    transfer_direction:t.transferDirection||null,linked_tx_id:t.linkedTxId||null};
+    transfer_direction:t.transferDirection||null,linked_tx_id:t.linkedTxId||null,
+    // Operaciones con terceros: estas 3 columnas SOLO se envían cuando el
+    // movimiento es parte de una operación con terceros. Así, ningún otro
+    // movimiento depende de que las columnas existan en Supabase.
+    ...(t.thirdPartyRef?{third_party_ref:t.thirdPartyRef,third_party_status:t.thirdPartyStatus||'pending',third_party_name:t.thirdPartyName||null}:{})};
 }
 function debtToCloud(d,direction){
   // extra: columna jsonb ya existente para el desglose opcional de capital+
@@ -2907,6 +2928,25 @@ function defaultAppState(){ return {
 // 'finance_v4_corrupt_backup' y se arranca limpio (al iniciar sesión se
 // recupera lo sincronizado); si solo faltan claves o tienen un tipo
 // equivocado, se completan con los valores por defecto sin tocar el resto.
+// Completa en el lugar las claves que falten (o tengan un tipo equivocado)
+// con las del estado por defecto. Devuelve la lista de claves corregidas.
+// La usan la carga al arrancar y "Importar respaldo".
+function repairAppState(loaded,def){
+  const isObj=v=>v!==null&&typeof v==='object'&&!Array.isArray(v);
+  const fixed=[];
+  for(const k of Object.keys(def)){
+    const d=def[k],v=loaded[k];
+    if(v===undefined||v===null){loaded[k]=d;fixed.push(k);continue}
+    if(Array.isArray(d)&&!Array.isArray(v)){loaded[k]=d;fixed.push(k);continue}
+    if(isObj(d)){
+      if(!isObj(v)){loaded[k]=d;fixed.push(k);continue}
+      for(const sk of Object.keys(d))if(v[sk]===undefined)v[sk]=d[sk]; // completa subclaves (settings, dw, notif)
+      continue;
+    }
+    if(typeof d==='boolean'&&typeof v!=='boolean'){loaded[k]=d;fixed.push(k)}
+  }
+  return fixed;
+}
 function loadAppState(){
   const def=defaultAppState();
   let raw=null,loaded=null,corrupt=false;
@@ -2922,18 +2962,7 @@ function loadAppState(){
     return def;
   }
   if(loaded===null)return def; // primera vez
-  const fixed=[];
-  for(const k of Object.keys(def)){
-    const d=def[k],v=loaded[k];
-    if(v===undefined||v===null){loaded[k]=d;fixed.push(k);continue}
-    if(Array.isArray(d)&&!Array.isArray(v)){loaded[k]=d;fixed.push(k);continue}
-    if(isObj(d)){
-      if(!isObj(v)){loaded[k]=d;fixed.push(k);continue}
-      for(const sk of Object.keys(d))if(v[sk]===undefined)v[sk]=d[sk]; // completa subclaves (settings, dw, notif)
-      continue;
-    }
-    if(typeof d==='boolean'&&typeof v!=='boolean'){loaded[k]=d;fixed.push(k)}
-  }
+  const fixed=repairAppState(loaded,def);
   if(fixed.length){console.info('Estado local completado con valores por defecto:',fixed.join(', '));window.__stateRecovery={kind:'repaired',keys:fixed}}
   return loaded;
 }
@@ -3098,6 +3127,126 @@ const Store = {
     }
     return updated;
   },
+  // ==================== OPERACIONES CON TERCEROS ====================
+  // Dinero que pasa temporalmente por tus cuentas pero NO es tuyo. Una
+  // operación son hasta DOS movimientos de un solo lado (una entrada y una
+  // salida) que comparten thirdPartyRef. Se guardan como type:'transfer' a
+  // propósito: la app ya excluye las transferencias de ingresos, gastos,
+  // presupuestos y análisis, así que esa exclusión viene sola. Los saldos y
+  // el historial de las cuentas se actualizan con addTransaction de siempre.
+  // Lo único que hay que descontar aparte es el PATRIMONIO (thirdPartyHeld).
+  thirdPartyLegs(ref){return S.transactions.filter(t=>t.thirdPartyRef===ref)},
+  thirdPartyOps(){
+    const map=new Map();
+    S.transactions.filter(t=>t.thirdPartyRef).forEach(t=>{
+      if(!map.has(t.thirdPartyRef))map.set(t.thirdPartyRef,{ref:t.thirdPartyRef,name:'',inLeg:null,outLeg:null,legs:[]});
+      const op=map.get(t.thirdPartyRef);
+      op.legs.push(t);
+      if(t.transferDirection==='in')op.inLeg=t;else if(t.transferDirection==='out')op.outLeg=t;
+      if(t.thirdPartyName)op.name=t.thirdPartyName;
+    });
+    const ops=[...map.values()];
+    ops.forEach(op=>{
+      // "Completada" solo si TODAS sus piezas lo dicen (si una quedó atrás por
+      // un fallo de sincronización, se trata como pendiente).
+      op.status=op.legs.every(l=>l.thirdPartyStatus==='completed')?'completed':'pending';
+      op.diff=M((op.inLeg?M(op.inLeg.amount):0)-(op.outLeg?M(op.outLeg.amount):0));
+      op.date=op.legs.map(l=>l.date).sort().pop()||'';
+    });
+    ops.sort((a,b)=>(a.status===b.status?0:a.status==='pending'?-1:1)||(b.date>a.date?1:b.date<a.date?-1:0));
+    return ops;
+  },
+  // Dinero de terceros retenido hoy en tus cuentas (entradas − salidas). Solo
+  // cuenta piezas en cuentas que aún existen y no son tarjetas de crédito
+  // (las únicas cuyo saldo entra en el patrimonio). Es lo que se resta del
+  // patrimonio. Si salió dinero tuyo primero, da negativo (te lo deben).
+  thirdPartyHeld(){
+    return M(S.transactions.reduce((sum,t)=>{
+      if(!t.thirdPartyRef)return sum;
+      const a=this.getAccountById(t.accountId);
+      if(!a||a.type==='credit')return sum;
+      return sum+(t.transferDirection==='in'?M(t.amount):t.transferDirection==='out'?-M(t.amount):0);
+    },0));
+  },
+  // Lo mismo por cuenta, pero SOLO de operaciones pendientes (para la línea
+  // "Incluye $X de terceros" del detalle de la cuenta).
+  thirdPartyHeldByAccount(accId){
+    const pending=new Set(this.thirdPartyOps().filter(o=>o.status==='pending').map(o=>o.ref));
+    return M(S.transactions.reduce((sum,t)=>{
+      if(!t.thirdPartyRef||t.accountId!==accId||!pending.has(t.thirdPartyRef))return sum;
+      return sum+(t.transferDirection==='in'?M(t.amount):t.transferDirection==='out'?-M(t.amount):0);
+    },0));
+  },
+  // ¿Ya existe una pieza igual (misma cuenta, dirección, monto y fecha)?
+  findThirdPartyDuplicate({direction,accountId,amount,date}){
+    return S.transactions.find(t=>t.thirdPartyRef&&t.transferDirection===direction&&t.accountId===accountId&&M(t.amount)===M(amount)&&t.date===date)||null;
+  },
+  addThirdPartyLeg({direction,accountId,amount,date,time,name,opRef,notes,description}){
+    if(direction!=='in'&&direction!=='out')return{ok:false,error:'Dirección inválida'};
+    const amt=M(amount);
+    if(!isValidAmount(amt))return{ok:false,error:'El monto debe ser mayor a 0'};
+    if(!date)return{ok:false,error:'La fecha es requerida'};
+    const acc=this.getAccountById(accountId);
+    if(!acc)return{ok:false,error:'La cuenta no existe'};
+    if(acc.type==='credit')return{ok:false,error:'Las operaciones con terceros no se registran en tarjetas de crédito'};
+    if(acc.locked)return{ok:false,error:`"${acc.name}" está bloqueada — desbloquéala para registrar el movimiento`};
+    let ref=opRef||null,tpName=String(name||'').trim();
+    if(ref){
+      // Vincular a una operación existente: debe seguir pendiente y NO tener ya una pieza en esa dirección (evita duplicidades).
+      const op=this.thirdPartyOps().find(o=>o.ref===ref);
+      if(!op)return{ok:false,error:'Esa operación ya no existe'};
+      if(op.status==='completed')return{ok:false,error:'Esa operación ya está completada'};
+      if(direction==='in'&&op.inLeg)return{ok:false,error:'Esa operación ya tiene su entrada'};
+      if(direction==='out'&&op.outLeg)return{ok:false,error:'Esa operación ya tiene su salida'};
+      tpName=op.name;
+    }
+    if(!tpName)return{ok:false,error:'Escribe el nombre del tercero'};
+    if(tpName.length>60)return{ok:false,error:'El nombre del tercero es muy largo (máximo 60 caracteres)'};
+    ref=ref||uid();
+    const cat=ensureCategory('Transferencia','expense');
+    const desc=(description||'').trim()||`${direction==='in'?'Entrada de':'Salida a'} tercero: ${tpName}`;
+    // El estado final se calcula ANTES de crear la pieza, para que nazca ya con
+    // su estado correcto y se suba UNA sola vez. (Antes se creaba "pendiente" y
+    // se corregía enseguida: el segundo envío podía llegar a la nube antes de
+    // que la fila existiera y perderse sin avisar.) Solo la OTRA pieza, que ya
+    // existe desde antes, se actualiza.
+    const others=this.thirdPartyLegs(ref);
+    const opposite=others.find(l=>l.transferDirection!==direction);
+    const finalStatus=(opposite&&M(opposite.amount)===amt)?'completed':'pending';
+    const tx=this.addTransaction({type:'transfer',amount:amt,date,time:time||tnow_(),description:desc,category:cat.name,accountId,
+      transferDirection:direction,notes:notes||'',thirdPartyRef:ref,thirdPartyStatus:finalStatus,thirdPartyName:tpName});
+    others.forEach(l=>{if(l.thirdPartyStatus!==finalStatus)this._patchTxNoBalance(l.id,{thirdPartyStatus:finalStatus})});
+    return{ok:true,tx,ref};
+  },
+  // Cambia SOLO campos de operación con terceros (estado) sin pasar por la
+  // reversa/aplicación de saldos: no hay forma de que esto toque un saldo.
+  _patchTxNoBalance(id,patch){
+    const idx=S.transactions.findIndex(t=>t.id===id);
+    if(idx<0)return;
+    S.transactions[idx]={...S.transactions[idx],...patch};
+    save();
+    // upsert por id (isUpdate=false) a propósito: un UPDATE sobre una fila que aún no llegó a la nube no da error y se pierde.
+    if(sb&&currentUserId){enqueueTxSync(id,'upsert');this._pushTransaction(S.transactions[idx],false)}
+  },
+  // Estado automático: "completada" cuando hay entrada y salida del MISMO monto.
+  recomputeThirdPartyStatus(ref){
+    const legs=this.thirdPartyLegs(ref);
+    if(!legs.length)return;
+    const inL=legs.find(l=>l.transferDirection==='in'),outL=legs.find(l=>l.transferDirection==='out');
+    const status=(inL&&outL&&M(inL.amount)===M(outL.amount))?'completed':'pending';
+    legs.forEach(l=>{if(l.thirdPartyStatus!==status)this._patchTxNoBalance(l.id,{thirdPartyStatus:status})});
+  },
+  // Cambio manual de estado. "Completada" exige que existan la entrada y la
+  // salida (aunque difieran en monto: esa diferencia queda excluida de tu patrimonio).
+  setThirdPartyStatus(ref,status){
+    if(status!=='pending'&&status!=='completed')return{ok:false,error:'Estado inválido'};
+    const legs=this.thirdPartyLegs(ref);
+    if(!legs.length)return{ok:false,error:'La operación ya no existe'};
+    if(status==='completed'&&!(legs.some(l=>l.transferDirection==='in')&&legs.some(l=>l.transferDirection==='out')))
+      return{ok:false,error:'Para completarla falta registrar la entrada o la salida'};
+    legs.forEach(l=>{if(l.thirdPartyStatus!==status)this._patchTxNoBalance(l.id,{thirdPartyStatus:status})});
+    return{ok:true};
+  },
   deleteTransaction(id){
     const tx=this.getTransactionById(id);
     if(!tx)return;
@@ -3117,6 +3266,7 @@ const Store = {
     if(tx.debtId)this.recalcDebtPaid(tx.debtId);
     if(tx.goalId)this.recalcGoalSaved(tx.goalId);
     save();
+    if(tx.thirdPartyRef)this.recomputeThirdPartyStatus(tx.thirdPartyRef); // la operación vuelve a "pendiente" si perdió una pieza
     if(sb&&currentUserId&&isUUID(id)){
       // Igual: anotamos el borrado en la cola ANTES de intentarlo. Si la
       // página se recarga a la mitad, el borrado sigue pendiente en la cola
@@ -3280,7 +3430,7 @@ const Store = {
   // función le entrega.
   queryTransactions({type,accountId,category,dateFrom,dateTo,monthPrefix,search,sortBy='date',sortDir='desc'}={}){
     let txs=[...S.transactions];
-    if(type)txs=txs.filter(t=>t.type===type);
+    if(type)txs=txs.filter(t=>type==='tp'?!!t.thirdPartyRef:t.type===type);
     if(accountId)txs=txs.filter(t=>t.accountId===accountId);
     if(category)txs=txs.filter(t=>t.category===category);
     if(dateFrom&&dateTo)txs=txs.filter(t=>t.date>=dateFrom&&t.date<=dateTo);
@@ -3954,7 +4104,8 @@ function updateNW(){
   const assets=S.accounts.reduce((a,x)=>a+(x.type==='credit'?0:M(x.balance||0)),0);
   const owedToMe=S.debts_owed.reduce((a,d)=>a+Math.max(0,d.amount-(d.paid||0)),0);
   const iOwe=S.debts_iowe.reduce((a,d)=>a+Math.max(0,d.amount-(d.paid||0)),0);
-  const nw=assets+owedToMe-iOwe;
+  // Se descuenta el dinero de terceros retenido: no es patrimonio tuyo.
+  const nw=assets+owedToMe-iOwe-Store.thirdPartyHeld();
   $('snw').textContent=fmt(nw);
   return nw;
 }
@@ -4507,6 +4658,7 @@ function openTxM(editId=null){
   if(editId){
     const tx=S.transactions.find(t=>t.id===editId);if(!tx)return;
     if(tx.linkedTxId){toast('Esta transacción es la mitad de una transferencia — bórrala (se borra el par completo) y créala de nuevo si necesitas cambiarla.',false);editingTxId=null;return}
+    if(tx.thirdPartyRef){toast('Las operaciones con terceros no se editan aquí: elimina el movimiento y regístralo de nuevo, o cambia su estado desde "Operaciones con terceros".',false);editingTxId=null;return}
     const lockedAcc=[tx.accountId,tx.accountId2].filter(Boolean).map(id=>Store.getAccountById(id)).find(a=>a?.locked);
     if(lockedAcc){toast(`"${lockedAcc.name}" está bloqueada — no se pueden editar movimientos de esta cuenta.`,false);return}
     $('tx-modal-title').textContent='Editar transacción';
@@ -4552,6 +4704,7 @@ function setTxT(t){
   $('tx-subcat-g').style.display=t==='transfer'?'none':'block';
   $('tx-acc-lbl').textContent=t==='transfer'?'Cuenta origen':'Cuenta';
   fillTxCatSel();onAccChange();
+  syncTpUI();
 }
 
 function fillTxSelects(){
@@ -4817,7 +4970,7 @@ async function saveTx(){
   if(txType!=='transfer'&&!cat){toast('Selecciona una categoría',false);return}
   const accId=$('tx-acc').value;
   if(!accId){toast('Selecciona una cuenta',false);return}
-  if(txType==='transfer'&&!$('tx-acc2').value){toast('Selecciona la cuenta destino',false);return}
+  if(txType==='transfer'&&!isTpMode()&&!$('tx-acc2').value){toast('Selecciona la cuenta destino',false);return}
   const time=$('tx-time').value||tnow_();
   const msiOn=$('tx-msi').checked&&txType==='expense';
   const msiMoRaw=$('tx-msi-mo').value;
@@ -4843,6 +4996,8 @@ async function saveTx(){
     Store.updateTransaction(editingTxId,patch);
     cM('mo-tx');renderTxP();renderDash();toast('Transacción actualizada');saveBtn.disabled=false;return;
   }
+
+  if(txType==='transfer'&&isTpMode()){await saveThirdPartyLeg(amt,dt,time,accId);return}
 
   saveBtn.disabled=true;
 
@@ -4878,6 +5033,129 @@ async function saveTx(){
     msi:msiOn?{months:msiMo,monthly:amt/msiMo,advancePaid:0}:null};
   Store.addTransaction(tx);
   cM('mo-tx');renderDash();renderTxP();toast('Transacción guardada');saveBtn.disabled=false;
+}
+
+// ==================== OPERACIONES CON TERCEROS: interfaz ====================
+// Modo "terceros" del formulario de Transferencia. Con el interruptor
+// apagado todo funciona exactamente como siempre.
+let _tpAccFiltered=false;
+function isTpMode(){const c=$('tx-tp');return !!(c&&c.checked&&txType==='transfer'&&!editingTxId)}
+function syncTpUI(){
+  const wrap=$('tx-tp-wrap');if(!wrap)return;
+  const show=txType==='transfer'&&!editingTxId;
+  wrap.style.display=show?'block':'none';
+  if(!show&&$('tx-tp').checked)$('tx-tp').checked=false;
+  applyTpMode();
+}
+function applyTpMode(){
+  const on=isTpMode();
+  $('tx-tp-opts').style.display=on?'block':'none';
+  $('tx-acc2-g').style.display=(txType==='transfer'&&!on)?'block':'none';
+  $('tx-acc-lbl').textContent=txType==='transfer'?(on?'Cuenta':'Cuenta origen'):'Cuenta';
+  const sel=$('tx-acc'),cur=sel.value;
+  const opt=a=>`<option value="${a.id}">${esc(a.name)} (${accBalanceLabel(a)})</option>`;
+  if(on){
+    // Solo efectivo y débito (las tarjetas de crédito quedan fuera).
+    sel.innerHTML='<option value="">Selecciona una cuenta</option>'+selectableAccounts().filter(a=>a.type!=='credit').map(opt).join('');
+    if(cur&&[...sel.options].some(o=>o.value===cur))sel.value=cur;
+    _tpAccFiltered=true;
+    fillTpOpSelect();
+  }else if(_tpAccFiltered){
+    sel.innerHTML='<option value="">Selecciona una cuenta</option>'+selectableAccounts().map(opt).join('');
+    if(cur&&[...sel.options].some(o=>o.value===cur))sel.value=cur;
+    _tpAccFiltered=false;
+  }
+}
+function togTp(){
+  applyTpMode();
+  if(isTpMode()){$('tx-tp-name').value='';$('tx-tp-dir').value='in';fillTpOpSelect();onTpOpChange()}
+}
+function fillTpOpSelect(){
+  const sel=$('tx-tp-op');if(!sel)return;
+  const cur=sel.value;
+  // Solo operaciones pendientes a las que les falta una pieza (así no se puede duplicar entrada o salida).
+  const open=Store.thirdPartyOps().filter(o=>o.status==='pending'&&(!o.inLeg||!o.outLeg));
+  sel.innerHTML='<option value="">➕ Nueva operación</option>'+open.map(o=>{
+    const have=o.inLeg?`entrada ${fmt(o.inLeg.amount)}`:`salida ${fmt(o.outLeg.amount)}`;
+    return`<option value="${o.ref}">${esc(o.name)} · tiene ${have} (falta ${o.inLeg?'la salida':'la entrada'})</option>`;
+  }).join('');
+  if(cur&&open.some(o=>o.ref===cur))sel.value=cur;
+}
+function onTpOpChange(){
+  const ref=$('tx-tp-op').value,nameEl=$('tx-tp-name'),dirEl=$('tx-tp-dir');
+  const op=ref?Store.thirdPartyOps().find(o=>o.ref===ref):null;
+  if(!op){$('tx-tp-op').value='';nameEl.disabled=false;dirEl.disabled=false;return}
+  // Al vincular, el nombre y la dirección que falta quedan fijos.
+  nameEl.value=op.name;nameEl.disabled=true;
+  dirEl.value=op.inLeg?'out':'in';dirEl.disabled=true;
+  const amtEl=$('tx-amt');if(!amtEl.value)amtEl.value=(op.inLeg||op.outLeg).amount;
+}
+async function saveThirdPartyLeg(amt,dt,time,accId){
+  const saveBtn=$('tx-save-btn');
+  const direction=$('tx-tp-dir').value,name=$('tx-tp-name').value.trim(),opRef=$('tx-tp-op').value||null;
+  saveBtn.disabled=true; // bloquea el doble toque, también mientras se espera la confirmación
+  try{
+    const dup=Store.findThirdPartyDuplicate({direction,accountId:accId,amount:amt,date:dt});
+    if(dup&&!(opRef&&dup.thirdPartyRef===opRef)){
+      const ok=await confirm_('¿Posible duplicado?',`Ya registraste ${direction==='in'?'una entrada':'una salida'} de ${fmt(amt)} el ${fmtDate(dt)} en esta cuenta (${dup.thirdPartyName||'terceros'}). ¿Registrar de todos modos?`,'Registrar');
+      if(!ok)return;
+    }
+    const res=Store.addThirdPartyLeg({direction,accountId:accId,amount:amt,date:dt,time,name,opRef,notes:$('tx-notes').value,description:$('tx-dsc').value});
+    if(!res.ok){toast(res.error,false);return}
+    const op=Store.thirdPartyOps().find(o=>o.ref===res.ref);
+    cM('mo-tx');renderDash();renderTxP();renderAccounts();
+    toast(op&&op.status==='completed'?'Operación con terceros completada ✓':'Movimiento registrado — la operación queda pendiente');
+  }finally{saveBtn.disabled=false}
+}
+// Abre el formulario ya en modo terceros, vinculado a una operación pendiente.
+function openTpLegM(ref){
+  openTxM();setTxT('transfer');
+  $('tx-tp').checked=true;applyTpMode();
+  fillTpOpSelect();$('tx-tp-op').value=ref;onTpOpChange();
+}
+async function tpSetStatus(ref,status){
+  const op=Store.thirdPartyOps().find(o=>o.ref===ref);if(!op)return;
+  if(status==='completed'&&op.diff!==0){
+    const ok=await confirm_('¿Completar con diferencia?',`Entrada y salida difieren en ${fmt(Math.abs(op.diff))}. Esa diferencia seguirá sin contar como tuya (ni en ingresos ni en patrimonio) hasta que la registres aparte.`,'Completar');
+    if(!ok)return;
+  }
+  const r=Store.setThirdPartyStatus(ref,status);
+  if(!r.ok){toast(r.error,false);return}
+  renderTxP();renderAccounts();toast(status==='completed'?'Operación completada':'Operación reabierta');
+}
+// Tarjeta desplegable en Transacciones (empieza cerrada; recuerda tu elección).
+let _tpOpen=(()=>{try{return localStorage.getItem('finance_v4_ui_tp_open')==='1'}catch(e){return false}})();
+function toggleTpCard(){
+  _tpOpen=!_tpOpen;
+  try{localStorage.setItem('finance_v4_ui_tp_open',_tpOpen?'1':'0')}catch(e){}
+  renderTpOps();
+}
+function renderTpOps(){
+  const el=$('tp-ops-card');if(!el)return;
+  const ops=Store.thirdPartyOps();
+  if(!ops.length){el.innerHTML='';return}
+  const pend=ops.filter(o=>o.status==='pending');
+  const done=ops.filter(o=>o.status==='completed');
+  const held=Store.thirdPartyHeld();
+  const accName=id=>{const a=Store.getAccountById(id);return a?esc(a.name):'cuenta eliminada'};
+  const leg=(l,dir,op)=>{
+    const lbl=dir==='in'?'⬇ Entrada':'⬆ Salida';
+    if(l)return`<div>${lbl} <strong style="font-family:'DM Mono',monospace">${fmt(l.amount)}</strong> · ${accName(l.accountId)} · ${fmtDate(l.date)}</div>`;
+    return`<div style="color:var(--t3)">${lbl}: falta registrar ${op.status==='pending'?`<button class="btn bg_ sm" style="font-size:11px;padding:3px 9px;margin-left:6px" onclick="openTpLegM('${op.ref}')">+ Registrar</button>`:''}</div>`;
+  };
+  const card=op=>{
+    const isP=op.status==='pending';
+    const diffLine=(op.inLeg&&op.outLeg&&op.diff!==0)?`<div style="color:var(--yel);font-size:11px;margin-top:4px">Diferencia: ${fmt(Math.abs(op.diff))} ${op.diff>0?'(entró de más: sigue siendo de terceros)':'(salió de más: te lo deben)'}</div>`:'';
+    const btn=isP
+      ?((op.inLeg&&op.outLeg)?`<button class="btn bg_ sm" style="font-size:11px;margin-top:8px" onclick="tpSetStatus('${op.ref}','completed')">Marcar completada</button>`:'')
+      :`<button class="btn bg_ sm" style="font-size:11px;margin-top:8px" onclick="tpSetStatus('${op.ref}','pending')">Reabrir</button>`;
+    return`<div class="card" style="padding:12px 14px;margin-bottom:8px;border-left:3px solid ${isP?'var(--yel)':'var(--inc)'};${isP?'':'opacity:.8'}">
+      <div style="display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap;align-items:center"><div><strong>${esc(op.name)}</strong> <span style="font-size:10px;padding:2px 7px;border-radius:99px;border:1px solid ${isP?'var(--yel)':'var(--inc)'};color:${isP?'var(--yel)':'var(--inc)'}">${isP?'Pendiente':'Completada'}</span></div></div>
+      <div style="font-size:12px;margin-top:6px;line-height:1.7">${leg(op.inLeg,'in',op)}${leg(op.outLeg,'out',op)}</div>${diffLine}${btn}</div>`;
+  };
+  const head=`<div class="slbl" role="button" tabindex="0" aria-expanded="${_tpOpen}" style="cursor:pointer;user-select:none" onclick="toggleTpCard()" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();toggleTpCard()}"><span>🤝 Operaciones con terceros (${pend.length} pendiente${pend.length===1?'':'s'})</span>${held!==0?`<span style="color:var(--yel)">· ${held>0?'Retenido':'Te deben'} ${fmt(Math.abs(held))}</span>`:''}<span style="font-size:13px">${_tpOpen?'▾':'▸'}</span></div>`;
+  const body=`<div style="display:${_tpOpen?'block':'none'};margin-bottom:12px">${pend.map(card).join('')}${done.slice(0,10).map(card).join('')}${done.length>10?`<div style="font-size:11px;color:var(--t3);text-align:center">y ${done.length-10} completada${done.length-10===1?'':'s'} más (están en el historial)</div>`:''}</div>`;
+  el.innerHTML=head+body;
 }
 
 function populateTxAccFilter(){
@@ -5019,6 +5297,7 @@ function computeTDCDailyAccumulated(accountId,periodStartStr,periodEndStr){
 }
 
 function renderTxP(){
+  renderTpOps();
   // Repopulate account/category filter options if empty
   const accSel=$('txacc');
   if(accSel&&accSel.options.length<=1)populateTxAccFilter();
@@ -5070,6 +5349,7 @@ function renderTxP(){
     metaParts.push(a?esc(a.name):'Sin cuenta');
     if(t.time)metaParts.push(fmtTime(t.time));
     if(t.msi)metaParts.push(`${t.msi.months} MSI`);
+    if(t.thirdPartyRef)metaParts.push(`🤝 ${esc(t.thirdPartyName||'Terceros')} · ${t.thirdPartyStatus==='completed'?'Completada':'Pendiente'}`);
     // Signo del monto: gasto siempre resta, ingreso siempre suma; una
     // transferencia resta o suma según de qué lado esté esta mitad
     // (formato nuevo con transferDirection) — el formato viejo (una sola
@@ -5374,6 +5654,7 @@ function accountSummaryHTML(a){
         <span class="bdg ${tc[a.type]||'bdg-n'}">${tl[a.type]||a.type}</span>
         <div style="font-family:'DM Mono',monospace;font-size:28px;margin-top:8px;color:${a.balanceHidden?'var(--t3)':M(a.balance)>=0?'var(--inc)':'var(--exp)'}">${accBalanceLabel(a)}</div>
         <div style="font-size:12px;color:var(--t3);margin-top:2px">Saldo actual${a.locked?' · 🔒 Cuenta bloqueada':''}</div>
+        ${(()=>{const h=Store.thirdPartyHeldByAccount(a.id);return h!==0?`<div style="font-size:11px;color:var(--yel);margin-top:4px">🤝 ${h>0?`Incluye ${fmt(h)} de terceros pendientes de entregar`:`Te deben ${fmt(-h)} de terceros`}</div>`:''})()}
         <button class="btn bg_ sm" style="margin-top:10px" onclick="openReconM('${a.id}')">✓ Conciliar saldo</button>
       </div>
       <div style="display:flex;gap:6px">
@@ -7085,7 +7366,25 @@ function moveDashWidget(key,dir){
 function saveDW(){['txs','cats','accs','tdc','goals','budget','upcoming','subs','debts','health'].forEach(k=>{const el=$('w-'+k);if(el)S.dw[k]=el.checked});save();pushSettings();renderDash();toast('Dashboard actualizado')}
 function saveNotif(){S.notif=normNotif(S.notif);['bgt','dbt','sub','gol'].forEach(k=>{const el=$('n-'+k);if(el)S.notif[k]=el.checked});save();pushSettings();toast('Preferencias guardadas')}
 function exportData(){const a=document.createElement('a');a.href='data:application/json,'+encodeURIComponent(JSON.stringify(S,null,2));a.download='finance-backup.json';a.click();toast('Datos exportados')}
-function importData(e){const f=e.target.files[0];if(!f)return;const r=new FileReader();r.onload=ev=>{try{S=JSON.parse(ev.target.result);save();renderDash();toast('Datos importados')}catch{toast('Archivo inválido',false)}};r.readAsText(f)}
+// Importar respaldo: antes se reemplazaba todo con CUALQUIER JSON (por ejemplo
+// un "{}" dejaba la app rota y además se guardaba así). Ahora el archivo debe
+// parecer un respaldo (objeto con cuentas o movimientos) y se le completan las
+// claves que le falten.
+function importData(e){
+  const input=e.target,f=input.files[0];if(!f)return;
+  const r=new FileReader();
+  r.onload=ev=>{
+    try{
+      const parsed=JSON.parse(ev.target.result);
+      const isObj=parsed!==null&&typeof parsed==='object'&&!Array.isArray(parsed);
+      if(!isObj||(!Array.isArray(parsed.accounts)&&!Array.isArray(parsed.transactions)))throw new Error('no parece un respaldo');
+      repairAppState(parsed,defaultAppState());
+      S=parsed;save();refreshAllUI();toast('Datos importados');
+    }catch(err){console.warn('Importar respaldo:',err);toast('Archivo inválido',false)}
+    finally{input.value=''}
+  };
+  r.readAsText(f);
+}
 // Por seguridad, antes de borrar cualquier cosa se pide confirmar la
 // contraseña de la sesión actual — reautentica contra Supabase con el
 // mismo correo ya logueado, sin cerrar la sesión si la contraseña es
@@ -7103,7 +7402,7 @@ function askNukePassword(type){
   $('nuke-pw-error').style.display='none';
   $('nuke-pw-msg').textContent=type==='everything'
     ?'Esto va a borrar TODO, incluida la nube, para siempre. Escribe tu contraseña para confirmar.'
-    :'Esto va a borrar los datos guardados en este dispositivo. Escribe tu contraseña para confirmar.';
+    :'Esto va a borrar los datos guardados en este dispositivo'+(()=>{const n=Object.keys(retryableWrites).length+syncQueue.length;return n?` (hay ${n} cambio${n>1?'s':''} sin subir a la nube que se perderán)`:''})()+'. Escribe tu contraseña para confirmar.';
   oM('mo-nuke-pw');
 }
 async function confirmNukePassword(){
@@ -7123,32 +7422,66 @@ async function confirmNukePassword(){
   if(_nukePendingType==='everything')await nukeEverything();
   else await nukeLocalOnly();
 }
+// Borra TODO lo que la app guarda en este dispositivo (estado, colas de
+// reintentos, copia de datos dañados y preferencias de pantalla: todo lo que
+// empieza con "finance_v4"). BUG REAL: antes dejaba la cola de reintentos,
+// y un ajuste pendiente se habría subido después, pisando los de la nube.
+function clearAllLocalAppData(){
+  try{
+    Object.keys(localStorage).filter(k=>k.startsWith('finance_v4')).forEach(k=>localStorage.removeItem(k));
+  }catch(e){console.warn('No se pudo limpiar el almacenamiento local:',e)}
+  retryableWrites={};syncQueue=[];
+  // Estado vacío de verdad (sin categorías de ejemplo): si solo borráramos la
+  // llave, al recargar caería en el estado por defecto, que SÍ las trae. También
+  // se reemplaza S en memoria para que ningún guardado tardío reviva lo borrado.
+  S=emptyAppState();
+  try{localStorage.setItem('finance_v4',JSON.stringify(S))}catch(e){}
+}
 async function nukeLocalOnly(){
-  localStorage.removeItem('finance_v4');
-  localStorage.removeItem('finance_v4_syncqueue');
-  // Guardamos de una vez un estado vacío de verdad (sin categorías de
-  // ejemplo) — si solo borráramos la llave, al recargar el código volvería
-  // a caer en el objeto por default, que SÍ trae categorías de muestra.
-  localStorage.setItem('finance_v4',JSON.stringify(emptyAppState()));
+  clearAllLocalAppData();
   location.reload();
 }
+// Todas las tablas que la app sincroniza (hijos antes que padres, aunque las
+// FKs ya tienen cascade — así no se depende de eso).
+const NUKE_TABLES=['transactions','debts','goals','subscriptions','budgets','budget_goals','subcategory_budgets',
+  'vehicle_records','vehicles','investment_records','investments',
+  'custom_section_records','custom_section_members','custom_section_categories','custom_sections',
+  'subcategories','categories','accounts','settings','net_worth_snapshots'];
 async function nukeEverything(){
   if(sb&&currentUserId){
     toast('Borrando todo de la nube...');
-    // Hijos antes que padres — aunque las FKs ya tienen on delete
-    // cascade/set null en el esquema, este orden evita depender de eso.
-    const tables=['transactions','debts','goals','subscriptions','budgets','budget_goals',
-      'vehicle_records','vehicles','custom_section_records','custom_section_members',
-      'custom_section_categories','custom_sections','subcategories','categories',
-      'accounts','settings','net_worth_snapshots'];
-    for(const t of tables){
-      await cloudWrite(sb.from(t).delete().eq('user_id',currentUserId),`borrar todo de ${t}`);
+    // BUGS REALES: (1) faltaban 3 tablas (límites por subcategoría, inversiones
+    // y sus registros), que volvían al sincronizar; (2) los errores se ignoraban
+    // y se borraba lo local aunque la nube hubiera fallado (los datos
+    // regresaban solos); (3) un borrado "sin error" que no borra filas (por
+    // ejemplo, si falta la política de DELETE en Supabase) pasaba desapercibido.
+    // Ahora: se intenta con TODAS, se VERIFICA que no quede ninguna fila y,
+    // si algo falla, NO se toca nada local y se avisa para reintentar.
+    // Las dos tablas opcionales pueden no existir todavía: sus errores se ignoran.
+    const OPTIONAL=new Set(['budget_goals','subcategory_budgets']);
+    const failed=[];
+    for(const t of NUKE_TABLES){
+      try{
+        const {error}=await sb.from(t).delete().eq('user_id',currentUserId);
+        if(error&&!OPTIONAL.has(t))failed.push(`${t}: ${error.message}`);
+      }catch(err){failed.push(`${t}: ${err.message||err}`)}
+    }
+    for(const t of NUKE_TABLES){
+      try{
+        const {count,error}=await sb.from(t).select('*',{count:'exact',head:true}).eq('user_id',currentUserId);
+        if(error){if(!OPTIONAL.has(t))failed.push(`verificar ${t}: ${error.message}`);continue}
+        if(count>0)failed.push(`${t}: quedaron ${count} fila(s)`);
+      }catch(err){failed.push(`verificar ${t}: ${err.message||err}`)}
+    }
+    if(failed.length){
+      console.error('Borrar todo quedó incompleto:',failed);
+      toast(`No se pudo borrar todo de la nube (${failed.length} problema${failed.length>1?'s':''}). Tus datos de este dispositivo NO se tocaron: revisa tu conexión y vuelve a intentarlo.`,false);
+      return false;
     }
   }
-  localStorage.removeItem('finance_v4');
-  localStorage.removeItem('finance_v4_syncqueue');
-  localStorage.setItem('finance_v4',JSON.stringify(emptyAppState()));
+  clearAllLocalAppData();
   location.reload();
+  return true;
 }
 
 // ==================== INIT ====================
@@ -8200,7 +8533,8 @@ function snapshotNW(){
   const assets=S.accounts.reduce((a,x)=>a+(x.type==='credit'?0:M(x.balance||0)),0);
   const owedToMe=S.debts_owed.reduce((a,d)=>a+Math.max(0,d.amount-(d.paid||0)),0);
   const iOwe=S.debts_iowe.reduce((a,d)=>a+Math.max(0,d.amount-(d.paid||0)),0);
-  const entry={k:key,nw:assets+owedToMe-iOwe,assets,debts:iOwe};
+  const held=Store.thirdPartyHeld(); // dinero de terceros: no cuenta como patrimonio propio
+  const entry={k:key,nw:assets-held+owedToMe-iOwe,assets:assets-held,debts:iOwe};
   S.nwHistory.push(entry);
   if(S.nwHistory.length>24)S.nwHistory.shift();
   save();
