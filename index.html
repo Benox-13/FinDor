@@ -557,7 +557,7 @@ body.modal-open #bottom-nav{display:none !important}
   <div class="card">
     <div style="display:flex;gap:8px;margin-bottom:8px;flex-wrap:wrap">
       <div class="search-wrap" style="flex:1;min-width:160px"><span class="si">⌕</span><input class="fc" type="text" id="tx-search" placeholder="Buscar..." oninput="renderTxP()" style="padding-left:32px"></div>
-      <select class="fc" id="txft" onchange="renderTxP()" style="width:125px"><option value="">Tipo: todos</option><option value="income">Ingresos</option><option value="expense">Gastos</option><option value="transfer">Transferencias</option><option value="tp">Terceros</option></select>
+      <select class="fc" id="txft" onchange="renderTxP()" style="width:125px"><option value="">Tipo: todos</option><option value="income">Ingresos</option><option value="expense">Gastos</option><option value="transfer">Transferencias</option><option value="tp">Terceros</option><option value="ch">Hijos</option></select>
       <select class="fc" id="txacc" onchange="onTxAccChange()" style="width:160px"><option value="">Todas las cuentas</option></select>
       <select class="fc" id="txcat" onchange="renderTxP()" style="width:160px"><option value="">Todas las categorías</option></select>
     </div>
@@ -1028,6 +1028,19 @@ body.modal-open #bottom-nav{display:none !important}
       <div class="g2">
         <div class="fg"><label class="fl" id="tx-acc-lbl">Cuenta</label><select class="fc" id="tx-acc" onchange="onAccChange()"></select></div>
         <div class="fg" id="tx-acc2-g" style="display:none"><label class="fl">Cuenta destino</label><select class="fc" id="tx-acc2"></select></div>
+      </div>
+      <!-- HIJOS: asignar el gasto o ingreso a uno o varios hijos -->
+      <div id="tx-ch-wrap" style="display:none;margin-bottom:12px">
+        <div style="display:flex;align-items:center;gap:8px;padding:9px 12px;background:var(--bg3);border-radius:var(--r2);border:1px solid var(--bdr2);margin-bottom:8px">
+          <input type="checkbox" id="tx-ch" onchange="togCh()">
+          <label for="tx-ch" style="font-size:13px;color:var(--t2);cursor:pointer">👶 Asignar a uno o varios hijos</label>
+        </div>
+        <div id="tx-ch-opts" style="display:none">
+          <div id="tx-ch-list"></div>
+          <div id="tx-ch-sum" style="display:none;font-size:12px;margin:2px 0 8px"></div>
+          <div class="fg" id="tx-ch-new-g"><label class="fl">Subcategoría nueva (opcional)</label><input class="fc" type="text" id="tx-ch-newsub" maxlength="40" placeholder="Ej: Clases de natación"></div>
+          <div style="font-size:11px;color:var(--t3);line-height:1.5">Sigue siendo UN solo movimiento: el saldo de la cuenta se mueve una sola vez y en los totales generales cuenta una sola vez. El gasto se guarda en la categoría "Hijos". Si lo compartes entre varios hijos, la suma del reparto debe ser igual al monto.</div>
+        </div>
       </div>
       <!-- OPERACIÓN CON TERCEROS (solo en Transferencia) -->
       <div id="tx-tp-wrap" style="display:none;margin-bottom:12px">
@@ -2177,6 +2190,7 @@ async function pullFromSupabase(){
         debtId:t.debt_id||undefined,goalId:t.goal_id||undefined,
         transferDirection:t.transfer_direction||undefined,linkedTxId:t.linked_tx_id||undefined,
         thirdPartyRef:t.third_party_ref||undefined,thirdPartyStatus:t.third_party_status||undefined,thirdPartyName:t.third_party_name||undefined,
+        childAlloc:(Array.isArray(t.child_alloc)&&t.child_alloc.length)?t.child_alloc.filter(a=>a&&a.child_id).map(a=>({childId:a.child_id,amount:centsToAmt(a.amount_cents)})):undefined,
       };
     });
 
@@ -2442,7 +2456,11 @@ function transactionToCloud(t,catId,subcatId){
     // Operaciones con terceros: estas 3 columnas SOLO se envían cuando el
     // movimiento es parte de una operación con terceros. Así, ningún otro
     // movimiento depende de que las columnas existan en Supabase.
-    ...(t.thirdPartyRef?{third_party_ref:t.thirdPartyRef,third_party_status:t.thirdPartyStatus||'pending',third_party_name:t.thirdPartyName||null}:{})};
+    ...(t.thirdPartyRef?{third_party_ref:t.thirdPartyRef,third_party_status:t.thirdPartyStatus||'pending',third_party_name:t.thirdPartyName||null}:{}),
+    // Asignación a hijos: SOLO se envía cuando el movimiento la tiene (o cuando
+    // se acaba de quitar: lista vacía, para limpiar la nube). Los demás
+    // movimientos no dependen de que la columna exista. Importes en centavos.
+    ...(Array.isArray(t.childAlloc)?{child_alloc:t.childAlloc.map(a=>({child_id:a.childId,amount_cents:amtToCents(a.amount)}))}:{})};
 }
 function debtToCloud(d,direction){
   // extra: columna jsonb ya existente para el desglose opcional de capital+
@@ -3540,7 +3558,7 @@ const Store = {
   // función le entrega.
   queryTransactions({type,accountId,category,dateFrom,dateTo,monthPrefix,search,sortBy='date',sortDir='desc'}={}){
     let txs=[...S.transactions];
-    if(type)txs=txs.filter(t=>type==='tp'?!!t.thirdPartyRef:t.type===type);
+    if(type)txs=txs.filter(t=>type==='tp'?!!t.thirdPartyRef:type==='ch'?(Array.isArray(t.childAlloc)&&t.childAlloc.length>0):t.type===type);
     if(accountId)txs=txs.filter(t=>t.accountId===accountId);
     if(category)txs=txs.filter(t=>t.category===category);
     if(dateFrom&&dateTo)txs=txs.filter(t=>t.date>=dateFrom&&t.date<=dateTo);
@@ -4771,6 +4789,7 @@ function openTxM(editId=null){
     if(tx.thirdPartyRef){toast('Las operaciones con terceros no se editan aquí: elimina el movimiento y regístralo de nuevo, o cambia su estado desde "Operaciones con terceros".',false);editingTxId=null;return}
     const lockedAcc=[tx.accountId,tx.accountId2].filter(Boolean).map(id=>Store.getAccountById(id)).find(a=>a?.locked);
     if(lockedAcc){toast(`"${lockedAcc.name}" está bloqueada — no se pueden editar movimientos de esta cuenta.`,false);return}
+    resetChUI();
     $('tx-modal-title').textContent='Editar transacción';
     $('tx-save-btn').textContent='Actualizar';
     setTxT(tx.type);
@@ -4780,6 +4799,7 @@ function openTxM(editId=null){
     $('tx-cat').value=tx.category||'';
     fillTxSubcatSel();
     $('tx-subcat').value=tx.subcategory||'';
+    loadChFromTx(tx);
     // Si la cuenta de esta transacción está archivada (no bloqueada), el
     // selector ya no la incluye por default — la reinsertamos para no
     // perder el valor en silencio, marcada como archivada.
@@ -4790,6 +4810,7 @@ function openTxM(editId=null){
     onAccChange();
   } else {
     editingTxId=null;
+    resetChUI();
     $('tx-modal-title').textContent='Nueva transacción';
     $('tx-save-btn').textContent='Guardar';
     setTxT('expense');
@@ -4815,6 +4836,7 @@ function setTxT(t){
   $('tx-acc-lbl').textContent=t==='transfer'?'Cuenta origen':'Cuenta';
   fillTxCatSel();onAccChange();
   syncTpUI();
+  syncChUI();
 }
 
 function fillTxSelects(){
@@ -5076,7 +5098,7 @@ async function saveTx(){
   const amt=M($('tx-amt').value);const dt=$('tx-dt').value;
   if(!isValidAmount(amt)||!dt){toast('Monto y fecha son requeridos (el monto debe ser mayor a 0)',false);return}
   const cat=$('tx-cat').value;
-  const subcat=$('tx-subcat').value;
+  const subcat=chSubcatValue();
   if(txType!=='transfer'&&!cat){toast('Selecciona una categoría',false);return}
   const accId=$('tx-acc').value;
   if(!accId){toast('Selecciona una cuenta',false);return}
@@ -5086,6 +5108,15 @@ async function saveTx(){
   const msiMoRaw=$('tx-msi-mo').value;
   const msiMo=parseInt(msiMoRaw,10);
   if(msiOn&&(!Number.isInteger(msiMo)||msiMo<1||String(msiMoRaw).includes('.'))){toast('El número de meses de MSI debe ser un entero mayor a 0',false);return}
+  // Hijos: la asignación (opcional) se valida ANTES de tocar nada.
+  const ch=chCollect(amt);
+  if(ch.error){toast(ch.error,false);return}
+  if(ch.on&&txType==='expense'){
+    // La categoría "Hijos" se crea solo ahora (no al abrir el formulario) y la
+    // subcategoría elegida o nueva se agrega a ella si aún no existe.
+    const hc=ensureChildrenCategory();
+    if(subcat&&!(hc.subs||[]).includes(subcat))Store.addSubcategory(hc.id,subcat);
+  }
 
   if(editingTxId){
     const existing=Store.getTransactionById(editingTxId);
@@ -5103,6 +5134,12 @@ async function saveTx(){
     const desc=$('tx-dsc').value||subcat||cat||'Sin descripción';
     // EDIT: Store.updateTransaction revierte el balance viejo y aplica el nuevo internamente
     const patch={type:txType,amount:amt,date:dt,time,description:desc,category:cat,subcategory:subcat||undefined,accountId:accId,accountId2:$('tx-acc2').value,notes:$('tx-notes').value};
+    // Asignación a hijos: se actualiza si la hay; si la tenía y la quitaste (o
+    // cambiaste a transferencia), se limpia con lista vacía. Los movimientos que
+    // nunca tuvieron asignación NO reciben este campo.
+    const prevTx=Store.getTransactionById(editingTxId);
+    if(ch.on)patch.childAlloc=ch.alloc;
+    else if(prevTx&&Array.isArray(prevTx.childAlloc)&&prevTx.childAlloc.length)patch.childAlloc=[];
     Store.updateTransaction(editingTxId,patch);
     cM('mo-tx');renderTxP();renderDash();toast('Transacción actualizada');saveBtn.disabled=false;return;
   }
@@ -5141,8 +5178,225 @@ async function saveTx(){
     // tarjeta, ver msiStatus()). "advancePaid" solo guarda dinero REAL
     // adelantado voluntariamente (ver openMsiAdvanceM/execMsiAdvance).
     msi:msiOn?{months:msiMo,monthly:amt/msiMo,advancePaid:0}:null};
+  if(ch.on)tx.childAlloc=ch.alloc;
   Store.addTransaction(tx);
   cM('mo-tx');renderDash();renderTxP();toast('Transacción guardada');saveBtn.disabled=false;
+}
+
+// ==================== HIJOS: asignar movimientos (Etapa 2) ====================
+// Un gasto de un hijo es UN solo movimiento normal (misma cuenta, mismo saldo)
+// con una lista childAlloc=[{childId,amount}] cuya suma es igual al monto.
+// En los totales generales cuenta una sola vez; en cada hijo, solo su parte.
+function ensureChildrenCategory(){
+  let c=S.categories.find(x=>x.name==='Hijos');
+  if(!c)c=Store.addCategory({name:'Hijos',icon:'👶',type:'expense'});
+  return c;
+}
+// Validación central del reparto (la usa el formulario y las pruebas).
+function validateChildAlloc(type,amount,alloc){
+  if(type!=='expense'&&type!=='income')return'Solo los gastos e ingresos se pueden asignar a hijos';
+  if(!Array.isArray(alloc)||!alloc.length)return'Elige al menos un hijo';
+  const seen=new Set();let sum=0;
+  for(const a of alloc){
+    if(!a||!a.childId||!Store.getChildById(a.childId))return'Uno de los hijos ya no existe';
+    if(seen.has(a.childId))return'Un hijo aparece repetido en el reparto';
+    seen.add(a.childId);
+    const c=Math.round(M(a.amount)*100);
+    if(!(c>0))return'Cada hijo debe tener una parte mayor a 0';
+    sum+=c;
+  }
+  const total=Math.round(M(amount)*100);
+  if(sum!==total)return`La suma del reparto (${fmt(sum/100)}) debe ser igual al monto (${fmt(total/100)})`;
+  return null;
+}
+function chSplitCents(total,n){const base=Math.floor(total/n),a=Array(n).fill(base);a[0]+=total-base*n;return a}
+function chRescale(old,total){
+  const sum=old.reduce((x,y)=>x+y,0);
+  if(!sum)return chSplitCents(total,old.length);
+  const out=old.map(c=>Math.round(c*total/sum));
+  out[out.length-1]+=total-out.reduce((x,y)=>x+y,0);
+  return out.every(c=>c>0)?out:chSplitCents(total,old.length);
+}
+let _chPrevCat=null,_chForced=false;
+// Reinicia el modo "hijos" al abrir el formulario (nuevo o de edición): sin esto
+// quedaba el interruptor, la lista y la categoría bloqueada del uso anterior.
+function resetChUI(){
+  const c=$('tx-ch');if(!c)return;
+  c.checked=false;$('tx-ch-list').innerHTML='';$('tx-ch-newsub').value='';$('tx-ch-sum').style.display='none';$('tx-ch-opts').style.display='none';
+  _chForced=false;_chPrevCat=null;
+  const cat=$('tx-cat');if(cat)cat.disabled=false;
+}
+function chOn(){const c=$('tx-ch');return !!(c&&c.checked&&(txType==='expense'||txType==='income'))}
+function chSelected(){return [...document.querySelectorAll('#tx-ch-list .ch-chk')].filter(i=>i.checked).map(i=>({id:i.value,input:document.querySelector(`#tx-ch-list .ch-amt[data-id="${i.value}"]`)}))}
+function chBuildList(amounts,extraIds){
+  const kids=Store.getChildren().filter(c=>c.status!=='archived'||(extraIds||[]).includes(c.id));
+  $('tx-ch-list').innerHTML=kids.map(c=>{
+    const has=amounts&&amounts[c.id]!=null;
+    return`<div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;flex-wrap:wrap"><label style="display:flex;align-items:center;gap:6px;flex:1;min-width:120px;font-size:13px;cursor:pointer"><input type="checkbox" class="ch-chk" value="${c.id}" onchange="chOnSel()" ${has?'checked':''}> ${(CHILD_STAGES[c.stage]||CHILD_STAGES.child).icon} ${esc(c.name)}${c.status==='archived'?' (archivado)':''}</label><input type="number" class="fc ch-amt" data-id="${c.id}" step="0.01" min="0" inputmode="decimal" placeholder="0.00" style="width:110px;display:none" value="${has?amounts[c.id]:''}" oninput="chRecalc('edit')"></div>`;
+  }).join('');
+}
+function chHasEditAlloc(){
+  if(!editingTxId)return false;
+  const t=Store.getTransactionById(editingTxId);
+  return !!(t&&Array.isArray(t.childAlloc)&&t.childAlloc.length);
+}
+function syncChUI(){
+  const wrap=$('tx-ch-wrap');if(!wrap)return;
+  const show=(txType==='expense'||txType==='income')&&(Store.getChildren().some(c=>c.status!=='archived')||chHasEditAlloc());
+  wrap.style.display=show?'block':'none';
+  if(!show&&$('tx-ch').checked)$('tx-ch').checked=false;
+  applyChMode();
+}
+function applyChMode(){
+  const on=chOn(),cat=$('tx-cat');if(!cat)return;
+  $('tx-ch-opts').style.display=on?'block':'none';
+  $('tx-ch-new-g').style.display=(on&&txType==='expense')?'block':'none';
+  if(on&&txType==='expense'){
+    // El gasto de un hijo va siempre a la categoría "Hijos".
+    if(!_chForced){_chPrevCat=cat.value;_chForced=true}
+    if(![...cat.options].some(o=>o.value==='Hijos'))cat.insertAdjacentHTML('beforeend','<option value="Hijos">👶 Hijos</option>');
+    cat.value='Hijos';cat.disabled=true;
+    chFillSubcats();
+  }else{
+    if(_chForced){
+      _chForced=false;cat.disabled=false;
+      fillTxCatSel();cat.value=_chPrevCat||'';fillTxSubcatSel();
+    }else cat.disabled=false;
+  }
+}
+// Subcategorías para un gasto de hijos: las de la etapa de los hijos elegidos
+// (primero), las transversales y las que ya existan en la categoría "Hijos".
+function chFillSubcats(){
+  const sel=$('tx-subcat');if(!sel)return;
+  const cur=sel.value;
+  const stages=[...new Set(chSelected().map(x=>(Store.getChildById(x.id)||{}).stage).filter(Boolean))];
+  const hc=S.categories.find(x=>x.name==='Hijos');
+  const list=[...new Set([...stages.flatMap(k=>CHILD_CATALOG[k]||[]),...CHILD_CATALOG.common,...((hc&&hc.subs)||[])])];
+  if(cur&&!list.includes(cur))list.push(cur);
+  sel.innerHTML='<option value="">Sin subcategoría</option>'+list.map(x=>`<option value="${esc(x)}">${esc(x)}</option>`).join('');
+  sel.value=cur||'';
+  $('tx-subcat-g').style.display='block';
+}
+function chSubcatValue(){
+  const nw=(chOn()&&txType==='expense')?($('tx-ch-newsub').value||'').trim():'';
+  return nw||$('tx-subcat').value;
+}
+function togCh(){
+  if($('tx-ch').checked){
+    if(!document.querySelector('#tx-ch-list .ch-chk'))chBuildList({});
+    const act=Store.getChildren().filter(c=>c.status!=='archived');
+    if(act.length===1){const i=document.querySelector(`#tx-ch-list .ch-chk[value="${act[0].id}"]`);if(i)i.checked=true}
+  }
+  applyChMode();chRecalc('sel');
+}
+function chOnSel(){if(chOn()&&txType==='expense')chFillSubcats();chRecalc('sel')}
+function chRecalc(origin){
+  if(!chOn())return;
+  const total=Math.round(M($('tx-amt').value)*100),sel=chSelected(),box=$('tx-ch-sum');
+  document.querySelectorAll('#tx-ch-list .ch-amt').forEach(i=>{i.style.display='none'});
+  if(!sel.length){box.style.display='block';box.style.color='var(--t3)';box.textContent='Elige al menos un hijo.';return}
+  if(sel.length===1){sel[0].input.value=total?(total/100).toFixed(2):'';box.style.display='none';return}
+  sel.forEach(x=>{x.input.style.display='block'});
+  let cur=sel.map(x=>Math.round(M(x.input.value)*100));
+  if(origin==='sel'||cur.every(c=>!c))cur=chSplitCents(total,sel.length);
+  else if(origin==='amt')cur=chRescale(cur,total);
+  if(origin!=='edit')sel.forEach((x,i)=>{x.input.value=(cur[i]/100).toFixed(2)});
+  const sum=cur.reduce((a,b)=>a+b,0),ok=sum===total;
+  box.style.display='block';box.style.color=ok?'var(--inc)':'var(--red)';
+  box.textContent=`Reparto: ${fmt(sum/100)} de ${fmt(total/100)}${ok?' ✓':' — la suma debe ser igual al monto'}`;
+}
+// Lee y valida la asignación del formulario. {on,alloc} o {error}.
+function chCollect(total){
+  if(!chOn())return{on:false};
+  const sel=chSelected();
+  if(!sel.length)return{error:'Elige al menos un hijo (o desactiva la asignación a hijos)'};
+  if(txType==='expense'&&($('tx-ch-newsub').value||'').trim().length>40)return{error:'La subcategoría nueva es muy larga (máximo 40 caracteres)'};
+  const cents=Math.round(M(total)*100);
+  const alloc=sel.length===1?[{childId:sel[0].id,amount:M(total)}]:sel.map(x=>({childId:x.id,amount:M(x.input.value)}));
+  const err=validateChildAlloc(txType,total,alloc);
+  if(err)return{error:err};
+  return{on:true,alloc};
+}
+function loadChFromTx(tx){
+  if(!tx||!Array.isArray(tx.childAlloc)||!tx.childAlloc.length){syncChUI();return}
+  const amounts={};tx.childAlloc.forEach(a=>{amounts[a.childId]=a.amount});
+  $('tx-ch-wrap').style.display='block';
+  $('tx-ch').checked=true;
+  chBuildList(amounts,tx.childAlloc.map(a=>a.childId));
+  applyChMode();
+  if(tx.type==='expense')$('tx-subcat').value=tx.subcategory||'';
+  chRecalc('edit');
+}
+// Abre el formulario ya en modo "hijos" (desde la pantalla Hijos).
+function openChildExpense(childId,type){
+  openTxM();setTxT(type||'expense');
+  $('tx-ch-wrap').style.display='block';
+  $('tx-ch').checked=true;
+  chBuildList({});
+  if(childId){const i=document.querySelector(`#tx-ch-list .ch-chk[value="${childId}"]`);if(i)i.checked=true}
+  togCh();
+  if(type==='income')$('tx-dsc').placeholder='Ej: Apoyo de los abuelos';
+}
+document.getElementById('tx-amt')&&document.getElementById('tx-amt').addEventListener('input',()=>{if(chOn())chRecalc('amt')});
+
+// ---- movimientos de un hijo (detalle) ----
+let _childFilters={from:'',to:'',type:'',sub:'',acc:''},_childLimit=30;
+function childMovements(childId){
+  return S.transactions.filter(t=>Array.isArray(t.childAlloc)&&t.childAlloc.some(a=>a&&a.childId===childId))
+    .map(t=>({tx:t,share:M(t.childAlloc.find(a=>a.childId===childId).amount)}))
+    .sort((a,b)=>(b.tx.date+(b.tx.time||''))<(a.tx.date+(a.tx.time||''))?-1:1);
+}
+function childFilteredMovements(childId){
+  const f=_childFilters;
+  return childMovements(childId).filter(m=>{
+    const t=m.tx;
+    if(f.from&&t.date<f.from)return false;
+    if(f.to&&t.date>f.to)return false;
+    if(f.type&&t.type!==f.type)return false;
+    if(f.sub&&(t.subcategory||'')!==f.sub)return false;
+    if(f.acc&&t.accountId!==f.acc)return false;
+    return true;
+  });
+}
+function setChildFilter(k,v){_childFilters[k]=v;_childLimit=30;renderChildren()}
+function clearChildFilters(){_childFilters={from:'',to:'',type:'',sub:'',acc:''};_childLimit=30;renderChildren()}
+function moreChildMovs(){_childLimit+=30;renderChildren()}
+function childMovementsHTML(c){
+  const all=childMovements(c.id),f=_childFilters;
+  const subs=[...new Set(all.map(m=>m.tx.subcategory||'').filter(Boolean))].sort();
+  const accs=[...new Set(all.map(m=>m.tx.accountId))].map(id=>({id,name:(Store.getAccountById(id)||{}).name||'cuenta eliminada'}));
+  const list=childFilteredMovements(c.id);
+  const exp=M(list.filter(m=>m.tx.type==='expense').reduce((s,m)=>s+m.share,0));
+  const inc=M(list.filter(m=>m.tx.type==='income').reduce((s,m)=>s+m.share,0));
+  const canAdd=c.status!=='archived';
+  const head=`<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:10px"><div style="font-weight:600;font-size:13px">Movimientos</div>${canAdd?`<div style="display:flex;gap:6px;flex-wrap:wrap"><button class="btn bp sm" onclick="openChildExpense('${c.id}','expense')">+ Registrar gasto</button><button class="btn bg_ sm" onclick="openChildExpense('${c.id}','income')">+ Ingreso o aportación</button></div>`:''}</div>`;
+  if(!all.length)return`<div class="card" style="padding:14px 16px;margin-bottom:12px">${head}<div style="font-size:12px;color:var(--t3);line-height:1.6">Todavía no hay movimientos asignados a ${esc(c.name)}.${canAdd?' Registra el primero con el botón de arriba, o asigna uno existente editándolo y activando "Asignar a uno o varios hijos".':''}</div></div>`;
+  const filt=`<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:8px;margin-bottom:10px">
+    <div><div style="font-size:10px;color:var(--t3);margin-bottom:3px">Desde</div><input class="fc" type="date" value="${esc(f.from)}" onchange="setChildFilter('from',this.value)"></div>
+    <div><div style="font-size:10px;color:var(--t3);margin-bottom:3px">Hasta</div><input class="fc" type="date" value="${esc(f.to)}" onchange="setChildFilter('to',this.value)"></div>
+    <div><div style="font-size:10px;color:var(--t3);margin-bottom:3px">Tipo</div><select class="fc" onchange="setChildFilter('type',this.value)"><option value="">Todos</option><option value="expense"${f.type==='expense'?' selected':''}>Gastos</option><option value="income"${f.type==='income'?' selected':''}>Ingresos</option></select></div>
+    <div><div style="font-size:10px;color:var(--t3);margin-bottom:3px">Categoría</div><select class="fc" onchange="setChildFilter('sub',this.value)"><option value="">Todas</option>${subs.map(x=>`<option value="${esc(x)}"${f.sub===x?' selected':''}>${esc(x)}</option>`).join('')}</select></div>
+    <div><div style="font-size:10px;color:var(--t3);margin-bottom:3px">Cuenta</div><select class="fc" onchange="setChildFilter('acc',this.value)"><option value="">Todas</option>${accs.map(a=>`<option value="${a.id}"${f.acc===a.id?' selected':''}>${esc(a.name)}</option>`).join('')}</select></div>
+  </div>${(f.from||f.to||f.type||f.sub||f.acc)?`<button class="btn bg_ sm" style="font-size:11px;margin-bottom:8px" onclick="clearChildFilters()">Quitar filtros</button>`:''}`;
+  const rows=list.slice(0,_childLimit).map(m=>{
+    const t=m.tx,isInc=t.type==='income',acc=Store.getAccountById(t.accountId);
+    const others=t.childAlloc.filter(a=>a.childId!==c.id).map(a=>(Store.getChildById(a.childId)||{}).name).filter(Boolean);
+    return`<div style="padding:10px 0;border-top:1px solid var(--bdr);cursor:pointer" onclick="openTxM('${t.id}')">
+      <div style="display:flex;justify-content:space-between;gap:10px;align-items:flex-start"><div style="min-width:0"><div style="font-size:13px;font-weight:500;overflow:hidden;text-overflow:ellipsis">${esc(t.description||'Sin descripción')}</div>
+      <div style="font-size:11px;color:var(--t3);margin-top:2px">${fmtDate(t.date)}${t.subcategory?' · '+esc(t.subcategory):''} · ${acc?esc(acc.name):'cuenta eliminada'}${others.length?` · 👥 Compartido con ${others.map(esc).join(', ')}`:''}</div></div>
+      <div style="text-align:right;white-space:nowrap"><div style="font-family:'DM Mono',monospace;font-size:13px;color:${isInc?'var(--inc)':'var(--exp)'}">${isInc?'+':'−'}${fmt(m.share)}</div>${M(t.amount)!==m.share?`<div style="font-size:10px;color:var(--t3)">de ${fmt(t.amount)}</div>`:''}</div></div></div>`;
+  }).join('');
+  return`<div class="card" style="padding:14px 16px;margin-bottom:12px">${head}${filt}
+    <div style="font-size:12px;color:var(--t3);margin-bottom:4px">${list.length} movimiento${list.length===1?'':'s'} · Gasto <strong style="color:var(--exp)">${fmt(exp)}</strong>${inc?` · Ingresos <strong style="color:var(--inc)">${fmt(inc)}</strong>`:''}</div>
+    ${rows||'<div style="font-size:12px;color:var(--t3);padding:10px 0">Ningún movimiento coincide con los filtros.</div>'}
+    ${list.length>_childLimit?`<button class="btn bg_ sm" style="width:100%;margin-top:8px" onclick="moreChildMovs()">Ver más (${list.length-_childLimit})</button>`:''}</div>`;
+}
+function childMonthIncome(childId,period){
+  return M(S.transactions.reduce((sum,t)=>{
+    if(t.type!=='income'||!Array.isArray(t.childAlloc)||!t.date||t.date.slice(0,7)!==period)return sum;
+    const a=t.childAlloc.find(x=>x&&x.childId===childId);
+    return a?sum+M(a.amount):sum;
+  },0));
 }
 
 // ==================== HIJOS: catálogo, helpers e interfaz ====================
@@ -5277,11 +5531,11 @@ function childListHTML(){
     </div>${budgeted?'':'<div style="font-size:11px;color:var(--t3);margin:-6px 0 14px">Define un presupuesto mensual en el perfil de un hijo para ver su ejecución.</div>'}`;
   }
   const archBlock=arch.length?`<div class="slbl" role="button" tabindex="0" aria-expanded="${_childArchOpen}" style="cursor:pointer;user-select:none;margin-top:18px" onclick="toggleChildArch()" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();toggleChildArch()}"><span>Archivados (${arch.length})</span><span style="font-size:13px">${_childArchOpen?'▾':'▸'}</span></div><div style="display:${_childArchOpen?'block':'none'}">${arch.map(c=>childCardHTML(c,period)).join('')}</div>`:'';
-  return childPageHead('<button class="btn bp" onclick="openChildM()">+ Agregar hijo</button>')+summary
+  return childPageHead((active.length?'<button class="btn bp" onclick="openChildExpense(\'\',\'expense\')">+ Registrar gasto</button> ':'')+'<button class="btn bg_" onclick="openChildM()">+ Agregar hijo</button>')+summary
     +(active.length?active.map(c=>childCardHTML(c,period)).join(''):'<div class="card" style="padding:18px;text-align:center;font-size:13px;color:var(--t3)">No hay perfiles activos. Los archivados están abajo y puedes reactivarlos.</div>')+archBlock;
 }
 function toggleChildArch(){_childArchOpen=!_childArchOpen;renderChildren()}
-function openChildDetail(id){_childView=id;_childAllCats=false;renderChildren();window.scrollTo(0,0)}
+function openChildDetail(id){_childView=id;_childAllCats=false;_childFilters={from:'',to:'',type:'',sub:'',acc:''};_childLimit=30;renderChildren();window.scrollTo(0,0)}
 function closeChildDetail(){_childView=null;renderChildren();window.scrollTo(0,0)}
 function toggleChildCats(){_childAllCats=!_childAllCats;renderChildren()}
 function childDetailHTML(c){
@@ -5305,7 +5559,7 @@ function childDetailHTML(c){
         ${bud?`<div>Disponible<br><strong style="color:var(--t1);font-family:'DM Mono',monospace;font-size:14px">${fmt(bud-spent)}</strong></div>`:''}
       </div>
       ${c.notes?`<div style="margin-top:12px;font-size:12px;color:var(--t2);line-height:1.5;white-space:pre-wrap">${esc(c.notes)}</div>`:''}
-    </div>${banner}
+    </div>${banner}${childMovementsHTML(c)}
     <div class="card" style="padding:14px 16px;margin-bottom:12px">
       <div style="font-weight:600;font-size:13px;margin-bottom:10px">Categorías sugeridas para esta etapa</div>
       <div>${chips(CHILD_CATALOG[c.stage]||CHILD_CATALOG.child)}</div>
@@ -5627,6 +5881,7 @@ function computeTDCDailyAccumulated(accountId,periodStartStr,periodEndStr){
 
 function renderTxP(){
   renderTpOps();
+  if(document.getElementById('page-children')&&document.getElementById('page-children').classList.contains('on'))renderChildren(); // un cambio en un movimiento se refleja en Hijos
   // Repopulate account/category filter options if empty
   const accSel=$('txacc');
   if(accSel&&accSel.options.length<=1)populateTxAccFilter();
@@ -5679,6 +5934,7 @@ function renderTxP(){
     if(t.time)metaParts.push(fmtTime(t.time));
     if(t.msi)metaParts.push(`${t.msi.months} MSI`);
     if(t.thirdPartyRef)metaParts.push(`🤝 ${esc(t.thirdPartyName||'Terceros')} · ${t.thirdPartyStatus==='completed'?'Completada':'Pendiente'}`);
+    if(Array.isArray(t.childAlloc)&&t.childAlloc.length)metaParts.push(`👶 ${t.childAlloc.map(a=>{const k=Store.getChildById(a.childId);return esc(k?k.name:'hijo')}).join(', ')}`);
     // Signo del monto: gasto siempre resta, ingreso siempre suma; una
     // transferencia resta o suma según de qué lado esté esta mitad
     // (formato nuevo con transferDirection) — el formato viejo (una sola
