@@ -512,6 +512,7 @@ body.modal-open #bottom-nav{display:none !important}
   <div class="ns">Seguimiento</div>
   <div class="ni" onclick="go('loans')"><span class="ic-wrap">⇅</span>Préstamos</div>
   <div class="ni" onclick="go('goals')"><span class="ic-wrap">◎</span>Objetivos</div>
+  <div class="ni" onclick="go('children')"><span class="ic-wrap">👶</span>Hijos</div>
   <div class="ns">Sistema</div>
   <div class="ni" onclick="go('settings')"><span class="ic-wrap">⚙</span>Configuración</div>
   <div class="sb-bot">
@@ -768,6 +769,11 @@ body.modal-open #bottom-nav{display:none !important}
 <div id="page-goals" class="page">
   <div class="ph"><div><div class="pt">Objetivos</div><div class="ps">Metas con fecha límite</div></div><button class="btn bp" onclick="openGoalM()">+ Nuevo</button></div>
   <div id="goals-g"></div>
+</div>
+
+<!-- HIJOS -->
+<div id="page-children" class="page">
+  <div id="children-body"></div>
 </div>
 
 <!-- EV page removed — unified into Vehículos -->
@@ -1106,6 +1112,25 @@ body.modal-open #bottom-nav{display:none !important}
       </div>
     </div>
     <div class="mfoot"><button class="btn bg_ sm" onclick="cM('mo-acc')">Cancelar</button><button class="btn bp sm" onclick="saveAcc()">Guardar</button></div>
+  </div>
+</div>
+
+<!-- HIJOS: crear / editar perfil -->
+<div class="mo" id="mo-child">
+  <div class="md">
+    <div class="mh"><span class="mttl" id="ch-title">Nuevo hijo</span><button class="btn bg_ ico sm" onclick="cM('mo-child')">✕</button></div>
+    <div class="mbody">
+      <input type="hidden" id="ch-id">
+      <div class="fg"><label class="fl">Nombre o alias</label><input class="fc" type="text" id="ch-name" maxlength="40" placeholder="Ej: Sofía"></div>
+      <div class="fg"><label class="fl">Etapa de vida</label><select class="fc" id="ch-stage" onchange="onChildStageChg()"></select></div>
+      <div class="fg"><label class="fl" id="ch-dt-lbl">Fecha de nacimiento (opcional)</label><input class="fc" type="date" id="ch-dt" onchange="updateChildHint()"></div>
+      <div id="ch-hint" style="display:none;font-size:12px;line-height:1.5;padding:9px 12px;border-radius:var(--r);background:var(--bg3);border:1px solid var(--bdr);margin:-4px 0 12px;color:var(--t2)"></div>
+      <div class="fg"><label class="fl">Dependencia económica</label><select class="fc" id="ch-dep"></select></div>
+      <div class="fg"><label class="fl">Presupuesto mensual (opcional)</label><input class="fc" type="number" id="ch-bud" placeholder="0.00" min="0" step="0.01" inputmode="decimal"></div>
+      <div class="fg"><label class="fl">Notas (opcional)</label><textarea class="fc" id="ch-notes" rows="2" maxlength="300" placeholder="Algo que quieras recordar"></textarea></div>
+      <div style="font-size:11px;color:var(--t3);line-height:1.5">Solo se guarda lo necesario: un nombre o alias, sin documentos ni datos de identificación.</div>
+    </div>
+    <div class="mfoot"><button class="btn bg_ sm" onclick="cM('mo-child')">Cancelar</button><button class="btn bp sm" id="ch-save" onclick="saveChild()">Guardar</button></div>
   </div>
 </div>
 
@@ -1824,6 +1849,15 @@ async function execRetryableWrite(desc){
       return await Store._pushSectionRecord(desc.sectionId,r,true);
     }
     case 'settings':return await pushSettingsNow();
+    case 'child':{
+      const c=Store.getChildById(desc.id);if(!c)return true;
+      const label='sincronizar hijo '+c.name;
+      if(await cloudWrite(sb.from('children').upsert(childToCloud(c),{onConflict:'id'}),label))return true;
+      // Si la tabla aún no existe en Supabase (falta correr su SQL) NO se deja
+      // pendiente: bloquearía todas las sincronizaciones. El perfil queda en
+      // local y se sube solo cuando la tabla exista (ver el pull).
+      return isMissingTableError(lastSyncErrors[label]);
+    }
   }
   return true;
 }
@@ -2074,13 +2108,13 @@ async function pullFromSupabase(){
     const tables=['accounts','categories','subcategories','transactions','debts','goals',
       'subscriptions','budgets','budget_goals','subcategory_budgets','vehicles','vehicle_records','investments','investment_records','custom_sections',
       'custom_section_members','custom_section_categories','custom_section_records',
-      'settings','net_worth_snapshots'];
+      'settings','net_worth_snapshots','children'];
     // Tablas OPCIONALES: se agregaron después (metas de presupuesto y
     // límites de subcategoría). Si todavía no existen en Supabase (aún no
     // se corre su SQL), NO se aborta toda la sincronización — se avisa en
     // consola, se dejan los datos locales de esa parte tal cual, y todo
     // lo demás se sincroniza normal.
-    const OPTIONAL_TABLES=new Set(['budget_goals','subcategory_budgets']);
+    const OPTIONAL_TABLES=new Set(['budget_goals','subcategory_budgets','children']);
     const optionalMissing=new Set();
     const results={};
     for(const t of tables){
@@ -2212,6 +2246,19 @@ async function pullFromSupabase(){
       ?S.budgetGoals
       :(results.budget_goals||[]).map(g=>({id:g.id,period:g.period_key,expectedIncome:centsToAmt(g.expected_income_cents),savingsPct:g.savings_pct||0}));
 
+    // --- hijos: la nube manda en los ids que tiene; los perfiles que SOLO existen
+    // en local (creados antes de correr el SQL, o sin conexión) se conservan y se
+    // suben después. Nunca se borran perfiles (solo se archivan), así que unir es seguro. ---
+    let childrenLocalOnly=[];
+    const newChildren=optionalMissing.has('children')
+      ?(S.children||[])
+      :(()=>{
+        const fromCloud=(results.children||[]).map(childFromCloud);
+        const ids=new Set(fromCloud.map(c=>c.id));
+        childrenLocalOnly=(S.children||[]).filter(c=>c&&c.id&&!ids.has(c.id));
+        return [...fromCloud,...childrenLocalOnly];
+      })();
+
     // --- vehicles + records anidados ---
     const newVehicles=results.vehicles.map(v=>({
       id:v.id,name:v.name,brand:v.brand||'',model:v.model||'',year:v.year||'',
@@ -2282,7 +2329,7 @@ async function pullFromSupabase(){
     // abajo evita que lleguemos a pisar los datos locales a medias.
     S.accounts=newAccounts;S.categories=newCategories;S.transactions=newTransactions;
     S.debts_owed=newDebtsOwed;S.debts_iowe=newDebtsIowe;S.goals=newGoals;
-    S.subscriptions=newSubscriptions;S.budgets=newBudgets;S.budgetGoals=newBudgetGoals;S.vehicles=newVehicles;S.investments=newInvestments;
+    S.subscriptions=newSubscriptions;S.budgets=newBudgets;S.budgetGoals=newBudgetGoals;S.children=newChildren;S.vehicles=newVehicles;S.investments=newInvestments;
     S.customSections=newCustomSections;S.settings=newSettings;S.dw=newDw;S.notif=newNotif;S.budgetRollover=newRollover;
     S.nwHistory=newNwHistory;
     save();
@@ -2290,6 +2337,7 @@ async function pullFromSupabase(){
     toast('Datos sincronizados desde la nube');
     shrinkExistingPhoto();
     if(localOnlyNW.length)syncNWHistoryUp(localOnlyNW); // sin await a propósito: es "best-effort"
+    childrenLocalOnly.forEach(c=>pushChildBestEffort(c)); // sube los perfiles que la nube aún no tiene
   }catch(err){
     console.error('Error al traer datos de Supabase:',err);
     toast('No se pudo sincronizar — se sigue usando tus datos locales',false);
@@ -2323,6 +2371,7 @@ function refreshAllUI(){
   if(typeof populateTxAccFilter==='function')populateTxAccFilter();
   if(typeof populateTxCatFilter==='function')populateTxCatFilter();
   if(typeof renderProfAvatar==='function')renderProfAvatar();
+  if(typeof renderChildren==='function'&&document.getElementById('page-children')&&document.getElementById('page-children').classList.contains('on'))renderChildren();
 }
 
 // ==================== SUPABASE PUSH (Fase 4, incremento 3) ====================
@@ -2542,6 +2591,8 @@ async function pushAllToSupabase(){
       const catId=catByName[b.category];if(!catId)continue;
       await cloudWrite(sb.from('budgets').insert({user_id:currentUserId,category_id:catId,period_key:b.period,limit_cents:amtToCents(b.limit)}),`presupuesto ${b.category}`);
     }
+    // 7a. Hijos (tabla opcional: si aún no existe, cloudWrite solo lo registra)
+    for(const c of (S.children||[])){await cloudWrite(sb.from('children').upsert(childToCloud(c),{onConflict:'id'}),`hijo ${c.name}`)}
     // 7b. Metas de presupuesto (ingreso esperado + % de ahorro), por mes
     for(const g of S.budgetGoals){
       await cloudWrite(sb.from('budget_goals').insert({user_id:currentUserId,period_key:g.period,expected_income_cents:amtToCents(g.expectedIncome||0),savings_pct:g.savingsPct||0}),`meta de presupuesto ${g.period}`);
@@ -2892,7 +2943,7 @@ function emptyAppState(){
     settings:{name:'',currency:'MXN',theme:'dark',accent:'green'},
     dw:{metrics:true,txs:true,cats:true,accs:true,tdc:true,goals:true,budget:false,upcoming:true,subs:true,debts:true,health:true},
     notif:{bgt:true,dbt:true,sub:true,gol:true},
-    vehicles:[],investments:[],customSections:[],budgetRollover:false,nwHistory:[],budgetGoals:[]
+    vehicles:[],investments:[],customSections:[],budgetRollover:false,nwHistory:[],budgetGoals:[],children:[]
   };
 }
 // Estado inicial de una instalación nueva (con las categorías de ejemplo).
@@ -2916,7 +2967,7 @@ function defaultAppState(){ return {
   settings:{name:'',currency:'MXN',theme:'dark',accent:'green'},
   dw:{metrics:true,txs:true,cats:true,accs:true,tdc:true,goals:true,budget:false,upcoming:true,subs:true,debts:true,health:true},
   notif:{bgt:true,dbt:true,sub:true,gol:true},
-  vehicles:[],investments:[],customSections:[],budgetRollover:false,nwHistory:[],budgetGoals:[]
+  vehicles:[],investments:[],customSections:[],budgetRollover:false,nwHistory:[],budgetGoals:[],children:[]
 }; }
 
 // Carga del estado local, a prueba de datos dañados o incompletos.
@@ -3126,6 +3177,65 @@ const Store = {
       this._pushTransaction(updated,true);
     }
     return updated;
+  },
+  // ==================== HIJOS ====================
+  // Perfiles de hijos (Etapa 1). Nunca se borran: se ARCHIVAN, y su historial
+  // (movimientos asignados) se conserva. Cambiar la etapa nunca toca movimientos.
+  getChildren(){return (S.children||[]).filter(c=>c&&typeof c==='object'&&c.id&&typeof c.name==='string')},
+  getChildById(id){return this.getChildren().find(c=>c.id===id)},
+  _normChild(d){
+    return{name:String(d.name).trim(),birthDate:d.birthDate||'',birthEstimated:d.stage==='prenatal',stage:d.stage,dependency:d.dependency,
+      monthlyBudget:(d.monthlyBudget===''||d.monthlyBudget==null)?null:M(d.monthlyBudget),notes:String(d.notes||'').trim()};
+  },
+  _validateChild(d,excludeId){
+    const name=String(d.name==null?'':d.name).trim();
+    if(!name)return'Escribe el nombre o alias';
+    if(name.length>40)return'El nombre es muy largo (máximo 40 caracteres)';
+    if((S.children||[]).some(c=>c.id!==excludeId&&String(c.name).trim().toLowerCase()===name.toLowerCase()))return'Ya tienes un perfil con ese nombre';
+    if(!CHILD_STAGES[d.stage])return'Elige una etapa de vida';
+    if(!CHILD_DEPENDENCY[d.dependency])return'Elige el tipo de dependencia económica';
+    if(d.birthDate){
+      if(!/^\d{4}-\d{2}-\d{2}$/.test(d.birthDate)||isNaN(dateLocal(d.birthDate)))return'La fecha no es válida';
+      const b=dateLocal(d.birthDate),n=new Date(),today=new Date(n.getFullYear(),n.getMonth(),n.getDate());
+      if(b.getFullYear()<1900)return'La fecha no es válida';
+      if(d.stage!=='prenatal'&&b>today)return'La fecha de nacimiento no puede ser futura. Si aún no nace, elige la etapa "Por nacer".';
+      if(d.stage==='prenatal'&&(b-today)/864e5>400)return'La fecha estimada de nacimiento es demasiado lejana';
+    }
+    if(d.monthlyBudget!==null&&d.monthlyBudget!==undefined&&d.monthlyBudget!==''){
+      const v=Number(d.monthlyBudget);
+      if(!Number.isFinite(v)||v<0||v>=1e12)return'El presupuesto debe ser un monto válido (0 o más)';
+    }
+    if(String(d.notes||'').length>300)return'Las notas son muy largas (máximo 300 caracteres)';
+    return null;
+  },
+  addChild(d){
+    const err=this._validateChild(d,null);
+    if(err)return{ok:false,error:err};
+    const c={...this._normChild(d),id:uid(),status:'active',createdAt:new Date().toISOString()};
+    (S.children=S.children||[]).push(c);
+    save();
+    if(sb&&currentUserId)queueRetryableWrite('child:'+c.id,{fn:'child',id:c.id});
+    return{ok:true,child:c};
+  },
+  updateChild(id,d){
+    const c=this.getChildById(id);
+    if(!c)return{ok:false,error:'El perfil ya no existe'};
+    const merged={...c,...d};
+    const err=this._validateChild(merged,id);
+    if(err)return{ok:false,error:err};
+    Object.assign(c,this._normChild(merged));
+    save();
+    if(sb&&currentUserId)queueRetryableWrite('child:'+id,{fn:'child',id});
+    return{ok:true,child:c};
+  },
+  setChildStatus(id,status){
+    const c=this.getChildById(id);
+    if(!c)return{ok:false,error:'El perfil ya no existe'};
+    if(status!=='active'&&status!=='archived')return{ok:false,error:'Estado inválido'};
+    c.status=status;
+    save();
+    if(sb&&currentUserId)queueRetryableWrite('child:'+id,{fn:'child',id});
+    return{ok:true};
   },
   // ==================== OPERACIONES CON TERCEROS ====================
   // Dinero que pasa temporalmente por tus cuentas pero NO es tuyo. Una
@@ -4086,7 +4196,7 @@ function go(page){
   $('page-'+page)?.classList.add('on');
   document.querySelectorAll('.ni').forEach(n=>{if(n.getAttribute('onclick')?.includes("'"+page+"'"))n.classList.add('on')});
   document.querySelectorAll('.bn-item[data-page]').forEach(n=>{if(n.dataset.page===page)n.classList.add('on')});
-  const renders={dashboard:renderDash,transactions:renderTxP,accounts:renderAccounts,analysis:renderAnalysis,budget:renderBudget,subscriptions:renderSubs,loans:renderLoans,goals:renderGoals,settings:renderSettings,billing:renderBilling};
+  const renders={dashboard:renderDash,transactions:renderTxP,accounts:renderAccounts,analysis:renderAnalysis,budget:renderBudget,subscriptions:renderSubs,loans:renderLoans,goals:renderGoals,children:renderChildren,settings:renderSettings,billing:renderBilling};
   renders[page]?.();
   updateNW();
   pushPendingIfAny(); // en segundo plano, no bloquea el cambio de página
@@ -5033,6 +5143,225 @@ async function saveTx(){
     msi:msiOn?{months:msiMo,monthly:amt/msiMo,advancePaid:0}:null};
   Store.addTransaction(tx);
   cM('mo-tx');renderDash();renderTxP();toast('Transacción guardada');saveBtn.disabled=false;
+}
+
+// ==================== HIJOS: catálogo, helpers e interfaz ====================
+const CHILD_STAGES={
+  prenatal:{label:'Por nacer / embarazo',icon:'🤰'},
+  newborn:{label:'Recién nacido y primera infancia',icon:'👶'},
+  child:{label:'Niñez',icon:'🧒'},
+  teen:{label:'Adolescencia',icon:'🧑‍🎓'},
+  adult:{label:'Hijo adulto',icon:'🧑'}
+};
+const CHILD_STAGE_ORDER=['prenatal','newborn','child','teen','adult'];
+// Edades (en años CUMPLIDOS) hasta las que se SUGIERE cada etapa. Son solo
+// sugerencias: se cambian aquí en un solo lugar y nunca modifican nada solas.
+const CHILD_STAGE_RULES={newbornMaxYears:2,childMaxYears:11,teenMaxYears:17};
+const CHILD_DEPENDENCY={total:'Total',partial:'Parcial',occasional:'Ocasional',independent:'Independiente, con seguimiento financiero'};
+// Catálogo inicial de categorías por etapa (referencia; se podrá personalizar).
+const CHILD_CATALOG={
+  prenatal:['Consultas prenatales','Estudios médicos y ultrasonidos','Vitaminas y medicamentos relacionados con el embarazo','Hospital, parto y cesárea','Ropa de maternidad','Cuna y mobiliario','Carriola y silla para automóvil','Ropa y artículos iniciales para bebé','Preparación de habitación','Otros gastos de preparación','Fondo de ahorro para el nacimiento'],
+  newborn:['Pañales y toallitas','Fórmula y alimentación','Productos de higiene','Ropa y calzado','Pediatra y consultas médicas','Medicamentos y vacunas','Seguro médico','Guardería','Niñera y cuidados infantiles','Cuna, carriola y accesorios','Juguetes y estimulación temprana'],
+  child:['Colegiaturas e inscripciones','Útiles y libros escolares','Uniformes y calzado','Transporte escolar','Alimentación y lonches','Actividades extraescolares','Deportes y equipamiento','Juguetes y entretenimiento','Salud y cuidado personal','Mesada','Ahorro para educación futura'],
+  teen:['Educación y colegiaturas','Preparación para la universidad','Cursos e idiomas','Computadora, celular e internet','Transporte','Alimentación','Ropa y cuidado personal','Deportes y actividades sociales','Mesada y gastos personales','Material educativo','Ahorro para estudios superiores'],
+  adult:['Universidad y posgrado','Colegiaturas y certificaciones','Renta y alojamiento','Alimentación y manutención','Transporte','Servicios del hogar','Seguro médico y gastos de salud','Computadora y herramientas profesionales','Transferencias periódicas','Apoyo para buscar empleo','Apoyo para iniciar un negocio','Fondo para independizarse','Ayuda económica extraordinaria'],
+  common:['Salud','Educación','Alimentación','Ropa y cuidado personal','Transporte','Vivienda y alojamiento','Entretenimiento','Seguros','Gastos extraordinarios','Ahorro','Inversión para el futuro','Otros gastos personalizados']
+};
+function childToCloud(c){
+  return{id:c.id,user_id:currentUserId,name:c.name,birth_date:c.birthDate||null,birth_estimated:!!c.birthEstimated,
+    life_stage:c.stage,dependency:c.dependency,monthly_budget_cents:c.monthlyBudget!=null?amtToCents(c.monthlyBudget):null,
+    notes:c.notes||null,status:c.status==='archived'?'archived':'active',...(c.createdAt?{created_at:c.createdAt}:{})};
+}
+function childFromCloud(r){
+  return{id:r.id,name:r.name||'',birthDate:r.birth_date||'',birthEstimated:!!r.birth_estimated,
+    stage:CHILD_STAGES[r.life_stage]?r.life_stage:'child',dependency:CHILD_DEPENDENCY[r.dependency]?r.dependency:'total',
+    monthlyBudget:r.monthly_budget_cents!=null?centsToAmt(r.monthly_budget_cents):null,notes:r.notes||'',
+    status:r.status==='archived'?'archived':'active',createdAt:r.created_at||''};
+}
+function isMissingTableError(msg){return /does not exist|schema cache|could not find the table|PGRST205|42P01/i.test(String(msg||''))}
+// Subida "best-effort" de un perfil (se usa para los que solo existían en local).
+async function pushChildBestEffort(c){
+  if(!sb||!currentUserId||!c)return false;
+  try{
+    const {error}=await sb.from('children').upsert(childToCloud(c),{onConflict:'id'});
+    if(error){console.warn('Supabase: no se pudo subir el perfil',c.name,error.message);return false}
+    return true;
+  }catch(err){console.warn('Supabase: error de red subiendo el perfil',c.name,err);return false}
+}
+// Edad a partir de la fecha (todo con fechas LOCALES, nunca UTC).
+function childAgeInfo(birthDate){
+  if(!birthDate||!/^\d{4}-\d{2}-\d{2}$/.test(birthDate))return null;
+  const b=dateLocal(birthDate);if(isNaN(b))return null;
+  const n=new Date(),today=new Date(n.getFullYear(),n.getMonth(),n.getDate());
+  if(b>today)return{future:true,days:Math.round((b-today)/864e5)};
+  let years=today.getFullYear()-b.getFullYear(),months=today.getMonth()-b.getMonth();
+  if(today.getDate()<b.getDate())months--;
+  if(months<0){years--;months+=12}
+  return{future:false,years,months};
+}
+function suggestChildStage(birthDate){
+  const a=childAgeInfo(birthDate);if(!a)return null;
+  if(a.future)return'prenatal';
+  const R=CHILD_STAGE_RULES;
+  if(a.years<=R.newbornMaxYears)return'newborn';
+  if(a.years<=R.childMaxYears)return'child';
+  if(a.years<=R.teenMaxYears)return'teen';
+  return'adult';
+}
+function childAgeText(c){
+  const a=childAgeInfo(c.birthDate);
+  if(c.stage==='prenatal'){
+    if(!c.birthDate)return'Sin fecha estimada';
+    if(a&&a.future){const w=Math.round(a.days/7);return`Nacimiento estimado: ${fmtDate(c.birthDate)} (${w<=8?`~${Math.max(w,0)} sem.`:`~${Math.round(a.days/30.4)} meses`})`}
+    return`Fecha estimada: ${fmtDate(c.birthDate)}`;
+  }
+  if(!a||a.future)return'Edad no registrada';
+  if(a.years>=1)return`${a.years} año${a.years===1?'':'s'}${a.years<3&&a.months?` ${a.months} m`:''}`;
+  return a.months>0?`${a.months} mes${a.months===1?'':'es'}`:'Recién nacido';
+}
+// Gasto del mes atribuido a un hijo (usa la asignación de cada movimiento: un
+// gasto compartido cuenta solo la parte de ese hijo). Aún no hay movimientos
+// asignados (llegan en la Etapa 2), así que hoy da 0 con datos reales.
+function childMonthSpend(childId,period){
+  return M(S.transactions.reduce((sum,t)=>{
+    if(t.type!=='expense'||!Array.isArray(t.childAlloc)||!t.date||t.date.slice(0,7)!==period)return sum;
+    const a=t.childAlloc.find(x=>x&&x.childId===childId);
+    return a?sum+M(a.amount):sum;
+  },0));
+}
+let _childView=null,_childAllCats=false,_childArchOpen=false,_childSaving=false;
+function renderChildren(){
+  const el=$('children-body');if(!el)return;
+  if(_childView&&!Store.getChildById(_childView))_childView=null;
+  el.innerHTML=_childView?childDetailHTML(Store.getChildById(_childView)):childListHTML();
+}
+function childPageHead(extra){
+  return`<div class="ph"><div><div class="pt">Hijos</div><div class="ps">Gastos, presupuesto y ahorro por cada hijo</div></div>${extra||''}</div>`;
+}
+function childCardHTML(c,period){
+  const st=CHILD_STAGES[c.stage]||CHILD_STAGES.child,spent=childMonthSpend(c.id,period),bud=c.monthlyBudget>0?c.monthlyBudget:0;
+  const pct=bud?Math.round(spent/bud*100):0;
+  return`<div class="card" style="padding:14px 16px;margin-bottom:10px${c.status==='archived'?';opacity:.7':''}">
+    <div style="display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;align-items:flex-start">
+      <div><div style="font-weight:600;font-size:15px">${st.icon} ${esc(c.name)}</div><div style="font-size:12px;color:var(--t3);margin-top:2px">${esc(st.label)} · ${esc(childAgeText(c))}</div></div>
+      <button class="btn bg_ sm" onclick="openChildDetail('${c.id}')">Ver detalle</button>
+    </div>
+    <div style="display:flex;gap:22px;margin-top:10px;font-size:12px;flex-wrap:wrap;color:var(--t3)">
+      <div>Gasto del mes<br><strong style="color:var(--t1);font-family:'DM Mono',monospace;font-size:14px">${fmt(spent)}</strong></div>
+      <div>Presupuesto mensual<br><strong style="color:var(--t1);font-family:'DM Mono',monospace;font-size:14px">${bud?fmt(bud):'—'}</strong></div>
+    </div>
+    ${bud?`<div style="height:6px;background:var(--bg3);border-radius:99px;overflow:hidden;margin-top:10px"><div style="width:${Math.min(100,pct)}%;height:100%;background:${pct>=100?'var(--red)':pct>=80?'var(--yel)':'var(--act)'}"></div></div><div style="font-size:11px;color:var(--t3);margin-top:4px">${pct}% del presupuesto utilizado</div>`:''}
+  </div>`;
+}
+function childListHTML(){
+  const kids=Store.getChildren(),active=kids.filter(c=>c.status!=='archived'),arch=kids.filter(c=>c.status==='archived');
+  if(!kids.length){
+    return childPageHead('')+`<div class="card" style="padding:32px 20px;text-align:center">
+      <div style="font-size:42px;margin-bottom:8px">👨‍👩‍👧</div>
+      <div style="font-size:16px;font-weight:600;margin-bottom:6px">Aún no hay perfiles de hijos</div>
+      <div style="font-size:13px;color:var(--t3);line-height:1.6;max-width:420px;margin:0 auto 16px">Aquí puedes llevar el control de lo que gastas y ahorras por cada hijo, desde antes de que nazca hasta que es adulto. Es opcional: el resto de la app funciona igual sin esto.</div>
+      <button class="btn bp" onclick="openChildM()">+ Agregar mi primer hijo</button>
+    </div>`;
+  }
+  const period=td_().slice(0,7);
+  let summary='';
+  if(active.length){
+    const spent=M(active.reduce((s,c)=>s+childMonthSpend(c.id,period),0));
+    const budgeted=M(active.reduce((s,c)=>s+(c.monthlyBudget>0?c.monthlyBudget:0),0));
+    const box=(l,v)=>`<div class="card" style="padding:12px 14px"><div style="font-size:11px;color:var(--t3)">${l}</div><div style="font-family:'DM Mono',monospace;font-size:16px;font-weight:500;margin-top:4px">${v}</div></div>`;
+    summary=`<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px;margin-bottom:14px">
+      ${box('Gasto de los hijos este mes',fmt(spent))}
+      ${box('Presupuesto asignado',budgeted?fmt(budgeted):'—')}
+      ${box('Presupuesto disponible',budgeted?fmt(budgeted-spent):'—')}
+      ${box('Ejecución del presupuesto',budgeted?Math.round(spent/budgeted*100)+'%':'—')}
+    </div>${budgeted?'':'<div style="font-size:11px;color:var(--t3);margin:-6px 0 14px">Define un presupuesto mensual en el perfil de un hijo para ver su ejecución.</div>'}`;
+  }
+  const archBlock=arch.length?`<div class="slbl" role="button" tabindex="0" aria-expanded="${_childArchOpen}" style="cursor:pointer;user-select:none;margin-top:18px" onclick="toggleChildArch()" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();toggleChildArch()}"><span>Archivados (${arch.length})</span><span style="font-size:13px">${_childArchOpen?'▾':'▸'}</span></div><div style="display:${_childArchOpen?'block':'none'}">${arch.map(c=>childCardHTML(c,period)).join('')}</div>`:'';
+  return childPageHead('<button class="btn bp" onclick="openChildM()">+ Agregar hijo</button>')+summary
+    +(active.length?active.map(c=>childCardHTML(c,period)).join(''):'<div class="card" style="padding:18px;text-align:center;font-size:13px;color:var(--t3)">No hay perfiles activos. Los archivados están abajo y puedes reactivarlos.</div>')+archBlock;
+}
+function toggleChildArch(){_childArchOpen=!_childArchOpen;renderChildren()}
+function openChildDetail(id){_childView=id;_childAllCats=false;renderChildren();window.scrollTo(0,0)}
+function closeChildDetail(){_childView=null;renderChildren();window.scrollTo(0,0)}
+function toggleChildCats(){_childAllCats=!_childAllCats;renderChildren()}
+function childDetailHTML(c){
+  const st=CHILD_STAGES[c.stage]||CHILD_STAGES.child,period=td_().slice(0,7),spent=childMonthSpend(c.id,period),bud=c.monthlyBudget>0?c.monthlyBudget:0;
+  const sug=suggestChildStage(c.birthDate);
+  const banner=(sug&&sug!==c.stage&&c.status!=='archived')?`<div class="card" style="padding:12px 14px;margin-bottom:12px;border-left:3px solid var(--yel);font-size:12px;line-height:1.6">${c.stage==='prenatal'&&sug!=='prenatal'?'La fecha estimada ya pasó. ¿Ya nació? Actualiza la etapa y la fecha real.':`Por su edad, la etapa sugerida es <strong>${esc(CHILD_STAGES[sug].label)}</strong>. Puedes mantener la actual o actualizarla.`} Tus movimientos no cambian.<br><button class="btn bg_ sm" style="margin-top:8px;font-size:11px" onclick="openChildM('${c.id}','${sug}')">Revisar etapa</button></div>`:'';
+  const chips=l=>l.map(x=>`<span style="display:inline-block;font-size:11px;padding:4px 9px;margin:0 6px 6px 0;border-radius:99px;border:1px solid var(--bdr);color:var(--t2)">${esc(x)}</span>`).join('');
+  const others=CHILD_STAGE_ORDER.filter(k=>k!==c.stage);
+  const catsAll=_childAllCats?`<div style="margin-top:10px">${others.map(k=>`<div style="font-size:11px;color:var(--t3);margin:10px 0 6px">${CHILD_STAGES[k].icon} ${esc(CHILD_STAGES[k].label)}</div>${chips(CHILD_CATALOG[k])}`).join('')}</div>`:'';
+  return childPageHead('<button class="btn bg_" onclick="closeChildDetail()">← Hijos</button>')+`
+    <div class="card" style="padding:16px 18px;margin-bottom:12px">
+      <div style="display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;align-items:flex-start">
+        <div><div style="font-size:18px;font-weight:600">${st.icon} ${esc(c.name)}${c.status==='archived'?' <span style="font-size:11px;color:var(--t3);font-weight:400">· Archivado</span>':''}</div>
+        <div style="font-size:12px;color:var(--t3);margin-top:3px">${esc(st.label)} · ${esc(childAgeText(c))}</div></div>
+        <button class="btn bg_ sm" onclick="openChildM('${c.id}')">Editar</button>
+      </div>
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin-top:14px;font-size:12px;color:var(--t3)">
+        <div>Dependencia económica<br><strong style="color:var(--t1);font-size:13px">${esc(CHILD_DEPENDENCY[c.dependency]||CHILD_DEPENDENCY.total)}</strong></div>
+        <div>Gasto del mes<br><strong style="color:var(--t1);font-family:'DM Mono',monospace;font-size:14px">${fmt(spent)}</strong></div>
+        <div>Presupuesto mensual<br><strong style="color:var(--t1);font-family:'DM Mono',monospace;font-size:14px">${bud?fmt(bud):'Sin definir'}</strong></div>
+        ${bud?`<div>Disponible<br><strong style="color:var(--t1);font-family:'DM Mono',monospace;font-size:14px">${fmt(bud-spent)}</strong></div>`:''}
+      </div>
+      ${c.notes?`<div style="margin-top:12px;font-size:12px;color:var(--t2);line-height:1.5;white-space:pre-wrap">${esc(c.notes)}</div>`:''}
+    </div>${banner}
+    <div class="card" style="padding:14px 16px;margin-bottom:12px">
+      <div style="font-weight:600;font-size:13px;margin-bottom:10px">Categorías sugeridas para esta etapa</div>
+      <div>${chips(CHILD_CATALOG[c.stage]||CHILD_CATALOG.child)}</div>
+      <div style="font-size:11px;color:var(--t3);margin:6px 0 4px">Aplican a cualquier etapa</div>
+      <div>${chips(CHILD_CATALOG.common)}</div>
+      <button class="btn bg_ sm" style="margin-top:8px;font-size:11px" onclick="toggleChildCats()">${_childAllCats?'Ocultar las demás etapas':'Ver todas las categorías'}</button>${catsAll}
+    </div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:6px"><button class="btn bg_" onclick="toggleChildArchive('${c.id}')">${c.status==='archived'?'Reactivar perfil':'Archivar perfil'}</button></div>`;
+}
+function openChildM(id,forceStage){
+  const c=id?Store.getChildById(id):null;
+  $('ch-id').value=c?c.id:'';
+  $('ch-title').textContent=c?'Editar perfil':'Nuevo hijo';
+  $('ch-stage').innerHTML=CHILD_STAGE_ORDER.map(k=>`<option value="${k}">${CHILD_STAGES[k].icon} ${esc(CHILD_STAGES[k].label)}</option>`).join('');
+  $('ch-dep').innerHTML=Object.keys(CHILD_DEPENDENCY).map(k=>`<option value="${k}">${esc(CHILD_DEPENDENCY[k])}</option>`).join('');
+  $('ch-name').value=c?c.name:'';
+  $('ch-stage').value=forceStage||(c?c.stage:'child');
+  $('ch-dt').value=c?c.birthDate:'';
+  $('ch-dep').value=c?c.dependency:'total';
+  $('ch-bud').value=c&&c.monthlyBudget!=null?c.monthlyBudget:'';
+  $('ch-notes').value=c?c.notes:'';
+  onChildStageChg();
+  oM('mo-child');
+}
+function onChildStageChg(){
+  $('ch-dt-lbl').textContent=$('ch-stage').value==='prenatal'?'Fecha estimada de nacimiento (opcional)':'Fecha de nacimiento (opcional)';
+  updateChildHint();
+}
+function updateChildHint(){
+  const box=$('ch-hint'),sug=suggestChildStage($('ch-dt').value);
+  if(sug&&sug!==$('ch-stage').value){
+    box.style.display='block';
+    box.innerHTML=`Por la fecha, la etapa sugerida es <strong>${esc(CHILD_STAGES[sug].label)}</strong>. <button class="btn bg_ sm" style="font-size:11px;margin-left:6px" onclick="useSuggestedChildStage('${sug}')">Usar</button>`;
+  }else{box.style.display='none';box.innerHTML=''}
+}
+function useSuggestedChildStage(k){$('ch-stage').value=k;onChildStageChg()}
+function saveChild(){
+  if(_childSaving)return; // doble toque en móvil
+  _childSaving=true;
+  try{
+    const id=$('ch-id').value;
+    const data={name:$('ch-name').value,stage:$('ch-stage').value,birthDate:$('ch-dt').value,dependency:$('ch-dep').value,monthlyBudget:$('ch-bud').value,notes:$('ch-notes').value};
+    const r=id?Store.updateChild(id,data):Store.addChild(data);
+    if(!r.ok){toast(r.error,false);return}
+    cM('mo-child');
+    renderChildren();
+    toast(id?'Perfil actualizado':'Perfil creado');
+  }finally{_childSaving=false}
+}
+async function toggleChildArchive(id){
+  const c=Store.getChildById(id);if(!c)return;
+  if(c.status==='archived'){Store.setChildStatus(id,'active');renderChildren();toast('Perfil reactivado');return}
+  const ok=await confirm_('¿Archivar este perfil?','Dejará de aparecer en la lista principal, pero su historial se conserva y puedes reactivarlo cuando quieras.','Archivar');
+  if(!ok)return;
+  Store.setChildStatus(id,'archived');
+  _childView=null;renderChildren();toast('Perfil archivado — su historial se conserva');
 }
 
 // ==================== OPERACIONES CON TERCEROS: interfaz ====================
@@ -7443,7 +7772,7 @@ async function nukeLocalOnly(){
 }
 // Todas las tablas que la app sincroniza (hijos antes que padres, aunque las
 // FKs ya tienen cascade — así no se depende de eso).
-const NUKE_TABLES=['transactions','debts','goals','subscriptions','budgets','budget_goals','subcategory_budgets',
+const NUKE_TABLES=['transactions','debts','goals','subscriptions','budgets','budget_goals','subcategory_budgets','children',
   'vehicle_records','vehicles','investment_records','investments',
   'custom_section_records','custom_section_members','custom_section_categories','custom_sections',
   'subcategories','categories','accounts','settings','net_worth_snapshots'];
@@ -7458,7 +7787,7 @@ async function nukeEverything(){
     // Ahora: se intenta con TODAS, se VERIFICA que no quede ninguna fila y,
     // si algo falla, NO se toca nada local y se avisa para reintentar.
     // Las dos tablas opcionales pueden no existir todavía: sus errores se ignoran.
-    const OPTIONAL=new Set(['budget_goals','subcategory_budgets']);
+    const OPTIONAL=new Set(['budget_goals','subcategory_budgets','children']);
     const failed=[];
     for(const t of NUKE_TABLES){
       try{
