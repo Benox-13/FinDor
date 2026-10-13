@@ -1115,6 +1115,24 @@ body.modal-open #bottom-nav{display:none !important}
   </div>
 </div>
 
+<!-- HIJOS: presupuesto de un mes (total + categorías) -->
+<div class="mo" id="mo-chbud">
+  <div class="md">
+    <div class="mh"><span class="mttl" id="cb-title">Presupuesto</span><button class="btn bg_ ico sm" onclick="cM('mo-chbud')">✕</button></div>
+    <div class="mbody">
+      <input type="hidden" id="cb-id"><input type="hidden" id="cb-period">
+      <div class="fg"><label class="fl">Presupuesto total del mes</label><input class="fc" type="number" id="cb-total" placeholder="0.00" min="0" step="0.01" inputmode="decimal" oninput="cbSum()"></div>
+      <div class="fl" style="margin:4px 0 6px">Límites por categoría (opcional)</div>
+      <div id="cb-rows"></div>
+      <datalist id="cb-sug"></datalist>
+      <button class="btn bg_ sm" style="margin:2px 0 8px" onclick="cbAddRow()">+ Agregar categoría</button>
+      <div id="cb-info" style="font-size:12px;margin-bottom:8px"></div>
+      <div style="font-size:11px;color:var(--t3);line-height:1.5">Este presupuesto se repite cada mes hasta que lo cambies. Para quitar un límite desde este mes en adelante, déjalo vacío o en 0. Los meses anteriores no se modifican.</div>
+    </div>
+    <div class="mfoot"><button class="btn bg_ sm" onclick="cM('mo-chbud')">Cancelar</button><button class="btn bp sm" onclick="saveChildBud()">Guardar</button></div>
+  </div>
+</div>
+
 <!-- HIJOS: registrar o repartir un movimiento -->
 <div class="mo" id="mo-chtx">
   <div class="md">
@@ -1166,7 +1184,7 @@ body.modal-open #bottom-nav{display:none !important}
       <div class="fg"><label class="fl" id="ch-dt-lbl">Fecha de nacimiento (opcional)</label><input class="fc" type="date" id="ch-dt" onchange="updateChildHint()"></div>
       <div id="ch-hint" style="display:none;font-size:12px;line-height:1.5;padding:9px 12px;border-radius:var(--r);background:var(--bg3);border:1px solid var(--bdr);margin:-4px 0 12px;color:var(--t2)"></div>
       <div class="fg"><label class="fl">Dependencia económica</label><select class="fc" id="ch-dep"></select></div>
-      <div class="fg"><label class="fl">Presupuesto mensual (opcional)</label><input class="fc" type="number" id="ch-bud" placeholder="0.00" min="0" step="0.01" inputmode="decimal"></div>
+      <div class="fg"><label class="fl">Presupuesto mensual base (opcional)</label><input class="fc" type="number" id="ch-bud" placeholder="0.00" min="0" step="0.01" inputmode="decimal"></div>
       <div class="fg"><label class="fl">Notas (opcional)</label><textarea class="fc" id="ch-notes" rows="2" maxlength="300" placeholder="Algo que quieras recordar"></textarea></div>
       <div style="font-size:11px;color:var(--t3);line-height:1.5">Solo se guarda lo necesario: un nombre o alias, sin documentos ni datos de identificación.</div>
     </div>
@@ -1889,6 +1907,13 @@ async function execRetryableWrite(desc){
       return await Store._pushSectionRecord(desc.sectionId,r,true);
     }
     case 'settings':return await pushSettingsNow();
+    case 'child_budget':{
+      const r=Store.getChildBudgetRow(desc.k);if(!r)return true;
+      const label='sincronizar presupuesto de hijo '+r.period;
+      if(await cloudWrite(sb.from('child_budgets').upsert(childBudgetToCloud(r),{onConflict:'child_id,period,category'}),label))return true;
+      // Tabla aún no creada: no se deja pendiente (bloquearía todo); se sube sola cuando exista.
+      return isMissingTableError(lastSyncErrors[label]);
+    }
     case 'child':{
       const c=Store.getChildById(desc.id);if(!c)return true;
       const label='sincronizar hijo '+c.name;
@@ -2148,13 +2173,13 @@ async function pullFromSupabase(){
     const tables=['accounts','categories','subcategories','transactions','debts','goals',
       'subscriptions','budgets','budget_goals','subcategory_budgets','vehicles','vehicle_records','investments','investment_records','custom_sections',
       'custom_section_members','custom_section_categories','custom_section_records',
-      'settings','net_worth_snapshots','children'];
+      'settings','net_worth_snapshots','children','child_budgets'];
     // Tablas OPCIONALES: se agregaron después (metas de presupuesto y
     // límites de subcategoría). Si todavía no existen en Supabase (aún no
     // se corre su SQL), NO se aborta toda la sincronización — se avisa en
     // consola, se dejan los datos locales de esa parte tal cual, y todo
     // lo demás se sincroniza normal.
-    const OPTIONAL_TABLES=new Set(['budget_goals','subcategory_budgets','children']);
+    const OPTIONAL_TABLES=new Set(['budget_goals','subcategory_budgets','children','child_budgets']);
     const optionalMissing=new Set();
     const results={};
     for(const t of tables){
@@ -2300,6 +2325,17 @@ async function pullFromSupabase(){
         return [...fromCloud,...childrenLocalOnly];
       })();
 
+    // --- presupuestos de hijos (misma regla que los perfiles: lo solo-local se conserva y se sube) ---
+    let childBudgetsLocalOnly=[];
+    const newChildBudgets=optionalMissing.has('child_budgets')
+      ?(S.childBudgets||[])
+      :(()=>{
+        const fromCloud=(results.child_budgets||[]).map(childBudgetFromCloud);
+        const keys=new Set(fromCloud.map(cbKey));
+        childBudgetsLocalOnly=(S.childBudgets||[]).filter(r=>r&&r.childId&&!keys.has(cbKey(r)));
+        return [...fromCloud,...childBudgetsLocalOnly];
+      })();
+
     // --- vehicles + records anidados ---
     const newVehicles=results.vehicles.map(v=>({
       id:v.id,name:v.name,brand:v.brand||'',model:v.model||'',year:v.year||'',
@@ -2370,7 +2406,7 @@ async function pullFromSupabase(){
     // abajo evita que lleguemos a pisar los datos locales a medias.
     S.accounts=newAccounts;S.categories=newCategories;S.transactions=newTransactions;
     S.debts_owed=newDebtsOwed;S.debts_iowe=newDebtsIowe;S.goals=newGoals;
-    S.subscriptions=newSubscriptions;S.budgets=newBudgets;S.budgetGoals=newBudgetGoals;S.children=newChildren;S.vehicles=newVehicles;S.investments=newInvestments;
+    S.subscriptions=newSubscriptions;S.budgets=newBudgets;S.budgetGoals=newBudgetGoals;S.children=newChildren;S.childBudgets=newChildBudgets;S.vehicles=newVehicles;S.investments=newInvestments;
     S.customSections=newCustomSections;S.settings=newSettings;S.dw=newDw;S.notif=newNotif;S.budgetRollover=newRollover;
     S.nwHistory=newNwHistory;
     save();
@@ -2378,7 +2414,8 @@ async function pullFromSupabase(){
     toast('Datos sincronizados desde la nube');
     shrinkExistingPhoto();
     if(localOnlyNW.length)syncNWHistoryUp(localOnlyNW); // sin await a propósito: es "best-effort"
-    childrenLocalOnly.forEach(c=>pushChildBestEffort(c)); // sube los perfiles que la nube aún no tiene
+    // Sube lo que la nube aún no tiene: PRIMERO los perfiles y después sus presupuestos (la FK exige que el hijo exista).
+    if(childrenLocalOnly.length||childBudgetsLocalOnly.length)(async()=>{for(const c of childrenLocalOnly)await pushChildBestEffort(c);for(const r of childBudgetsLocalOnly)await pushChildBudgetBestEffort(r)})();
   }catch(err){
     console.error('Error al traer datos de Supabase:',err);
     toast('No se pudo sincronizar — se sigue usando tus datos locales',false);
@@ -2638,6 +2675,8 @@ async function pushAllToSupabase(){
     }
     // 7a. Hijos (tabla opcional: si aún no existe, cloudWrite solo lo registra)
     for(const c of (S.children||[])){await cloudWrite(sb.from('children').upsert(childToCloud(c),{onConflict:'id'}),`hijo ${c.name}`)}
+    // 7a2. Presupuestos de hijos (tabla opcional)
+    for(const r of (S.childBudgets||[])){await cloudWrite(sb.from('child_budgets').upsert(childBudgetToCloud(r),{onConflict:'child_id,period,category'}),`presupuesto de hijo ${r.period}`)}
     // 7b. Metas de presupuesto (ingreso esperado + % de ahorro), por mes
     for(const g of S.budgetGoals){
       await cloudWrite(sb.from('budget_goals').insert({user_id:currentUserId,period_key:g.period,expected_income_cents:amtToCents(g.expectedIncome||0),savings_pct:g.savingsPct||0}),`meta de presupuesto ${g.period}`);
@@ -2988,7 +3027,7 @@ function emptyAppState(){
     settings:{name:'',currency:'MXN',theme:'dark',accent:'green'},
     dw:{metrics:true,txs:true,cats:true,accs:true,tdc:true,goals:true,budget:false,upcoming:true,subs:true,debts:true,health:true},
     notif:{bgt:true,dbt:true,sub:true,gol:true},
-    vehicles:[],investments:[],customSections:[],budgetRollover:false,nwHistory:[],budgetGoals:[],children:[]
+    vehicles:[],investments:[],customSections:[],budgetRollover:false,nwHistory:[],budgetGoals:[],children:[],childBudgets:[]
   };
 }
 // Estado inicial de una instalación nueva (con las categorías de ejemplo).
@@ -3012,7 +3051,7 @@ function defaultAppState(){ return {
   settings:{name:'',currency:'MXN',theme:'dark',accent:'green'},
   dw:{metrics:true,txs:true,cats:true,accs:true,tdc:true,goals:true,budget:false,upcoming:true,subs:true,debts:true,health:true},
   notif:{bgt:true,dbt:true,sub:true,gol:true},
-  vehicles:[],investments:[],customSections:[],budgetRollover:false,nwHistory:[],budgetGoals:[],children:[]
+  vehicles:[],investments:[],customSections:[],budgetRollover:false,nwHistory:[],budgetGoals:[],children:[],childBudgets:[]
 }; }
 
 // Carga del estado local, a prueba de datos dañados o incompletos.
@@ -3305,6 +3344,26 @@ const Store = {
       if(err)return{ok:false,error:err};
       this._patchTxNoBalance(id,{childAlloc:alloc.map(a=>({childId:a.childId,amount:M(a.amount)}))});
     }else if(has)this._patchTxNoBalance(id,{childAlloc:[]}); // [] limpia también la nube
+    return{ok:true};
+  },
+  // ---- Presupuestos de hijos (Etapa 3) ----
+  // Fila = {childId, period:'AAAA-MM', category, limit}. category '' = presupuesto
+  // TOTAL del mes. Nunca se borran filas: quitar un límite es escribir 0 (ver childBudgetFor).
+  getChildBudgets(){return (S.childBudgets||[]).filter(r=>r&&r.childId&&r.period)},
+  getChildBudgetRow(k){return this.getChildBudgets().find(r=>r.childId===k.childId&&r.period===k.period&&r.category===k.category)},
+  setChildBudget(childId,period,category,limit){
+    if(!this.getChildById(childId))return{ok:false,error:'El perfil ya no existe'};
+    if(!/^\d{4}-(0[1-9]|1[0-2])$/.test(String(period)))return{ok:false,error:'Mes inválido'};
+    const cat=String(category==null?'':category).trim();
+    if(cat.length>40)return{ok:false,error:'El nombre de la categoría es muy largo (máximo 40 caracteres)'};
+    const v=Number(limit);
+    if(!Number.isFinite(v)||v<0||v>=1e12)return{ok:false,error:'El límite debe ser un monto válido (0 o más)'};
+    const lim=M(v);
+    const rows=(S.childBudgets=S.childBudgets||[]);
+    const row=rows.find(r=>r&&r.childId===childId&&r.period===period&&r.category===cat);
+    if(row)row.limit=lim;else rows.push({childId,period,category:cat,limit:lim});
+    save();
+    if(sb&&currentUserId)queueRetryableWrite('child_budget:'+childId+'|'+period+'|'+cat,{fn:'child_budget',k:{childId,period,category:cat}});
     return{ok:true};
   },
   // ==================== OPERACIONES CON TERCEROS ====================
@@ -5418,6 +5477,182 @@ function renderChildPick(){
 function onChildPickSearch(v){_pickQ=v;_pickLimit=25;renderChildPick()}
 function pickChildTx(id){cM('mo-chpick');openChildAlloc(id,_pickChild)}
 
+// ==================== HIJOS: presupuestos por categoría (Etapa 3) ====================
+// Cada mes puede tener su propio límite; si un mes no lo tiene, HEREDA el del
+// último mes anterior que lo definió. Quitar un límite = escribir 0: desde ese
+// mes en adelante ya no aplica (hasta que otro mes lo vuelva a definir).
+// El presupuesto TOTAL, si el hijo nunca tuvo uno por mes, es el "base" del perfil.
+function cbKey(r){return r.childId+'|'+r.period+'|'+r.category}
+function childBudgetToCloud(r){
+  return{user_id:currentUserId,child_id:r.childId,period:r.period,category:r.category||'',limit_cents:amtToCents(r.limit),updated_at:new Date().toISOString()};
+}
+function childBudgetFromCloud(r){
+  return{childId:r.child_id,period:r.period,category:r.category||'',limit:centsToAmt(r.limit_cents)};
+}
+async function pushChildBudgetBestEffort(r){
+  if(!sb||!currentUserId||!r)return false;
+  try{
+    const {error}=await sb.from('child_budgets').upsert(childBudgetToCloud(r),{onConflict:'child_id,period,category'});
+    if(error){console.warn('Supabase: no se pudo subir el presupuesto del hijo',r.period,error.message);return false}
+    return true;
+  }catch(err){console.warn('Supabase: error de red subiendo el presupuesto del hijo',err);return false}
+}
+// Límite vigente de un hijo en un mes. cat '' = total del mes.
+function childBudgetFor(c,cat,period){
+  let best=null;
+  for(const r of Store.getChildBudgets()){
+    if(r.childId===c.id&&r.category===cat&&r.period<=period&&(!best||r.period>best.period))best=r;
+  }
+  if(best)return best.limit>0?best.limit:0;
+  return cat===''?(c.monthlyBudget>0?c.monthlyBudget:0):0;
+}
+// Categorías con límite vigente ese mes: [{cat,limit}]
+function childBudgetCats(c,period){
+  const latest=new Map();
+  for(const r of Store.getChildBudgets()){
+    if(r.childId!==c.id||r.category===''||r.period>period)continue;
+    const cur=latest.get(r.category);
+    if(!cur||r.period>cur.period)latest.set(r.category,r);
+  }
+  return [...latest.values()].filter(r=>r.limit>0).map(r=>({cat:r.category,limit:r.limit}));
+}
+// Categoría con la que se compara un gasto de un hijo: lo registrado desde Hijos
+// (categoría "Hijos") usa su subcategoría; lo asignado después conserva su
+// categoría original (Comida, Salud…).
+function childCatKey(t){return t.category==='Hijos'?(t.subcategory||''):(t.category||'')}
+function childSpendByCat(childId,period){
+  const m=new Map();
+  for(const t of S.transactions){
+    if(t.type!=='expense'||!Array.isArray(t.childAlloc)||!t.date||t.date.slice(0,7)!==period)continue;
+    const a=t.childAlloc.find(x=>x&&x.childId===childId);
+    if(!a)continue;
+    const k=childCatKey(t);
+    m.set(k,M((m.get(k)||0)+M(a.amount)));
+  }
+  return m;
+}
+function childPeriodLabel(p){const d=dateLocal(p+'-01');return d.toLocaleDateString('es-MX',{month:'long',year:'numeric'})}
+function childPeriodsBack(endPeriod,n){
+  const out=[];const e=dateLocal(endPeriod+'-01');
+  for(let i=n-1;i>=0;i--){const d=addMonthsLocal(e,-i);out.push(d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0'))}
+  return out;
+}
+let _childBudPeriod=null;
+function shiftChildBudMonth(delta){
+  const d=addMonthsLocal(dateLocal((_childBudPeriod||td_().slice(0,7))+'-01'),delta);
+  _childBudPeriod=d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0');
+  renderChildren();
+}
+function goChildBudToday(){_childBudPeriod=td_().slice(0,7);renderChildren()}
+function childBudgetHTML(c){
+  const P=_childBudPeriod||td_().slice(0,7);
+  const total=childBudgetFor(c,'',P),spent=childMonthSpend(c.id,P),byCat=childSpendByCat(c.id,P);
+  const cats=childBudgetCats(c,P),limMap=new Map(cats.map(x=>[x.cat,x.limit]));
+  const keys=[...new Set([...limMap.keys(),...byCat.keys()])];
+  const canEdit=c.status!=='archived';
+  const bar=(pct)=>`<div style="height:6px;background:var(--bg3);border-radius:99px;overflow:hidden;margin-top:6px"><div style="width:${Math.min(100,pct)}%;height:100%;background:${pct>=100?'var(--red)':pct>=80?'var(--yel)':'var(--act)'}"></div></div>`;
+  const head=`<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:10px">
+    <div style="display:flex;align-items:center;gap:6px"><button class="btn bg_ sm" onclick="shiftChildBudMonth(-1)" aria-label="Mes anterior">‹</button><div style="font-weight:600;font-size:13px;min-width:130px;text-align:center;text-transform:capitalize">Presupuesto · ${esc(childPeriodLabel(P))}</div><button class="btn bg_ sm" onclick="shiftChildBudMonth(1)" aria-label="Mes siguiente">›</button>${P!==td_().slice(0,7)?'<button class="btn bg_ sm" style="font-size:11px" onclick="goChildBudToday()">Hoy</button>':''}</div>
+    ${canEdit?`<button class="btn bp sm" onclick="openChildBudM('${c.id}')">${(total>0||cats.length)?'Editar presupuesto':'Crear presupuesto'}</button>`:''}</div>`;
+  let body='';
+  if(!(total>0)&&!cats.length){
+    body=`<div style="font-size:12px;color:var(--t3);line-height:1.6">Aún no hay un presupuesto definido para ${esc(c.name)} en este mes. Gasto real: <strong style="color:var(--t1)">${fmt(spent)}</strong>.${canEdit?' Con "Crear presupuesto" defines un total y límites por categoría; se repiten cada mes hasta que los cambies.':''}</div>`;
+  }else{
+    const pct=total>0?Math.round(spent/total*100):0,diff=M(spent-total);
+    if(total>0)body+=`<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:10px;font-size:12px;color:var(--t3)">
+      <div>Planeado<br><strong style="color:var(--t1);font-family:'DM Mono',monospace;font-size:14px">${fmt(total)}</strong></div>
+      <div>Gasto real<br><strong style="color:var(--t1);font-family:'DM Mono',monospace;font-size:14px">${fmt(spent)}</strong></div>
+      <div>Disponible<br><strong style="color:${total-spent<0?'var(--red)':'var(--t1)'};font-family:'DM Mono',monospace;font-size:14px">${fmt(total-spent)}</strong></div>
+      <div>Utilizado<br><strong style="color:var(--t1);font-size:14px">${pct}%</strong></div></div>${bar(pct)}
+      <div style="font-size:11px;color:${diff>0?'var(--red)':'var(--inc)'};margin-top:6px">${diff>0?`Excedido por ${fmt(diff)}`:diff<0?`Dentro del presupuesto: te sobran ${fmt(-diff)}`:'Justo en el presupuesto'}</div>`;
+    else body+=`<div style="font-size:12px;color:var(--t3)">Sin presupuesto total este mes. Gasto real: <strong style="color:var(--t1)">${fmt(spent)}</strong>.</div>`;
+    const sumLim=M(cats.reduce((s,x)=>s+x.limit,0));
+    if(total>0&&sumLim>total)body+=`<div style="font-size:11px;color:var(--yel);margin-top:8px">Tus límites por categoría suman ${fmt(sumLim)}, más que el presupuesto total (${fmt(total)}).</div>`;
+    else if(total>0&&sumLim>0&&sumLim<total)body+=`<div style="font-size:11px;color:var(--t3);margin-top:8px">Sin asignar a una categoría: ${fmt(total-sumLim)}.</div>`;
+    if(keys.length){
+      const rows=keys.map(k=>({k,lim:limMap.get(k)||0,sp:byCat.get(k)||0}))
+        .sort((a,b)=>(b.lim>0)-(a.lim>0)||(b.lim>0&&a.lim>0?(b.sp/b.lim)-(a.sp/a.lim):b.sp-a.sp));
+      body+=`<div style="margin-top:12px;border-top:1px solid var(--bdr)">`+rows.map(r=>{
+        const p=r.lim>0?Math.round(r.sp/r.lim*100):null;
+        return`<div style="padding:9px 0;border-bottom:1px solid var(--bdr)"><div style="display:flex;justify-content:space-between;gap:8px;font-size:12px"><span style="min-width:0">${esc(r.k||'Sin subcategoría')}</span><span style="font-family:'DM Mono',monospace;white-space:nowrap">${fmt(r.sp)}${r.lim>0?' / '+fmt(r.lim):''}</span></div>${r.lim>0?bar(p)+`<div style="font-size:11px;margin-top:3px;color:${p>=100?'var(--red)':'var(--t3)'}">${p}% utilizado${r.sp>r.lim?` · excedido por ${fmt(r.sp-r.lim)}`:` · disponible ${fmt(r.lim-r.sp)}`}</div>`:`<div style="font-size:11px;color:var(--t3);margin-top:3px">Sin límite</div>`}</div>`;
+      }).join('')+`</div>`;
+    }
+  }
+  // Evolución: planeado vs real de los últimos 6 meses (hasta el mes mostrado)
+  const hist=childPeriodsBack(P,6).map(q=>({q,pl:childBudgetFor(c,'',q),re:childMonthSpend(c.id,q)}));
+  const histRows=hist.map(h=>`<tr><td style="padding:5px 4px;text-transform:capitalize">${esc(childPeriodLabel(h.q))}</td><td style="text-align:right;font-family:'DM Mono',monospace">${h.pl>0?fmt(h.pl):'—'}</td><td style="text-align:right;font-family:'DM Mono',monospace">${fmt(h.re)}</td><td style="text-align:right;color:${h.pl>0&&h.re>h.pl?'var(--red)':'var(--t3)'}">${h.pl>0?Math.round(h.re/h.pl*100)+'%':'—'}</td></tr>`).join('');
+  const evol=`<div style="margin-top:14px"><div style="font-size:11px;color:var(--t3);margin-bottom:4px">Evolución (últimos 6 meses)</div><div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:12px"><thead><tr style="color:var(--t3);font-size:11px"><th style="text-align:left;font-weight:400;padding:3px 4px">Mes</th><th style="text-align:right;font-weight:400">Planeado</th><th style="text-align:right;font-weight:400">Real</th><th style="text-align:right;font-weight:400">%</th></tr></thead><tbody>${histRows}</tbody></table></div></div>`;
+  return`<div class="card" style="padding:14px 16px;margin-bottom:12px">${head}${body}${evol}</div>`;
+}
+// ---- editor del presupuesto de un mes ----
+function cbSuggestions(c){
+  const set=new Set();
+  (CHILD_CATALOG[c.stage]||[]).forEach(x=>set.add(x));CHILD_CATALOG.common.forEach(x=>set.add(x));
+  const hc=S.categories.find(x=>x.name==='Hijos');((hc&&hc.subs)||[]).forEach(x=>set.add(x));
+  S.transactions.forEach(t=>{if(Array.isArray(t.childAlloc)&&t.childAlloc.some(a=>a&&a.childId===c.id)){const k=childCatKey(t);if(k)set.add(k)}});
+  Store.getChildBudgets().forEach(r=>{if(r.childId===c.id&&r.category)set.add(r.category)});
+  return [...set];
+}
+function cbRowHTML(cat,lim){
+  return`<div class="cb-row" style="display:flex;gap:6px;margin-bottom:6px"><input class="fc cb-cat" list="cb-sug" maxlength="40" placeholder="Categoría" value="${esc(cat||'')}" oninput="cbSum()"><input class="fc cb-lim" type="number" step="0.01" min="0" inputmode="decimal" placeholder="Límite" style="width:110px" value="${lim!=null&&lim!==''?Number(lim).toFixed(2):''}" oninput="cbSum()"><button class="btn bg_ sm" aria-label="Quitar" onclick="this.parentNode.remove();cbSum()">✕</button></div>`;
+}
+function openChildBudM(childId){
+  const c=Store.getChildById(childId);if(!c||c.status==='archived')return;
+  const P=_childBudPeriod||td_().slice(0,7);
+  _cbSaving=false;
+  $('cb-id').value=childId;$('cb-period').value=P;
+  $('cb-title').textContent=`Presupuesto de ${c.name} · ${childPeriodLabel(P)}`;
+  const t=childBudgetFor(c,'',P);
+  $('cb-total').value=t>0?t.toFixed(2):'';
+  $('cb-sug').innerHTML=cbSuggestions(c).map(x=>`<option value="${esc(x)}"></option>`).join('');
+  $('cb-rows').innerHTML=childBudgetCats(c,P).map(x=>cbRowHTML(x.cat,x.limit)).join('');
+  cbSum();oM('mo-chbud');
+}
+function cbAddRow(){$('cb-rows').insertAdjacentHTML('beforeend',cbRowHTML('',''));const r=document.querySelectorAll('#cb-rows .cb-cat');if(r.length)r[r.length-1].focus()}
+function cbSum(){
+  const box=$('cb-info');
+  const total=M($('cb-total').value);
+  const sum=M([...document.querySelectorAll('#cb-rows .cb-lim')].reduce((s,i)=>s+M(i.value),0));
+  if(!sum){box.textContent='';return}
+  box.style.color=(total>0&&sum>total)?'var(--yel)':'var(--t3)';
+  box.textContent=total>0?(sum>total?`Las categorías suman ${fmt(sum)}, más que el total (${fmt(total)}).`:`Categorías: ${fmt(sum)} de ${fmt(total)} · sin asignar ${fmt(total-sum)}`):`Categorías: ${fmt(sum)}`;
+}
+let _cbSaving=false;
+function saveChildBud(){
+  if(_cbSaving)return; // doble toque (se libera al reabrir el formulario)
+  const c=Store.getChildById($('cb-id').value),P=$('cb-period').value;
+  if(!c)return;
+  _cbSaving=true;let done=false;
+  try{
+    const rawTotal=$('cb-total').value.trim();
+    let total=0;
+    if(rawTotal!==''){total=Number(rawTotal);if(!Number.isFinite(total)||total<0||total>=1e12){toast('El presupuesto total debe ser un monto válido (0 o más)',false);return}total=M(total)}
+    const known=cbSuggestions(c);
+    const desired=new Map();
+    for(const row of document.querySelectorAll('#cb-rows .cb-row')){
+      let name=row.querySelector('.cb-cat').value.trim(),raw=row.querySelector('.cb-lim').value.trim();
+      if(!name&&!raw)continue;
+      if(!name){toast('Escribe la categoría de cada límite',false);return}
+      if(name.length>40){toast('El nombre de la categoría es muy largo (máximo 40 caracteres)',false);return}
+      name=known.find(k=>k.toLowerCase()===name.toLowerCase())||name; // respeta las mayúsculas de las existentes
+      const v=raw===''?0:Number(raw);
+      if(!Number.isFinite(v)||v<0||v>=1e12){toast(`El límite de "${name}" debe ser un monto válido (0 o más)`,false);return}
+      if(desired.has(name)){toast(`La categoría "${name}" está repetida`,false);return}
+      desired.set(name,M(v));
+    }
+    // Solo se escriben los CAMBIOS respecto a lo vigente (sin filas redundantes).
+    const writes=[];
+    if(total!==childBudgetFor(c,'',P))writes.push(['',total]);
+    const eff=new Map(childBudgetCats(c,P).map(x=>[x.cat,x.limit]));
+    desired.forEach((v,k)=>{if(v>0&&eff.get(k)!==v)writes.push([k,v]);if(v===0&&eff.has(k))writes.push([k,0])});
+    eff.forEach((v,k)=>{if(!desired.has(k))writes.push([k,0])}); // quitada del formulario = sin límite desde este mes
+    for(const [k,v] of writes){const r=Store.setChildBudget(c.id,P,k,v);if(!r.ok){toast(r.error,false);return}}
+    done=true;
+    cM('mo-chbud');renderChildren();
+    toast(writes.length?'Presupuesto guardado':'Sin cambios en el presupuesto');
+  }finally{if(!done)_cbSaving=false}
+}
+
 // ---- movimientos de un hijo (detalle) ----
 let _childFilters={from:'',to:'',type:'',sub:'',acc:''},_childLimit=30;
 function childMovements(childId){
@@ -5572,7 +5807,7 @@ function childPageHead(extra){
   return`<div class="ph"><div><div class="pt">Hijos</div><div class="ps">Gastos, presupuesto y ahorro por cada hijo</div></div>${extra||''}</div>`;
 }
 function childCardHTML(c,period){
-  const st=CHILD_STAGES[c.stage]||CHILD_STAGES.child,spent=childMonthSpend(c.id,period),bud=c.monthlyBudget>0?c.monthlyBudget:0;
+  const st=CHILD_STAGES[c.stage]||CHILD_STAGES.child,spent=childMonthSpend(c.id,period),bud=childBudgetFor(c,'',period);
   const pct=bud?Math.round(spent/bud*100):0;
   return`<div class="card" style="padding:14px 16px;margin-bottom:10px${c.status==='archived'?';opacity:.7':''}">
     <div style="display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;align-items:flex-start">
@@ -5600,7 +5835,7 @@ function childListHTML(){
   let summary='';
   if(active.length){
     const spent=M(active.reduce((s,c)=>s+childMonthSpend(c.id,period),0));
-    const budgeted=M(active.reduce((s,c)=>s+(c.monthlyBudget>0?c.monthlyBudget:0),0));
+    const budgeted=M(active.reduce((s,c)=>s+childBudgetFor(c,'',period),0));
     const box=(l,v)=>`<div class="card" style="padding:12px 14px"><div style="font-size:11px;color:var(--t3)">${l}</div><div style="font-family:'DM Mono',monospace;font-size:16px;font-weight:500;margin-top:4px">${v}</div></div>`;
     summary=`<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px;margin-bottom:14px">
       ${box('Gasto de los hijos este mes',fmt(spent))}
@@ -5614,11 +5849,11 @@ function childListHTML(){
     +(active.length?active.map(c=>childCardHTML(c,period)).join(''):'<div class="card" style="padding:18px;text-align:center;font-size:13px;color:var(--t3)">No hay perfiles activos. Los archivados están abajo y puedes reactivarlos.</div>')+archBlock;
 }
 function toggleChildArch(){_childArchOpen=!_childArchOpen;renderChildren()}
-function openChildDetail(id){_childView=id;_childAllCats=false;_childFilters={from:'',to:'',type:'',sub:'',acc:''};_childLimit=30;renderChildren();window.scrollTo(0,0)}
+function openChildDetail(id){_childView=id;_childBudPeriod=td_().slice(0,7);_childAllCats=false;_childFilters={from:'',to:'',type:'',sub:'',acc:''};_childLimit=30;renderChildren();window.scrollTo(0,0)}
 function closeChildDetail(){_childView=null;renderChildren();window.scrollTo(0,0)}
 function toggleChildCats(){_childAllCats=!_childAllCats;renderChildren()}
 function childDetailHTML(c){
-  const st=CHILD_STAGES[c.stage]||CHILD_STAGES.child,period=td_().slice(0,7),spent=childMonthSpend(c.id,period),bud=c.monthlyBudget>0?c.monthlyBudget:0;
+  const st=CHILD_STAGES[c.stage]||CHILD_STAGES.child,period=td_().slice(0,7),spent=childMonthSpend(c.id,period),bud=childBudgetFor(c,'',period);
   const sug=suggestChildStage(c.birthDate);
   const banner=(sug&&sug!==c.stage&&c.status!=='archived')?`<div class="card" style="padding:12px 14px;margin-bottom:12px;border-left:3px solid var(--yel);font-size:12px;line-height:1.6">${c.stage==='prenatal'&&sug!=='prenatal'?'La fecha estimada ya pasó. ¿Ya nació? Actualiza la etapa y la fecha real.':`Por su edad, la etapa sugerida es <strong>${esc(CHILD_STAGES[sug].label)}</strong>. Puedes mantener la actual o actualizarla.`} Tus movimientos no cambian.<br><button class="btn bg_ sm" style="margin-top:8px;font-size:11px" onclick="openChildM('${c.id}','${sug}')">Revisar etapa</button></div>`:'';
   const chips=l=>l.map(x=>`<span style="display:inline-block;font-size:11px;padding:4px 9px;margin:0 6px 6px 0;border-radius:99px;border:1px solid var(--bdr);color:var(--t2)">${esc(x)}</span>`).join('');
@@ -5638,7 +5873,7 @@ function childDetailHTML(c){
         ${bud?`<div>Disponible<br><strong style="color:var(--t1);font-family:'DM Mono',monospace;font-size:14px">${fmt(bud-spent)}</strong></div>`:''}
       </div>
       ${c.notes?`<div style="margin-top:12px;font-size:12px;color:var(--t2);line-height:1.5;white-space:pre-wrap">${esc(c.notes)}</div>`:''}
-    </div>${banner}${childMovementsHTML(c)}
+    </div>${banner}${childBudgetHTML(c)}${childMovementsHTML(c)}
     <div class="card" style="padding:14px 16px;margin-bottom:12px">
       <div style="font-weight:600;font-size:13px;margin-bottom:10px">Categorías sugeridas para esta etapa</div>
       <div>${chips(CHILD_CATALOG[c.stage]||CHILD_CATALOG.child)}</div>
@@ -8109,7 +8344,7 @@ async function nukeLocalOnly(){
 }
 // Todas las tablas que la app sincroniza (hijos antes que padres, aunque las
 // FKs ya tienen cascade — así no se depende de eso).
-const NUKE_TABLES=['transactions','debts','goals','subscriptions','budgets','budget_goals','subcategory_budgets','children',
+const NUKE_TABLES=['transactions','debts','goals','subscriptions','budgets','budget_goals','subcategory_budgets','child_budgets','children',
   'vehicle_records','vehicles','investment_records','investments',
   'custom_section_records','custom_section_members','custom_section_categories','custom_sections',
   'subcategories','categories','accounts','settings','net_worth_snapshots'];
@@ -8124,7 +8359,7 @@ async function nukeEverything(){
     // Ahora: se intenta con TODAS, se VERIFICA que no quede ninguna fila y,
     // si algo falla, NO se toca nada local y se avisa para reintentar.
     // Las dos tablas opcionales pueden no existir todavía: sus errores se ignoran.
-    const OPTIONAL=new Set(['budget_goals','subcategory_budgets','children']);
+    const OPTIONAL=new Set(['budget_goals','subcategory_budgets','children','child_budgets']);
     const failed=[];
     for(const t of NUKE_TABLES){
       try{
