@@ -231,6 +231,9 @@ select.fc option{background:var(--bg3)}
 .tabs{display:flex;gap:2px;background:var(--bg3);padding:4px;border-radius:var(--r2);margin-bottom:18px;flex-wrap:wrap}
 .tab{padding:7px 13px;border-radius:8px;border:none;background:none;color:var(--t2);cursor:pointer;font-family:'Sora',sans-serif;font-size:12px;font-weight:600;transition:all .15s;white-space:nowrap}
 .tab.on{background:var(--bg2);color:var(--txt);box-shadow:0 2px 8px rgba(0,0,0,.25)}
+/* Detalle de un hijo: 4 pestañas del mismo ancho (caben en el iPhone) */
+.tabs.ch4{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));flex-wrap:nowrap;margin-bottom:14px}
+.tabs.ch4 .tab{padding:8px 2px;font-size:11.5px;text-align:center;overflow:hidden;text-overflow:ellipsis}
 
 /* ============ CATEGORY ACCORDION ============ */
 .cs{margin-bottom:8px}
@@ -1145,7 +1148,8 @@ body.modal-open #bottom-nav{display:none !important}
       <div class="fl" style="margin:4px 0 6px">Límites por categoría (opcional)</div>
       <div id="cb-rows"></div>
       <datalist id="cb-sug"></datalist>
-      <button class="btn bg_ sm" style="margin:2px 0 8px" onclick="cbAddRow()">+ Agregar categoría</button>
+      <button class="btn bg_ sm" style="margin:2px 6px 8px 0" onclick="cbAddRow()">+ Agregar categoría</button><button class="btn bg_ sm" style="margin:2px 0 8px" onclick="cbToggleSug()">💡 Categorías sugeridas</button>
+      <div id="cb-sugbox" style="display:none;margin:0 0 10px;padding:10px 12px;border:1px solid var(--bdr);border-radius:10px"></div>
       <div id="cb-info" style="font-size:12px;margin-bottom:8px"></div>
       <div style="font-size:11px;color:var(--t3);line-height:1.5">Este presupuesto se repite cada mes hasta que lo cambies. Para quitar un límite desde este mes en adelante, déjalo vacío o en 0. Los meses anteriores no se modifican.</div>
     </div>
@@ -5683,7 +5687,8 @@ function childSavingsTotals(childIds){
   return{real:M(real),planned:M(planned),n};
 }
 const CHILD_GOAL_IDEAS=['Fondo para el nacimiento','Educación universitaria','Compra de una computadora','Intercambio académico','Vivienda o independencia económica','Fondo de emergencia'];
-let _childGoalOpen=new Set();
+let _childGoalOpen=new Set(),_childGoalMore=new Set();
+function toggleChildGoalMore(id){_childGoalMore.has(id)?_childGoalMore.delete(id):_childGoalMore.add(id);renderChildren()}
 function toggleChildGoalContribs(id){_childGoalOpen.has(id)?_childGoalOpen.delete(id):_childGoalOpen.add(id);renderChildren()}
 function childGoalCardHTML(c,g){
   const b=childGoalBreakdown(g),canAct=c.status!=='archived';
@@ -5706,12 +5711,14 @@ function childGoalCardHTML(c,g){
     ${b.planned>0?`<div style="font-size:11px;color:var(--yel);margin-top:6px">El ahorro planificado no es dinero disponible en tus cuentas.</div>`:''}
     <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:10px">
       ${canAct&&!g.finalized?`<button class="btn bp sm" onclick="openGabM('${g.id}')">+ Abonar</button>`:''}
+      ${canAct&&!g.finalized&&reached?`<button class="btn bg_ sm" onclick="finalizeGoal('${g.id}')">Finalizar</button>`:''}
       <button class="btn bg_ sm" onclick="toggleChildGoalContribs('${g.id}')">Aportaciones (${b.items.length}) ${open?'▾':'▸'}</button>
+      ${(canAct||b.items.length)?`<button class="btn bg_ sm" aria-expanded="${_childGoalMore.has(g.id)}" onclick="toggleChildGoalMore('${g.id}')">Más ${_childGoalMore.has(g.id)?'▾':'▸'}</button>`:''}</div>
+    ${_childGoalMore.has(g.id)?`<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:8px">
       ${canAct&&!g.finalized?`<button class="btn bg_ sm" onclick="openChildGoalM('${c.id}','${g.id}')">Editar</button>`:''}
       ${b.items.length?`<button class="btn bg_ sm" onclick="openGoalHistory('${g.id}')">Historial</button>`:''}
       ${canAct&&g.finalized?`<button class="btn bg_ sm" onclick="toggleGoalFinalized('${g.id}')">Reabrir</button>`:''}
-      ${canAct&&!g.finalized&&reached?`<button class="btn bg_ sm" onclick="finalizeGoal('${g.id}')">Finalizar</button>`:''}
-      ${canAct?`<button class="btn bg_ sm" onclick="delG('${g.id}')">Eliminar</button>`:''}</div>
+      ${canAct?`<button class="btn bg_ sm" onclick="delG('${g.id}')">Eliminar</button>`:''}</div>`:''}
     ${open?`<div style="margin-top:8px">${rows||'<div style="font-size:11px;color:var(--t3)">Aún no hay aportaciones registradas.</div>'}</div>`:''}
   </div>`;
 }
@@ -5878,8 +5885,11 @@ function childBudgetHTML(c){
   }
   // Evolución: planeado vs real de los últimos 6 meses (hasta el mes mostrado)
   const hist=childPeriodsBack(P,6).map(q=>({q,pl:childBudgetFor(c,'',q),re:childMonthSpend(c.id,q)}));
-  const histRows=hist.map(h=>`<tr><td style="padding:5px 4px;text-transform:capitalize">${esc(childPeriodLabel(h.q))}</td><td style="text-align:right;font-family:'DM Mono',monospace">${h.pl>0?fmt(h.pl):'—'}</td><td style="text-align:right;font-family:'DM Mono',monospace">${fmt(h.re)}</td><td style="text-align:right;color:${h.pl>0&&h.re>h.pl?'var(--red)':'var(--t3)'}">${h.pl>0?Math.round(h.re/h.pl*100)+'%':'—'}</td></tr>`).join('');
-  const evol=`<div style="margin-top:14px"><div style="font-size:11px;color:var(--t3);margin-bottom:4px">Evolución (últimos 6 meses)</div><div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:12px"><thead><tr style="color:var(--t3);font-size:11px"><th style="text-align:left;font-weight:400;padding:3px 4px">Mes</th><th style="text-align:right;font-weight:400">Planeado</th><th style="text-align:right;font-weight:400">Real</th><th style="text-align:right;font-weight:400">%</th></tr></thead><tbody>${histRows}</tbody></table></div></div>`;
+  const mx=Math.max(1,...hist.map(h=>Math.max(h.pl,h.re)));
+  const bar2=(lbl,v,col,txt)=>`<div style="display:flex;align-items:center;gap:6px;margin-top:5px;font-size:10px;color:var(--t3)"><span style="width:50px;flex:none">${lbl}</span><div style="flex:1;height:6px;background:var(--bg3);border-radius:99px;overflow:hidden"><div style="width:${Math.min(100,v/mx*100)}%;height:100%;background:${col}"></div></div><span style="min-width:84px;text-align:right;font-family:'DM Mono',monospace">${txt}</span></div>`;
+  const histRows=hist.map(h=>{const over=h.pl>0&&h.re>h.pl;
+    return`<div style="padding:8px 0;border-top:1px solid var(--bdr)"><div style="display:flex;justify-content:space-between;gap:8px;font-size:12px"><span style="text-transform:capitalize">${esc(childPeriodLabel(h.q))}</span><span style="font-family:'DM Mono',monospace;color:${over?'var(--red)':'var(--t3)'}">${h.pl>0?Math.round(h.re/h.pl*100)+'%':'—'}</span></div>${bar2('Planeado',h.pl,'var(--t3)',h.pl>0?fmt(h.pl):'—')}${bar2('Real',h.re,over?'var(--red)':'var(--act)',fmt(h.re))}</div>`}).join('');
+  const evol=`<div style="margin-top:14px"><div style="font-size:11px;color:var(--t3);margin-bottom:4px">Evolución (últimos 6 meses)</div>${histRows}</div>`;
   return`<div class="card" style="padding:14px 16px;margin-bottom:12px">${head}${body}${evol}</div>`;
 }
 // ---- editor del presupuesto de un mes ----
@@ -5904,7 +5914,32 @@ function openChildBudM(childId){
   $('cb-total').value=t>0?t.toFixed(2):'';
   $('cb-sug').innerHTML=cbSuggestions(c).map(x=>`<option value="${esc(x)}"></option>`).join('');
   $('cb-rows').innerHTML=childBudgetCats(c,P).map(x=>cbRowHTML(x.cat,x.limit)).join('');
-  cbSum();oM('mo-chbud');
+  _cbAllStages=false;$('cb-sugbox').style.display='none';cbSum();oM('mo-chbud');
+}
+let _cbAllStages=false;
+function cbSugChip(x,used){
+  return`<button type="button" data-v="${esc(x)}" onclick="cbPickSug(this.dataset.v)"${used?' disabled':''} style="font-family:inherit;cursor:${used?'default':'pointer'};background:none;font-size:11px;padding:4px 9px;margin:0 6px 6px 0;border-radius:99px;border:1px solid var(--bdr);color:var(--t2);${used?'opacity:.4':''}">${esc(x)}</button>`;
+}
+function cbRenderSug(){
+  const c=Store.getChildById($('cb-id').value);if(!c)return;
+  const have=new Set([...document.querySelectorAll('#cb-rows .cb-cat')].map(i=>i.value.trim().toLowerCase()));
+  const chip=x=>cbSugChip(x,have.has(String(x).toLowerCase()));
+  let h=`<div style="font-size:11px;color:var(--t3);margin-bottom:6px">Toca una categoría para agregarla al presupuesto</div><div>${cbSuggestions(c).map(chip).join('')}</div>`;
+  if(_cbAllStages)h+=CHILD_STAGE_ORDER.filter(k=>k!==c.stage).map(k=>`<div style="font-size:11px;color:var(--t3);margin:8px 0 6px">${CHILD_STAGES[k].icon} ${esc(CHILD_STAGES[k].label)}</div>${(CHILD_CATALOG[k]||[]).map(chip).join('')}`).join('');
+  h+=`<button type="button" class="btn bg_ sm" style="font-size:11px;margin-top:6px" onclick="cbToggleStages()">${_cbAllStages?'Ocultar otras etapas':'Ver categorías de otras etapas'}</button>`;
+  $('cb-sugbox').innerHTML=h;
+}
+function cbToggleSug(){const b=$('cb-sugbox');if(b.style.display==='none'){cbRenderSug();b.style.display='block'}else b.style.display='none'}
+function cbToggleStages(){_cbAllStages=!_cbAllStages;cbRenderSug()}
+function cbPickSug(name){
+  if(String(name).length>40){toast('Esa categoría es muy larga para un presupuesto (máximo 40 caracteres). Escribe una versión más corta.',false);return}
+  const rows=[...document.querySelectorAll('#cb-rows .cb-row')];
+  const dup=rows.find(r=>r.querySelector('.cb-cat').value.trim().toLowerCase()===String(name).toLowerCase());
+  if(dup){dup.querySelector('.cb-lim').focus();return}
+  let row=rows.find(r=>!r.querySelector('.cb-cat').value.trim()&&!r.querySelector('.cb-lim').value.trim());
+  if(row)row.querySelector('.cb-cat').value=name;
+  else{$('cb-rows').insertAdjacentHTML('beforeend',cbRowHTML(name,''));const all=document.querySelectorAll('#cb-rows .cb-row');row=all[all.length-1]}
+  cbSum();cbRenderSug();row.querySelector('.cb-lim').focus();
 }
 function cbAddRow(){$('cb-rows').insertAdjacentHTML('beforeend',cbRowHTML('',''));const r=document.querySelectorAll('#cb-rows .cb-cat');if(r.length)r[r.length-1].focus()}
 function cbSum(){
@@ -5983,13 +6018,15 @@ function childMovementsHTML(c){
   const canAdd=c.status!=='archived';
   const head=`<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:10px"><div style="font-weight:600;font-size:13px">Movimientos</div>${canAdd?`<div style="display:flex;gap:6px;flex-wrap:wrap"><button class="btn bp sm" onclick="openChildExpense('${c.id}','expense')">+ Registrar gasto</button><button class="btn bg_ sm" onclick="openChildExpense('${c.id}','income')">+ Ingreso o aportación</button><button class="btn bg_ sm" onclick="openChildPick('${c.id}')">Asignar existente</button></div>`:''}</div>`;
   if(!all.length)return`<div class="card" style="padding:14px 16px;margin-bottom:12px">${head}<div style="font-size:12px;color:var(--t3);line-height:1.6">Todavía no hay movimientos asignados a ${esc(c.name)}.${canAdd?' Registra el primero con el botón de arriba, o o asigna uno que ya tengas con "Asignar existente".':''}</div></div>`;
-  const filt=`<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:8px;margin-bottom:10px">
+  const filtBody=`<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:8px;margin-bottom:10px">
     <div><div style="font-size:10px;color:var(--t3);margin-bottom:3px">Desde</div><input class="fc" type="date" value="${esc(f.from)}" onchange="setChildFilter('from',this.value)"></div>
     <div><div style="font-size:10px;color:var(--t3);margin-bottom:3px">Hasta</div><input class="fc" type="date" value="${esc(f.to)}" onchange="setChildFilter('to',this.value)"></div>
     <div><div style="font-size:10px;color:var(--t3);margin-bottom:3px">Tipo</div><select class="fc" onchange="setChildFilter('type',this.value)"><option value="">Todos</option><option value="expense"${f.type==='expense'?' selected':''}>Gastos</option><option value="income"${f.type==='income'?' selected':''}>Ingresos</option></select></div>
     <div><div style="font-size:10px;color:var(--t3);margin-bottom:3px">Categoría</div><select class="fc" onchange="setChildFilter('sub',this.value)"><option value="">Todas</option>${subs.map(x=>`<option value="${esc(x)}"${f.sub===x?' selected':''}>${esc(x)}</option>`).join('')}</select></div>
     <div><div style="font-size:10px;color:var(--t3);margin-bottom:3px">Cuenta</div><select class="fc" onchange="setChildFilter('acc',this.value)"><option value="">Todas</option>${accs.map(a=>`<option value="${a.id}"${f.acc===a.id?' selected':''}>${esc(a.name)}</option>`).join('')}</select></div>
   </div>${(f.from||f.to||f.type||f.sub||f.acc)?`<button class="btn bg_ sm" style="font-size:11px;margin-bottom:8px" onclick="clearChildFilters()">Quitar filtros</button>`:''}`;
+  const nAct=[f.from,f.to,f.type,f.sub,f.acc].filter(Boolean).length;
+  const filt=`<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:10px"><button class="btn bg_ sm" aria-expanded="${_childFiltOpen}" onclick="toggleChildFilt()">Filtros${nAct?` (${nAct})`:''} ${_childFiltOpen?'▾':'▸'}</button>${nAct&&!_childFiltOpen?`<button class="btn bg_ sm" style="font-size:11px" onclick="clearChildFilters()">Quitar filtros</button>`:''}</div>${_childFiltOpen?filtBody:''}`;
   const rows=list.slice(0,_childLimit).map(m=>{
     const t=m.tx,isInc=t.type==='income',acc=Store.getAccountById(t.accountId);
     const others=t.childAlloc.filter(a=>a.childId!==c.id).map(a=>(Store.getChildById(a.childId)||{}).name).filter(Boolean);
@@ -6095,7 +6132,7 @@ function childMonthSpend(childId,period){
     return a?sum+M(a.amount):sum;
   },0));
 }
-let _childView=null,_childAllCats=false,_childArchOpen=false,_childSaving=false;
+let _childView=null,_childArchOpen=false,_childSaving=false,_childTab='resumen',_childMenuOpen=false,_childFiltOpen=false;
 function renderChildren(){
   const el=$('children-body');if(!el)return;
   if(_childView&&!Store.getChildById(_childView))_childView=null;
@@ -6149,39 +6186,103 @@ function childListHTML(){
     +(active.length?active.map(c=>childCardHTML(c,period)).join(''):'<div class="card" style="padding:18px;text-align:center;font-size:13px;color:var(--t3)">No hay perfiles activos. Los archivados están abajo y puedes reactivarlos.</div>')+archBlock;
 }
 function toggleChildArch(){_childArchOpen=!_childArchOpen;renderChildren()}
-function openChildDetail(id){_childView=id;_childBudPeriod=td_().slice(0,7);_childAllCats=false;_childFilters={from:'',to:'',type:'',sub:'',acc:''};_childLimit=30;renderChildren();window.scrollTo(0,0)}
+function openChildDetail(id){_childView=id;_childBudPeriod=td_().slice(0,7);_childTab='resumen';_childMenuOpen=false;_childFiltOpen=false;_childFilters={from:'',to:'',type:'',sub:'',acc:''};_childLimit=30;renderChildren();window.scrollTo(0,0)}
 function closeChildDetail(){_childView=null;renderChildren();window.scrollTo(0,0)}
-function toggleChildCats(){_childAllCats=!_childAllCats;renderChildren()}
-function childDetailHTML(c){
+function setChildTab(t){
+  _childTab=t;_childMenuOpen=false;
+  // Fuera de la pestaña Presupuesto siempre se vuelve al mes actual, para que "Crear presupuesto" en el Resumen apunte al mes que se ve
+  if(t!=='presupuesto')_childBudPeriod=td_().slice(0,7);
+  renderChildren();
+}
+function toggleChildMenu(){_childMenuOpen=!_childMenuOpen;renderChildren()}
+function toggleChildFilt(){_childFiltOpen=!_childFiltOpen;renderChildren()}
+// ---- Detalle de un hijo: encabezado fijo + 4 pestañas (Resumen, Presupuesto, Ahorro, Movimientos) ----
+function childBarHTML(pct,h){
+  return`<div style="height:${h||6}px;background:var(--bg3);border-radius:99px;overflow:hidden;margin-top:8px"><div style="width:${Math.max(0,Math.min(100,pct))}%;height:100%;background:${pct>=100?'var(--red)':pct>=80?'var(--yel)':'var(--act)'}"></div></div>`;
+}
+function childDetailHeaderHTML(c){
   const st=CHILD_STAGES[c.stage]||CHILD_STAGES.child,period=td_().slice(0,7),spent=childMonthSpend(c.id,period),bud=childBudgetFor(c,'',period);
+  const sav=childSavingsTotals([c.id]),pct=bud>0?Math.round(spent/bud*100):0;
   const sug=suggestChildStage(c.birthDate);
   const banner=(sug&&sug!==c.stage&&c.status!=='archived')?`<div class="card" style="padding:12px 14px;margin-bottom:12px;border-left:3px solid var(--yel);font-size:12px;line-height:1.6">${c.stage==='prenatal'&&sug!=='prenatal'?'La fecha estimada ya pasó. ¿Ya nació? Actualiza la etapa y la fecha real.':`Por su edad, la etapa sugerida es <strong>${esc(CHILD_STAGES[sug].label)}</strong>. Puedes mantener la actual o actualizarla.`} Tus movimientos no cambian.<br><button class="btn bg_ sm" style="margin-top:8px;font-size:11px" onclick="openChildM('${c.id}','${sug}')">Revisar etapa</button></div>`:'';
-  const chips=l=>l.map(x=>`<span style="display:inline-block;font-size:11px;padding:4px 9px;margin:0 6px 6px 0;border-radius:99px;border:1px solid var(--bdr);color:var(--t2)">${esc(x)}</span>`).join('');
-  const others=CHILD_STAGE_ORDER.filter(k=>k!==c.stage);
-  const catsAll=_childAllCats?`<div style="margin-top:10px">${others.map(k=>`<div style="font-size:11px;color:var(--t3);margin:10px 0 6px">${CHILD_STAGES[k].icon} ${esc(CHILD_STAGES[k].label)}</div>${chips(CHILD_CATALOG[k])}`).join('')}</div>`:'';
-  return childPageHead('<button class="btn bg_" onclick="closeChildDetail()">← Hijos</button>')+`
-    <div class="card" style="padding:16px 18px;margin-bottom:12px">
+  const kpi=(l,v,col)=>`<div><div style="font-size:11px;color:var(--t3)">${l}</div><div style="font-family:'DM Mono',monospace;font-size:15px;font-weight:500;margin-top:3px;color:${col||'var(--t1)'}">${v}</div></div>`;
+  return`<div class="card" style="padding:16px 18px;margin-bottom:12px">
       <div style="display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;align-items:flex-start">
-        <div><div style="font-size:18px;font-weight:600">${st.icon} ${esc(c.name)}${c.status==='archived'?' <span style="font-size:11px;color:var(--t3);font-weight:400">· Archivado</span>':''}</div>
+        <div style="min-width:0"><div style="font-size:18px;font-weight:600">${st.icon} ${esc(c.name)}${c.status==='archived'?' <span style="font-size:11px;color:var(--t3);font-weight:400">· Archivado</span>':''}</div>
         <div style="font-size:12px;color:var(--t3);margin-top:3px">${esc(st.label)} · ${esc(childAgeText(c))}</div></div>
-        <button class="btn bg_ sm" onclick="openChildM('${c.id}')">Editar</button>
+        <div style="display:flex;gap:6px"><button class="btn bg_ sm" onclick="openChildM('${c.id}')">Editar</button><button class="btn bg_ sm" aria-label="Más opciones" aria-expanded="${_childMenuOpen}" onclick="toggleChildMenu()">⋯</button></div>
       </div>
-      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin-top:14px;font-size:12px;color:var(--t3)">
-        <div>Dependencia económica<br><strong style="color:var(--t1);font-size:13px">${esc(CHILD_DEPENDENCY[c.dependency]||CHILD_DEPENDENCY.total)}</strong></div>
-        <div>Gasto del mes<br><strong style="color:var(--t1);font-family:'DM Mono',monospace;font-size:14px">${fmt(spent)}</strong></div>
-        <div>Presupuesto mensual<br><strong style="color:var(--t1);font-family:'DM Mono',monospace;font-size:14px">${bud?fmt(bud):'Sin definir'}</strong></div>
-        ${bud?`<div>Disponible<br><strong style="color:var(--t1);font-family:'DM Mono',monospace;font-size:14px">${fmt(bud-spent)}</strong></div>`:''}
+      ${_childMenuOpen?`<div style="margin-top:10px;padding-top:10px;border-top:1px solid var(--bdr)"><button class="btn bg_ sm" onclick="toggleChildArchive('${c.id}')">${c.status==='archived'?'Reactivar perfil':'Archivar perfil'}</button></div>`:''}
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(96px,1fr));gap:12px;margin-top:14px">
+        ${kpi('Gasto del mes',fmt(spent))}
+        ${kpi('Disponible',bud>0?fmt(bud-spent):'—',bud>0&&bud-spent<0?'var(--red)':'')}
+        ${kpi('Ahorro real',sav.n?fmt(sav.real):'—',sav.n?'var(--inc)':'')}
       </div>
-      ${c.notes?`<div style="margin-top:12px;font-size:12px;color:var(--t2);line-height:1.5;white-space:pre-wrap">${esc(c.notes)}</div>`:''}
-    </div>${banner}${childBudgetHTML(c)}${childGoalsHTML(c)}${childMovementsHTML(c)}
-    <div class="card" style="padding:14px 16px;margin-bottom:12px">
-      <div style="font-weight:600;font-size:13px;margin-bottom:10px">Categorías sugeridas para esta etapa</div>
-      <div>${chips(CHILD_CATALOG[c.stage]||CHILD_CATALOG.child)}</div>
-      <div style="font-size:11px;color:var(--t3);margin:6px 0 4px">Aplican a cualquier etapa</div>
-      <div>${chips(CHILD_CATALOG.common)}</div>
-      <button class="btn bg_ sm" style="margin-top:8px;font-size:11px" onclick="toggleChildCats()">${_childAllCats?'Ocultar las demás etapas':'Ver todas las categorías'}</button>${catsAll}
-    </div>
-    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:6px"><button class="btn bg_" onclick="toggleChildArchive('${c.id}')">${c.status==='archived'?'Reactivar perfil':'Archivar perfil'}</button></div>`;
+      ${bud>0?`${childBarHTML(pct,6)}<div style="font-size:11px;color:var(--t3);margin-top:4px">${pct}% del presupuesto de este mes</div>`:`<div style="font-size:11px;color:var(--t3);margin-top:10px">Sin presupuesto definido este mes.</div>`}
+    </div>${banner}`;
+}
+function childSummaryTabHTML(c){
+  const period=td_().slice(0,7),spent=childMonthSpend(c.id,period),bud=childBudgetFor(c,'',period),canAct=c.status!=='archived';
+  const card=(inner)=>`<div class="card" style="padding:14px 16px;margin-bottom:12px">${inner}</div>`;
+  const sec=(title,tab)=>`<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:10px"><div style="font-weight:600;font-size:13px">${title}</div><button class="btn bg_ sm" style="font-size:11px" onclick="setChildTab('${tab}')">Ver todo →</button></div>`;
+  const mono=(v,col)=>`<strong style="color:${col||'var(--t1)'};font-family:'DM Mono',monospace;font-size:14px">${v}</strong>`;
+  const empty=(t)=>`<div style="font-size:12px;color:var(--t3);line-height:1.6">${t}</div>`;
+  // Acciones rápidas
+  const actions=canAct?`<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px"><button class="btn bp sm" onclick="openChildExpense('${c.id}','expense')">+ Registrar gasto</button><button class="btn bg_ sm" onclick="openChildExpense('${c.id}','income')">+ Ingreso o aportación</button></div>`:'';
+  // 1) Presupuesto del mes
+  let bBody;
+  if(bud>0){
+    const pct=Math.round(spent/bud*100),diff=M(spent-bud);
+    bBody=`<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(96px,1fr));gap:10px;font-size:11px;color:var(--t3)">
+      <div>Planeado<br>${mono(fmt(bud))}</div><div>Gasto real<br>${mono(fmt(spent))}</div><div>Disponible<br>${mono(fmt(bud-spent),bud-spent<0?'var(--red)':'')}</div></div>
+      ${childBarHTML(pct,6)}
+      <div style="font-size:11px;color:${diff>0?'var(--red)':'var(--t3)'};margin-top:5px">${pct}% utilizado${diff>0?` · excedido por ${fmt(diff)}`:''}</div>`;
+  }else{
+    bBody=empty(`Sin presupuesto definido para ${esc(childPeriodLabel(period))}. Gasto real: <strong style="color:var(--t1)">${fmt(spent)}</strong>.`)+(canAct?`<button class="btn bp sm" style="margin-top:10px" onclick="openChildBudM('${c.id}')">Crear presupuesto</button>`:'');
+  }
+  const budCard=card(`<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:10px"><div style="font-weight:600;font-size:13px;text-transform:capitalize">Presupuesto · ${esc(childPeriodLabel(period))}</div><button class="btn bg_ sm" style="font-size:11px" onclick="setChildTab('presupuesto')">Ver todo →</button></div>${bBody}`);
+  // 2) Dónde más se gasta este mes (top 3)
+  const byCat=childSpendByCat(c.id,period),limMap=new Map(childBudgetCats(c,period).map(x=>[x.cat,x.limit]));
+  const top=[...byCat.entries()].filter(e=>e[1]>0).sort((x,y)=>y[1]-x[1]).slice(0,3);
+  const topCard=card(`<div style="font-weight:600;font-size:13px;margin-bottom:6px">Dónde más se gasta este mes</div>`+(top.length?top.map(([k,v])=>{
+    const lim=limMap.get(k)||0,p=lim>0?Math.round(v/lim*100):(spent>0?Math.round(v/spent*100):0);
+    return`<div style="padding:8px 0;border-top:1px solid var(--bdr)"><div style="display:flex;justify-content:space-between;gap:8px;font-size:12px"><span style="min-width:0">${esc(k||'Sin subcategoría')}</span><span style="font-family:'DM Mono',monospace;white-space:nowrap">${fmt(v)}</span></div>
+      ${lim>0?childBarHTML(p,5):`<div style="height:5px;background:var(--bg3);border-radius:99px;overflow:hidden;margin-top:8px"><div style="width:${Math.min(100,p)}%;height:100%;background:var(--act)"></div></div>`}
+      <div style="font-size:10px;color:var(--t3);margin-top:3px">${lim>0?`${p}% de su límite de ${fmt(lim)}`:`${p}% del gasto del mes`}</div></div>`}).join(''):empty('Todavía no hay gastos registrados este mes.')));
+  // 3) Objetivo de ahorro destacado
+  const gs=childGoals(c.id),act=gs.filter(g=>!g.finalized);
+  act.sort((x,y)=>(x.due&&y.due)?(x.due<y.due?-1:x.due>y.due?1:0):(x.due?-1:y.due?1:M(y.saved||0)-M(x.saved||0)));
+  let gBody;
+  if(act.length){
+    const g=act[0],b=childGoalBreakdown(g);
+    const rp=b.target>0?Math.min(100,b.real/b.target*100):0,pp=b.target>0?Math.min(100-rp,b.planned/b.target*100):0;
+    gBody=`<div style="display:flex;justify-content:space-between;gap:8px;align-items:flex-start"><div style="min-width:0;font-size:13px;font-weight:600">${esc(g.icon||'🎯')} ${esc(g.name)}</div><div style="font-family:'DM Mono',monospace;font-size:12px;white-space:nowrap">${fmt(b.total)} <span style="color:var(--t3)">/ ${fmt(b.target)}</span></div></div>
+      <div style="height:8px;background:var(--bg3);border-radius:99px;overflow:hidden;margin:8px 0 6px;display:flex"><div style="width:${rp}%;background:var(--inc)"></div><div style="width:${pp}%;background:repeating-linear-gradient(45deg,var(--yel),var(--yel) 3px,transparent 3px,transparent 6px)"></div></div>
+      <div style="font-size:11px;color:var(--t3)"><span style="color:var(--inc)">Real ${fmt(b.real)}</span> · <span style="color:var(--yel)">Planificado ${fmt(b.planned)}</span>${g.due?` · Límite: ${fmtDate(g.due)}`:''}</div>
+      ${act.length>1?`<div style="font-size:11px;color:var(--t3);margin-top:6px">+ ${act.length-1} objetivo${act.length-1===1?'':'s'} más en la pestaña Ahorro</div>`:''}`;
+  }else if(gs.length){
+    gBody=empty('Todos los objetivos de ahorro están finalizados.');
+  }else{
+    gBody=empty(`Todavía no hay objetivos de ahorro para ${esc(c.name)}.`)+(canAct?`<button class="btn bp sm" style="margin-top:10px" onclick="openChildGoalM('${c.id}')">+ Nuevo objetivo</button>`:'');
+  }
+  const goalCard=card(sec('Ahorro y objetivos','ahorro')+gBody);
+  // 4) Últimos movimientos
+  const last=childMovements(c.id).slice(0,5);
+  const movCard=card(sec('Últimos movimientos','movimientos')+(last.length?last.map(m=>{
+    const t=m.tx,isInc=t.type==='income';
+    return`<div style="padding:9px 0;border-top:1px solid var(--bdr);cursor:pointer" onclick="openChildAlloc('${t.id}')"><div style="display:flex;justify-content:space-between;gap:10px;align-items:flex-start"><div style="min-width:0"><div style="font-size:13px;font-weight:500;overflow:hidden;text-overflow:ellipsis">${esc(t.description||'Sin descripción')}</div><div style="font-size:11px;color:var(--t3);margin-top:2px">${fmtDate(t.date)}${t.subcategory?' · '+esc(t.subcategory):''}</div></div>
+      <div style="font-family:'DM Mono',monospace;font-size:13px;white-space:nowrap;color:${isInc?'var(--inc)':'var(--exp)'}">${isInc?'+':'−'}${fmt(m.share)}</div></div></div>`}).join(''):empty(`Todavía no hay movimientos asignados a ${esc(c.name)}.`)));
+  // 5) Datos del perfil (discreto)
+  const dep=CHILD_DEPENDENCY[c.dependency]||CHILD_DEPENDENCY.total;
+  const info=`<div style="font-size:12px;color:var(--t3);line-height:1.6;padding:2px 4px 8px">Dependencia económica: <strong style="color:var(--t2)">${esc(dep)}</strong>${c.notes?`<div style="margin-top:6px;color:var(--t2);white-space:pre-wrap">${esc(c.notes)}</div>`:''}</div>`;
+  return actions+budCard+topCard+goalCard+movCard+info;
+}
+function childDetailHTML(c){
+  const tabs=[['resumen','Resumen'],['presupuesto','Presupuesto'],['ahorro','Ahorro'],['movimientos','Movimientos']];
+  if(!tabs.some(x=>x[0]===_childTab))_childTab='resumen';
+  const nav=`<div class="tabs ch4" role="tablist">${tabs.map(([k,l])=>`<button class="tab${_childTab===k?' on':''}" role="tab" aria-selected="${_childTab===k}" onclick="setChildTab('${k}')">${l}</button>`).join('')}</div>`;
+  const body=_childTab==='presupuesto'?childBudgetHTML(c):_childTab==='ahorro'?childGoalsHTML(c):_childTab==='movimientos'?childMovementsHTML(c):childSummaryTabHTML(c);
+  return childPageHead('<button class="btn bg_" onclick="closeChildDetail()">← Hijos</button>')+childDetailHeaderHTML(c)+nav+body;
 }
 function openChildM(id,forceStage){
   _childSaving=false;
