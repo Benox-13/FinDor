@@ -6132,7 +6132,7 @@ function childMonthSpend(childId,period){
     return a?sum+M(a.amount):sum;
   },0));
 }
-let _childView=null,_childArchOpen=false,_childSaving=false,_childTab='resumen',_childMenuOpen=false,_childFiltOpen=false;
+let _childView=null,_childArchOpen=false,_childSaving=false,_childTab='resumen',_childMenuOpen=false,_childFiltOpen=false,_childCardMenu=null;
 function renderChildren(){
   const el=$('children-body');if(!el)return;
   if(_childView&&!Store.getChildById(_childView))_childView=null;
@@ -6144,11 +6144,13 @@ function childPageHead(extra){
 function childCardHTML(c,period){
   const st=CHILD_STAGES[c.stage]||CHILD_STAGES.child,spent=childMonthSpend(c.id,period),bud=childBudgetFor(c,'',period);
   const pct=bud?Math.round(spent/bud*100):0;
-  return`<div class="card" style="padding:14px 16px;margin-bottom:10px${c.status==='archived'?';opacity:.7':''}">
+  const menuOpen=_childCardMenu===c.id;
+  return`<div class="card" role="button" tabindex="0" aria-label="Abrir el perfil de ${esc(c.name)}" style="padding:14px 16px;margin-bottom:10px;cursor:pointer${c.status==='archived'?';opacity:.7':''}" onclick="openChildDetail('${c.id}')" onkeydown="if(event.target===this&&(event.key==='Enter'||event.key===' ')){event.preventDefault();openChildDetail('${c.id}')}">
     <div style="display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;align-items:flex-start">
-      <div><div style="font-weight:600;font-size:15px">${st.icon} ${esc(c.name)}</div><div style="font-size:12px;color:var(--t3);margin-top:2px">${esc(st.label)} · ${esc(childAgeText(c))}</div></div>
-      <button class="btn bg_ sm" onclick="openChildDetail('${c.id}')">Ver detalle</button>
+      <div style="min-width:0"><div style="font-weight:600;font-size:15px">${st.icon} ${esc(c.name)}</div><div style="font-size:12px;color:var(--t3);margin-top:2px">${esc(st.label)} · ${esc(childAgeText(c))}</div></div>
+      <button class="btn bg_ sm" aria-label="Más opciones de ${esc(c.name)}" aria-expanded="${menuOpen}" onclick="event.stopPropagation();toggleChildCardMenu('${c.id}')">⋯</button>
     </div>
+    ${menuOpen?`<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:10px;padding-top:10px;border-top:1px solid var(--bdr)" onclick="event.stopPropagation()"><button class="btn bg_ sm" onclick="childCardEdit('${c.id}')">Editar</button><button class="btn bg_ sm" onclick="_childCardMenu=null;toggleChildArchive('${c.id}')">${c.status==='archived'?'Reactivar':'Archivar'}</button></div>`:''}
     <div style="display:flex;gap:22px;margin-top:10px;font-size:12px;flex-wrap:wrap;color:var(--t3)">
       <div>Gasto del mes<br><strong style="color:var(--t1);font-family:'DM Mono',monospace;font-size:14px">${fmt(spent)}</strong></div>
       <div>Presupuesto mensual<br><strong style="color:var(--t1);font-family:'DM Mono',monospace;font-size:14px">${bud?fmt(bud):'—'}</strong></div>
@@ -6186,7 +6188,7 @@ function childListHTML(){
     +(active.length?active.map(c=>childCardHTML(c,period)).join(''):'<div class="card" style="padding:18px;text-align:center;font-size:13px;color:var(--t3)">No hay perfiles activos. Los archivados están abajo y puedes reactivarlos.</div>')+archBlock;
 }
 function toggleChildArch(){_childArchOpen=!_childArchOpen;renderChildren()}
-function openChildDetail(id){_childView=id;_childBudPeriod=td_().slice(0,7);_childTab='resumen';_childMenuOpen=false;_childFiltOpen=false;_childFilters={from:'',to:'',type:'',sub:'',acc:''};_childLimit=30;renderChildren();window.scrollTo(0,0)}
+function openChildDetail(id){_childView=id;_childBudPeriod=td_().slice(0,7);_childTab='resumen';_childMenuOpen=false;_childFiltOpen=false;_childCardMenu=null;_childFilters={from:'',to:'',type:'',sub:'',acc:''};_childLimit=30;renderChildren();window.scrollTo(0,0)}
 function closeChildDetail(){_childView=null;renderChildren();window.scrollTo(0,0)}
 function setChildTab(t){
   _childTab=t;_childMenuOpen=false;
@@ -6195,6 +6197,8 @@ function setChildTab(t){
   renderChildren();
 }
 function toggleChildMenu(){_childMenuOpen=!_childMenuOpen;renderChildren()}
+function toggleChildCardMenu(id){_childCardMenu=_childCardMenu===id?null:id;renderChildren()}
+function childCardEdit(id){_childCardMenu=null;renderChildren();openChildM(id)}
 function toggleChildFilt(){_childFiltOpen=!_childFiltOpen;renderChildren()}
 // ---- Detalle de un hijo: encabezado fijo + 4 pestañas (Resumen, Presupuesto, Ahorro, Movimientos) ----
 function childBarHTML(pct,h){
