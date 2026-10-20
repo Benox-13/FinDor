@@ -1131,6 +1131,7 @@ body.modal-open #bottom-nav{display:none !important}
         <div class="fg"><label class="fl">Importe objetivo</label><input class="fc" type="number" id="cg-tgt" placeholder="0.00" min="0" step="0.01" inputmode="decimal"></div>
         <div class="fg"><label class="fl">Fecha objetivo (opcional)</label><input class="fc" type="date" id="cg-due"></div>
       </div>
+      <div class="fg"><label class="fl">Cuenta donde vive el ahorro (opcional)</label><select class="fc" id="cg-acc"><option value="">Sin cuenta asignada</option></select></div>
       <div class="fg"><label class="fl">Ahorro planificado inicial (opcional)</label><input class="fc" type="number" id="cg-plan" placeholder="0.00" min="0" step="0.01" inputmode="decimal"></div>
       <div style="font-size:11px;color:var(--t3);line-height:1.5">Lo que abones desde una cuenta cuenta como ahorro REAL. El ahorro planificado es el que aún no tiene una cuenta o un movimiento detrás: se muestra aparte y nunca como dinero disponible.</div>
     </div>
@@ -1948,6 +1949,13 @@ async function execRetryableWrite(desc){
       // Tabla aún no creada: no se deja pendiente (bloquearía todo); se sube sola cuando exista.
       return isMissingTableError(lastSyncErrors[label]);
     }
+    case 'goal_delete':
+      return await cloudWrite(sb.from('goals').update({deleted_at:new Date().toISOString()}).eq('id',desc.id),'borrar meta de hijo');
+    case 'child_delete':{
+      const label='eliminar hijo';
+      if(await cloudWrite(sb.from('children').delete().eq('id',desc.id),label))return true;
+      return isMissingTableError(lastSyncErrors[label]); // tabla inexistente: no queda pendiente
+    }
     case 'child':{
       const c=Store.getChildById(desc.id);if(!c)return true;
       const label='sincronizar hijo '+c.name;
@@ -2304,6 +2312,7 @@ async function pullFromSupabase(){
       savedBaseline:g.saved_baseline_cents!=null?centsToAmt(g.saved_baseline_cents):0,
       due:g.due_date||'',icon:g.icon||'🎯',finalized:!!g.finalized,
       childId:g.child_id||undefined,
+      accountId:g.account_id||undefined,
     }));
 
     // --- subscriptions ---
@@ -2581,7 +2590,9 @@ function goalToCloud(g){
   return{id:g.id,user_id:currentUserId,name:g.name,icon:g.icon||null,target_cents:amtToCents(g.target),
     saved_cents:amtToCents(g.saved||0),saved_baseline_cents:amtToCents(g.savedBaseline||0),due_date:g.due||null,finalized:!!g.finalized,
     // child_id SOLO se envía en las metas de un hijo: el resto no depende de que la columna exista.
-    ...(g.childId?{child_id:g.childId}:{})};
+    ...(g.childId?{child_id:g.childId}:{}),
+    // account_id SOLO se envía si el objetivo tiene cuenta (o si se le acaba de quitar): el resto no depende de que la columna exista.
+    ...((g.accountId||g.accountIdTouched)?{account_id:g.accountId||null}:{})};
 }
 function subscriptionToCloud(s,catId){
   return{id:s.id,user_id:currentUserId,name:s.name,icon:s.icon||null,cost_cents:amtToCents(s.cost),
@@ -3493,6 +3504,31 @@ const Store = {
     c.status=status;
     save();
     if(sb&&currentUserId)queueRetryableWrite('child:'+id,{fn:'child',id});
+    return{ok:true};
+  },
+  // Elimina un perfil YA ARCHIVADO. Los movimientos se conservan como gastos/ingresos normales
+  // (solo pierden la asignación a este hijo; no toca saldos); sus objetivos y presupuestos se borran.
+  deleteChild(id){
+    const c=this.getChildById(id);
+    if(!c)return{ok:false,error:'El perfil ya no existe'};
+    if(c.status!=='archived')return{ok:false,error:'Primero archiva el perfil para poder eliminarlo'};
+    S.transactions.filter(t=>Array.isArray(t.childAlloc)&&t.childAlloc.some(a=>a&&a.childId===id)).forEach(t=>{
+      this._patchTxNoBalance(t.id,{childAlloc:t.childAlloc.filter(a=>a&&a.childId!==id)}); // [] limpia también la nube
+    });
+    S.goals.filter(g=>g.childId===id).forEach(g=>{
+      S.goals=S.goals.filter(x=>x.id!==g.id);
+      delete retryableWrites['goal:'+g.id];
+      if(sb&&currentUserId&&isUUID(g.id))retryableWrites['goaldel:'+g.id]={fn:'goal_delete',id:g.id};
+    });
+    S.childBudgets=(S.childBudgets||[]).filter(r=>!(r&&r.childId===id));
+    S.children=(S.children||[]).filter(x=>x.id!==id);
+    delete retryableWrites['child:'+id];
+    save();
+    if(sb&&currentUserId){
+      saveRetryableWrites();
+      Object.keys(retryableWrites).filter(k=>k.startsWith('goaldel:')).forEach(k=>queueRetryableWrite(k,retryableWrites[k]));
+      queueRetryableWrite('childdel:'+id,{fn:'child_delete',id});
+    }
     return{ok:true};
   },
   // Cambia SOLO la asignación a hijos de un movimiento existente. No pasa por la
@@ -5699,9 +5735,10 @@ function childGoalCardHTML(c,g){
   const badge=g.finalized?'Finalizado':(reached?'Alcanzado':'');
   const open=_childGoalOpen.has(g.id);
   const accN=id=>{const a=Store.getAccountById(id);return a?esc(a.name):'cuenta eliminada'};
+  const goalAcc=g.accountId&&Store.getAccountById(g.accountId)?`<div style="font-size:11px;color:var(--t3);margin-top:3px">🏦 Ahorro en: ${accN(g.accountId)}</div>`:'';
   const rows=b.items.map(i=>{const t=i.tx;return`<div style="display:flex;justify-content:space-between;gap:8px;padding:6px 0;border-top:1px solid var(--bdr);font-size:11px"><div style="min-width:0">${fmtDate(t.date)} · ${i.backed?(t.type==='transfer'&&t.accountId2?`${accN(t.accountId)} → ${accN(t.accountId2)}`:`Desde ${accN(t.accountId)}`):'Sin cuenta'}<br><span style="color:${i.backed?'var(--inc)':'var(--yel)'}">${i.backed?(t.type==='transfer'&&t.accountId2?'Real · depositado en cuenta':'Real · respaldado por un movimiento'):'Planificado · sin respaldo en una cuenta'}</span></div><div style="font-family:'DM Mono',monospace;white-space:nowrap;align-self:center">+${fmt(i.value)}</div></div>`}).join('');
   return`<div style="padding:12px 0;border-top:1px solid var(--bdr)${g.finalized?';opacity:.75':''}">
-    <div style="display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap;align-items:flex-start"><div style="min-width:0"><div style="font-size:14px;font-weight:600">${esc(g.icon||'🎯')} ${esc(g.name)}${badge?` <span style="font-size:10px;font-weight:400;padding:2px 7px;border-radius:99px;border:1px solid var(--inc);color:var(--inc)">${badge}</span>`:''}</div><div style="font-size:11px;color:var(--t3);margin-top:2px">${dueTxt}</div></div>
+    <div style="display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap;align-items:flex-start"><div style="min-width:0"><div style="font-size:14px;font-weight:600">${esc(g.icon||'🎯')} ${esc(g.name)}${badge?` <span style="font-size:10px;font-weight:400;padding:2px 7px;border-radius:99px;border:1px solid var(--inc);color:var(--inc)">${badge}</span>`:''}</div><div style="font-size:11px;color:var(--t3);margin-top:2px">${dueTxt}</div>${goalAcc}</div>
       <div style="font-family:'DM Mono',monospace;font-size:13px;white-space:nowrap">${fmt(b.total)} <span style="color:var(--t3)">/ ${fmt(b.target)}</span></div></div>
     <div style="height:8px;background:var(--bg3);border-radius:99px;overflow:hidden;margin:8px 0 6px;display:flex"><div style="width:${rp}%;background:var(--inc)"></div><div style="width:${pp}%;background:repeating-linear-gradient(45deg,var(--yel),var(--yel) 3px,transparent 3px,transparent 6px)"></div></div>
     <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:8px;font-size:11px;color:var(--t3)">
@@ -5747,6 +5784,12 @@ function openChildGoalM(childId,goalId){
   const base=g?Math.max(0,M(g.savedBaseline||0)):0;
   $('cg-plan').value=base>0?base:'';
   $('cg-plan').dataset.orig=String(base);
+  // Si la cuenta del objetivo ya no se puede elegir (archivada/eliminada) se conserva visible para no perderla sin querer.
+  const curAcc=g&&g.accountId?Store.getAccountById(g.accountId):null;
+  const accList=selectableAccounts();
+  if(curAcc&&!accList.some(a=>a.id===curAcc.id))accList.push(curAcc);
+  $('cg-acc').innerHTML='<option value="">Sin cuenta asignada</option>'+accList.map(a=>`<option value="${a.id}">${esc(a.name)}</option>`).join('');
+  $('cg-acc').value=curAcc?curAcc.id:'';
   oM('mo-chgoal');
 }
 function saveChildGoal(){
@@ -5763,18 +5806,22 @@ function saveChildGoal(){
     if(!Number.isFinite(target)||target<=0||target>=1e12){toast('El importe objetivo debe ser mayor a 0',false);return}
     const due=$('cg-due').value;
     if(due&&(!/^\d{4}-\d{2}-\d{2}$/.test(due)||isNaN(dateLocal(due))||dateLocal(due).getFullYear()<2000)){toast('La fecha objetivo no es válida',false);return}
+    const accId=$('cg-acc').value;
+    if(accId&&!Store.getAccountById(accId)){toast('La cuenta elegida ya no existe',false);return}
     const rawPlan=$('cg-plan').value.trim();
     const plan=rawPlan===''?0:Number(rawPlan);
     if(!Number.isFinite(plan)||plan<0||plan>=1e12){toast('El ahorro planificado debe ser 0 o más',false);return}
     if(M(plan)>M(target)){toast('El ahorro planificado no puede ser mayor al objetivo',false);return}
     if(!gid){
-      const g=Store.addGoal({name,icon:'🎯',target:M(target),saved:M(plan),savedBaseline:M(plan),due:due||'',finalized:false,childId:cid});
+      const g=Store.addGoal({name,icon:'🎯',target:M(target),saved:M(plan),savedBaseline:M(plan),due:due||'',finalized:false,childId:cid,...(accId?{accountId:accId}:{})});
       // addGoal sube con un INSERT sin reintento: se agrega además un reintento
       // persistido, para que un objetivo creado sin conexión no se pierda en el siguiente pull.
       if(sb&&currentUserId&&isUUID(g.id))queueRetryableWrite('goal:'+g.id,{fn:'goal',id:g.id});
       done=true;cM('mo-chgoal');renderGoals();renderChildren();toast('Objetivo creado');return;
     }
     const patch={name,target:M(target),due:due||''};
+    const oldG=Store.getGoalById(gid);
+    if((oldG&&oldG.accountId||'')!==accId){patch.accountId=accId||undefined;patch.accountIdTouched=true} // quitarla manda NULL a la nube
     if(M(plan)!==M(Number($('cg-plan').dataset.orig||0)))patch.savedBaseline=M(plan); // solo si lo cambiaste
     Store.updateGoal(gid,patch);
     Store.recalcGoalSaved(gid);
@@ -6150,7 +6197,7 @@ function childCardHTML(c,period){
       <div style="min-width:0"><div style="font-weight:600;font-size:15px">${st.icon} ${esc(c.name)}</div><div style="font-size:12px;color:var(--t3);margin-top:2px">${esc(st.label)} · ${esc(childAgeText(c))}</div></div>
       <button class="btn bg_ sm" aria-label="Más opciones de ${esc(c.name)}" aria-expanded="${menuOpen}" onclick="event.stopPropagation();toggleChildCardMenu('${c.id}')">⋯</button>
     </div>
-    ${menuOpen?`<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:10px;padding-top:10px;border-top:1px solid var(--bdr)" onclick="event.stopPropagation()"><button class="btn bg_ sm" onclick="childCardEdit('${c.id}')">Editar</button><button class="btn bg_ sm" onclick="_childCardMenu=null;toggleChildArchive('${c.id}')">${c.status==='archived'?'Reactivar':'Archivar'}</button></div>`:''}
+    ${menuOpen?`<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:10px;padding-top:10px;border-top:1px solid var(--bdr)" onclick="event.stopPropagation()"><button class="btn bg_ sm" onclick="childCardEdit('${c.id}')">Editar</button><button class="btn bg_ sm" onclick="_childCardMenu=null;toggleChildArchive('${c.id}')">${c.status==='archived'?'Reactivar':'Archivar'}</button>${c.status==='archived'?`<button class="btn bg_ sm" style="color:var(--red)" onclick="deleteChildFlow('${c.id}')">Eliminar</button>`:''}</div>`:''}
     <div style="display:flex;gap:22px;margin-top:10px;font-size:12px;flex-wrap:wrap;color:var(--t3)">
       <div>Gasto del mes<br><strong style="color:var(--t1);font-family:'DM Mono',monospace;font-size:14px">${fmt(spent)}</strong></div>
       <div>Presupuesto mensual<br><strong style="color:var(--t1);font-family:'DM Mono',monospace;font-size:14px">${bud?fmt(bud):'—'}</strong></div>
@@ -6216,7 +6263,7 @@ function childDetailHeaderHTML(c){
         <div style="font-size:12px;color:var(--t3);margin-top:3px">${esc(st.label)} · ${esc(childAgeText(c))}</div></div>
         <div style="display:flex;gap:6px"><button class="btn bg_ sm" onclick="openChildM('${c.id}')">Editar</button><button class="btn bg_ sm" aria-label="Más opciones" aria-expanded="${_childMenuOpen}" onclick="toggleChildMenu()">⋯</button></div>
       </div>
-      ${_childMenuOpen?`<div style="margin-top:10px;padding-top:10px;border-top:1px solid var(--bdr)"><button class="btn bg_ sm" onclick="toggleChildArchive('${c.id}')">${c.status==='archived'?'Reactivar perfil':'Archivar perfil'}</button></div>`:''}
+      ${_childMenuOpen?`<div style="margin-top:10px;padding-top:10px;border-top:1px solid var(--bdr)"><div style="display:flex;gap:6px;flex-wrap:wrap"><button class="btn bg_ sm" onclick="toggleChildArchive('${c.id}')">${c.status==='archived'?'Reactivar perfil':'Archivar perfil'}</button>${c.status==='archived'?`<button class="btn bg_ sm" style="color:var(--red)" onclick="deleteChildFlow('${c.id}')">Eliminar perfil</button>`:''}</div>${c.status==='archived'?'':'<div style="font-size:11px;color:var(--t3);margin-top:8px">Para eliminar un perfil, primero archívalo.</div>'}</div>`:''}
       <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(96px,1fr));gap:12px;margin-top:14px">
         ${kpi('Gasto del mes',fmt(spent))}
         ${kpi('Disponible',bud>0?fmt(bud-spent):'—',bud>0&&bud-spent<0?'var(--red)':'')}
@@ -6263,6 +6310,7 @@ function childSummaryTabHTML(c){
     gBody=`<div style="display:flex;justify-content:space-between;gap:8px;align-items:flex-start"><div style="min-width:0;font-size:13px;font-weight:600">${esc(g.icon||'🎯')} ${esc(g.name)}</div><div style="font-family:'DM Mono',monospace;font-size:12px;white-space:nowrap">${fmt(b.total)} <span style="color:var(--t3)">/ ${fmt(b.target)}</span></div></div>
       <div style="height:8px;background:var(--bg3);border-radius:99px;overflow:hidden;margin:8px 0 6px;display:flex"><div style="width:${rp}%;background:var(--inc)"></div><div style="width:${pp}%;background:repeating-linear-gradient(45deg,var(--yel),var(--yel) 3px,transparent 3px,transparent 6px)"></div></div>
       <div style="font-size:11px;color:var(--t3)"><span style="color:var(--inc)">Real ${fmt(b.real)}</span> · <span style="color:var(--yel)">Planificado ${fmt(b.planned)}</span>${g.due?` · Límite: ${fmtDate(g.due)}`:''}</div>
+      ${g.accountId&&Store.getAccountById(g.accountId)?`<div style="font-size:11px;color:var(--t3);margin-top:4px">🏦 Ahorro en: ${esc(Store.getAccountById(g.accountId).name)}</div>`:''}
       ${act.length>1?`<div style="font-size:11px;color:var(--t3);margin-top:6px">+ ${act.length-1} objetivo${act.length-1===1?'':'s'} más en la pestaña Ahorro</div>`:''}`;
   }else if(gs.length){
     gBody=empty('Todos los objetivos de ahorro están finalizados.');
@@ -6329,6 +6377,19 @@ function saveChild(){
     renderChildren();
     toast(id?'Perfil actualizado':'Perfil creado');
   }finally{if(!done)_childSaving=false}
+}
+async function deleteChildFlow(id){
+  const c=Store.getChildById(id);if(!c)return;
+  _childCardMenu=null;_childMenuOpen=false;
+  if(c.status!=='archived'){toast('Primero archiva el perfil para poder eliminarlo',false);renderChildren();return}
+  const nMov=S.transactions.filter(t=>Array.isArray(t.childAlloc)&&t.childAlloc.some(a=>a&&a.childId===id)).length;
+  const nGoals=S.goals.filter(g=>g.childId===id).length;
+  const msg=`Se eliminará el perfil de ${c.name}${nGoals?`, sus ${nGoals} objetivo${nGoals===1?'':'s'} de ahorro`:''} y sus presupuestos. ${nMov?`Los ${nMov} movimiento${nMov===1?'':'s'} asignado${nMov===1?'':'s'} se conserva${nMov===1?'':'n'} como gasto${nMov===1?'':'s'} o ingreso${nMov===1?'':'s'} normal${nMov===1?'':'es'} (tus saldos no cambian) y solo pierde${nMov===1?'':'n'} la asignación a ${c.name}. `:''}Esta acción no se puede deshacer.`;
+  const ok=await confirm_('¿Eliminar este perfil?',msg,'Eliminar');
+  if(!ok){renderChildren();return}
+  const r=Store.deleteChild(id);
+  if(!r.ok){toast(r.error,false);return}
+  _childView=null;renderChildren();refreshAllUI();toast('Perfil eliminado');
 }
 async function toggleChildArchive(id){
   const c=Store.getChildById(id);if(!c)return;
@@ -9697,7 +9758,8 @@ function execDP(){
 function openGabM(id){
   const g=S.goals.find(x=>x.id===id);if(!g)return;
   $('gab-id').value=id;
-  $('gab-info').textContent=g.icon+' '+g.name+' — Falta: '+fmt(Math.max(0,g.target-(g.saved||0)));
+  const gAcc=g.accountId?Store.getAccountById(g.accountId):null;
+  $('gab-info').textContent=g.icon+' '+g.name+' — Falta: '+fmt(Math.max(0,g.target-(g.saved||0)))+(gAcc?' · Ahorro en: '+gAcc.name:'');
   $('gab-acc').innerHTML='<option value="">Sin descontar de cuenta</option>'+selectableAccounts().map(a=>`<option value="${a.id}">${esc(a.name)} (${accBalanceLabel(a)})</option>`).join('');
   $('gab-acc2').innerHTML='<option value="">No depositar en otra cuenta</option>'+selectableAccounts().map(a=>`<option value="${a.id}">${esc(a.name)} (${accBalanceLabel(a)})</option>`).join('');
   $('gab-acc2-g').style.display='none';
@@ -9708,15 +9770,19 @@ function openGabM(id){
 // transferencia real, sería un ingreso normal (fuera de alcance aquí).
 function onGabAccChange(){
   $('gab-acc2-g').style.display=$('gab-acc').value?'block':'none';
-  if(!$('gab-acc').value)$('gab-acc2').value='';
+  if(!$('gab-acc').value){$('gab-acc2').value='';return}
+  // Si el objetivo tiene cuenta, se sugiere como destino (siempre que no sea la misma de origen).
+  const g=Store.getGoalById($('gab-id').value);
+  if(g&&g.accountId&&!$('gab-acc2').value&&g.accountId!==$('gab-acc').value&&[...$('gab-acc2').options].some(o=>o.value===g.accountId))$('gab-acc2').value=g.accountId;
 }
 function execGab(){
   const id=$('gab-id').value;const v=M($('gab-amt').value)||0;
   if(!isValidAmount(v)){toast('Monto requerido (mayor a 0)',false);return}
   const g=Store.getGoalById(id);if(!g)return;
   const newSaved=Math.min(g.target,(g.saved||0)+v);
-  Store.updateGoal(id,{saved:newSaved});
   const accId=$('gab-acc').value;const accId2=$('gab-acc2').value;const dt=$('gab-dt').value||td_();const tm=$('gab-tm').value||tnow_();
+  if(accId&&accId2&&accId===accId2){toast('La cuenta de origen y la de destino no pueden ser la misma',false);return}
+  Store.updateGoal(id,{saved:newSaved});
   // Antes esto SOLO registraba una transacción si elegías una cuenta de
   // origen — un abono sin cuenta simplemente no dejaba ningún rastro más
   // que el total acumulado en la meta. Ahora siempre se registra en el
