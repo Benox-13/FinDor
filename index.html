@@ -2509,6 +2509,8 @@ function amtToCents(n){return Math.round(M(n||0)*100)}
 
 let lastSyncErrors={}; // label -> mensaje de error, para poder mostrarlo en pantalla
 async function cloudWrite(promise,label){
+  // Candado: sin sesión, o con datos locales de OTRO usuario, no se envía nada (el query no se ejecuta si no se espera).
+  if(!currentUserId||!localOwnerOK()){lastSyncErrors[label]='sin sesión o los datos locales son de otro usuario';return false}
   try{
     const {error}=await promise;
     if(error){
@@ -2794,7 +2796,7 @@ async function pushAllToSupabase(){
 // Se usa en TODO lugar donde se llama a pullFromSupabase() — nunca se debe
 // traer de la nube sin haber empujado primero.
 async function safeSyncPull(){
-  if(!sb||!currentUserId)return;
+  if(!sb||!currentUserId||!localOwnerOK())return;
   await processSyncQueue();
   await retryFailedWrites();
   const pendingTx=S.transactions.filter(t=>!isUUID(t.id));
@@ -2832,7 +2834,7 @@ async function safeSyncPull(){
 // este chequeo de "primera subida", para no repetir el diálogo de
 // confirmación cada pocos minutos si la nube sigue vacía.
 async function fullSync(){
-  if(!sb||!currentUserId)return;
+  if(!sb||!currentUserId||!localOwnerOK())return;
   await safeSyncPull();
 
   const {data,error}=await sb.from('accounts').select('id').limit(1);
@@ -2864,6 +2866,53 @@ document.addEventListener('visibilitychange',()=>{
 });
 setInterval(autoSyncTick,5*60*1000);
 
+// ==================== DUEÑO DE LOS DATOS LOCALES (varios usuarios en un mismo navegador) ====================
+// Con registro abierto, otra persona puede iniciar sesión en este mismo navegador. Para que NUNCA vea datos
+// ajenos ni suba la cola de cambios pendientes de otro usuario a su cuenta, se guarda de quién son los datos
+// locales (finance_v4_owner) y se compara en cada inicio de sesión, ANTES de sincronizar.
+const OWNER_KEY='finance_v4_owner';
+let _ownerMem=''; // respaldo en memoria por si localStorage no deja escribir
+function getLocalOwner(){try{const v=localStorage.getItem(OWNER_KEY);if(v)return v}catch(e){}return _ownerMem}
+function setLocalOwner(id){_ownerMem=id;try{localStorage.setItem(OWNER_KEY,id)}catch(e){}}
+// true solo si hay sesión Y los datos locales son de ESA misma sesión (candado antes de cualquier subida/descarga)
+function localOwnerOK(){return !!currentUserId&&getLocalOwner()===currentUserId}
+function hasLocalUserData(){return ['accounts','transactions','goals','debts','subscriptions','children','vehicles','investments'].some(k=>Array.isArray(S[k])&&S[k].length>0)}
+function reloadApp(){location.reload()}
+// Borra TODO lo local de este dispositivo (datos, colas pendientes, preferencias y la marca de dueño) y recarga.
+// Lo que ya esté sincronizado en la nube no se toca.
+function wipeDeviceData(){
+  retryableWrites={};syncQueue=[];lastSyncErrors={};_ownerMem='';
+  S=defaultAppState(); // en memoria también, para que ningún guardado tardío reviva datos ajenos
+  try{Object.keys(localStorage).filter(k=>k.startsWith('finance_v4')).forEach(k=>localStorage.removeItem(k))}catch(e){console.warn('No se pudo limpiar el almacenamiento local:',e)}
+  reloadApp();
+}
+// La pantalla de login (z-index 99999) tapa los avisos normales (z-index 200): este los sube por encima mientras se responde.
+async function confirmAboveAuth(title,msg,btnLabel){
+  const ov=$('confirm-overlay');ov.style.zIndex='100000';
+  try{return await confirm_(title,msg,btnLabel)}finally{ov.style.zIndex=''}
+}
+// Se llama justo tras autenticar y ANTES de fijar currentUserId o sincronizar. Devuelve true si se puede continuar.
+// viaForm=true cuando el usuario escribió correo y contraseña (no una sesión que ya estaba abierta).
+async function claimLocalData(userId,viaForm){
+  const owner=getLocalOwner();
+  if(owner===userId)return true;
+  if(owner){wipeDeviceData();return false} // eran de OTRO usuario: se limpia y se recarga para entrar con la nube de este
+  // Sin dueño registrado (datos anteriores a esta versión)
+  if(viaForm&&hasLocalUserData()){
+    const mine=await confirmAboveAuth('Datos sin dueño registrado','Hay datos guardados en este dispositivo sin dueño registrado. ¿Son de esta cuenta? Si no son tuyos, pulsa Cancelar y se borrarán de este dispositivo (lo que ya esté sincronizado en la nube no se pierde).','Sí, son de esta cuenta');
+    if(!mine){wipeDeviceData();return false}
+  }
+  setLocalOwner(userId);
+  return true;
+}
+function pendingChangesCount(){return syncQueue.length+Object.keys(retryableWrites).length+S.transactions.filter(t=>!isUUID(t.id)).length}
+// Intenta subir lo pendiente antes de cerrar sesión (sin traer nada de la nube).
+async function flushPendingBeforeLogout(){
+  await processSyncQueue();
+  await retryFailedWrites();
+  for(const t of S.transactions.filter(t=>!isUUID(t.id)))await Store._pushTransaction(t,false);
+}
+
 async function authInit(){
   if(!sb){
     // Sin conexión a internet o el script de Supabase no cargó — dejamos
@@ -2882,8 +2931,12 @@ async function authInit(){
   // Se suscribe ANTES de pedir la sesión para no perder el evento de recuperación.
   sb.auth.onAuthStateChange((event,session)=>{
     if(event==='PASSWORD_RECOVERY'){_recoveryMode=true;$('auth-screen').style.display='flex';setAuthMode('reset')}
-    else if(event==='SIGNED_IN'&&session){if(!_recoveryMode)$('auth-screen').style.display='none'}
-    else if(event==='SIGNED_OUT'){$('auth-screen').style.display='flex';}
+    else if(event==='SIGNED_IN'&&session){
+      // Otra pestaña inició sesión con OTRA cuenta: esta pestaña aún tiene los datos y el id del usuario anterior → se recarga para pasar por la revisión de dueño.
+      if(currentUserId&&session.user&&session.user.id!==currentUserId){reloadApp();return}
+      if(!_recoveryMode)$('auth-screen').style.display='none';
+    }
+    else if(event==='SIGNED_OUT'){currentUserId=null;$('auth-screen').style.display='flex';}
   });
   const {data:{session}}=await sb.auth.getSession();
   if(_recoveryMode){
@@ -2898,6 +2951,7 @@ async function authInit(){
     return;
   }
   if(session){
+    if(!(await claimLocalData(session.user.id,false)))return; // sesión que ya existía: datos sin dueño se adoptan en silencio
     currentUserId=session.user.id;
     $('auth-screen').style.display='none';
     fullSync();
@@ -3028,7 +3082,10 @@ async function authResetPassword(){
     cleanAuthUrl();
     $('auth-pass').value='';$('auth-pass2').value='';
     setAuthMode('login');
-    if(uid){currentUserId=uid;$('auth-screen').style.display='none';toast('Contraseña actualizada');fullSync()}
+    if(uid){
+      if(!(await claimLocalData(uid,true)))return;
+      currentUserId=uid;$('auth-screen').style.display='none';toast('Contraseña actualizada');fullSync();
+    }
   }finally{_resetBusy=false;if(authMode==='reset'){btn.disabled=false;btn.textContent='Guardar contraseña'}}
 }
 async function authCancelReset(){
@@ -3060,6 +3117,7 @@ async function authSignup(){
   if(data.session){
     // El proyecto de Supabase tiene desactivada la confirmación por
     // correo — entra directo, igual que un login normal.
+    if(!(await claimLocalData(data.user.id,true)))return;
     currentUserId=data.user.id;
     $('auth-screen').style.display='none';
     fullSync();
@@ -3086,16 +3144,35 @@ async function authLogin(){
     errEl.style.display='block';
     return;
   }
+  if(!(await claimLocalData(data.user.id,true)))return;
   currentUserId=data.user.id;
   $('auth-pass').value='';
   $('auth-screen').style.display='none';
   fullSync();
 }
 
+let _loggingOut=false;
 async function authLogout(){
-  const ok=await confirm_('¿Cerrar sesión?','Tus datos locales no se borran, solo saldrás de tu cuenta.','Cerrar sesión');
+  if(_loggingOut)return;
+  const ok=await confirm_('¿Cerrar sesión?','Tus datos se quedan en este dispositivo. Si después entra otra cuenta, se borrarán de aquí (lo sincronizado en la nube no se pierde).','Cerrar sesión');
   if(!ok)return;
-  if(sb)await sb.auth.signOut();
+  _loggingOut=true;
+  try{
+    // 1) Intentar subir lo pendiente, con un límite de 8 s y solo si hay conexión
+    if(sb&&currentUserId&&navigator.onLine&&pendingChangesCount()>0){
+      toast('Subiendo cambios pendientes…');
+      try{await Promise.race([flushPendingBeforeLogout(),new Promise(r=>setTimeout(r,8000))])}catch(e){console.warn('No se pudo subir lo pendiente antes de salir:',e)}
+    }
+    // 2) Si algo no subió, avisar con claridad
+    const pend=pendingChangesCount();
+    if(pend>0){
+      const go=await confirm_('Hay cambios sin subir',`Hay ${pend} cambio${pend===1?'':'s'} sin subir a la nube. Si vuelves a entrar con esta cuenta se subirán, pero si entra otra persona en este dispositivo se perderán.`,'Cerrar de todos modos');
+      if(!go)return;
+    }
+    // 3) Salir: sin id de usuario ya no se intenta escribir en la nube
+    currentUserId=null;
+    try{if(sb)await sb.auth.signOut()}catch(e){console.warn('signOut:',e)}
+  }finally{_loggingOut=false}
   $('auth-screen').style.display='flex';
   $('auth-email').value='';$('auth-pass').value='';
 }
