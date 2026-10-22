@@ -1165,21 +1165,22 @@ body.modal-open #bottom-nav{display:none !important}
     <div class="mbody">
       <div id="ct-summary" style="display:none;padding:10px 12px;border-radius:var(--r);background:var(--bg3);border:1px solid var(--bdr);margin-bottom:12px"></div>
       <div id="ct-new-fields">
-        <div class="fg"><label class="fl">Monto</label><input class="fc" type="number" id="ct-amt" placeholder="0.00" min="0" step="0.01" inputmode="decimal" oninput="ctRecalc('amt')"></div>
+        <div class="fg"><label class="fl" id="ct-amt-l">Monto</label><input class="fc" type="number" id="ct-amt" placeholder="0.00" min="0" step="0.01" inputmode="decimal" oninput="ctRecalc('amt')"></div>
         <div class="g2">
-          <div class="fg"><label class="fl">Fecha</label><input class="fc" type="date" id="ct-dt"></div>
+          <div class="fg"><label class="fl" id="ct-dt-l">Fecha</label><input class="fc" type="date" id="ct-dt"></div>
           <div class="fg"><label class="fl">Cuenta</label><select class="fc" id="ct-acc"></select></div>
         </div>
+        <div class="fg" id="ct-freq-g" style="display:none"><label class="fl">Frecuencia</label><select class="fc" id="ct-freq"><option value="monthly">Mensual</option><option value="annual">Anual</option><option value="weekly">Semanal</option></select></div>
         <div class="fg" id="ct-cat-g" style="display:none"><label class="fl">Categoría de ingreso</label><select class="fc" id="ct-cat"></select></div>
-        <div class="fg" id="ct-sub-g"><label class="fl">Subcategoría</label><select class="fc" id="ct-sub"></select></div>
+        <div class="fg" id="ct-sub-g"><label class="fl" id="ct-sub-l">Subcategoría</label><select class="fc" id="ct-sub"></select></div>
         <div class="fg" id="ct-newsub-g"><label class="fl">Subcategoría nueva (opcional)</label><input class="fc" type="text" id="ct-newsub" maxlength="40" placeholder="Ej: Clases de natación"></div>
-        <div class="fg"><label class="fl">Descripción (opcional)</label><input class="fc" type="text" id="ct-dsc" placeholder="Ej: Pañales del mes"></div>
-        <div class="fg"><label class="fl">Notas (opcional)</label><input class="fc" type="text" id="ct-notes"></div>
+        <div class="fg"><label class="fl" id="ct-dsc-l">Descripción (opcional)</label><input class="fc" type="text" id="ct-dsc" placeholder="Ej: Pañales del mes"></div>
+        <div class="fg" id="ct-notes-g"><label class="fl">Notas (opcional)</label><input class="fc" type="text" id="ct-notes"></div>
       </div>
       <div class="fl" style="margin:4px 0 6px">Hijos</div>
       <div id="ct-list"></div>
       <div id="ct-sum" style="display:none;font-size:12px;margin:2px 0 8px"></div>
-      <div style="font-size:11px;color:var(--t3);line-height:1.5">Sigue siendo UN solo movimiento: el saldo de la cuenta se mueve una sola vez y en los totales generales cuenta una sola vez. Si lo compartes entre varios hijos, la suma del reparto debe ser igual al monto.</div>
+      <div id="ct-hint" style="font-size:11px;color:var(--t3);line-height:1.5">Sigue siendo UN solo movimiento: el saldo de la cuenta se mueve una sola vez y en los totales generales cuenta una sola vez. Si lo compartes entre varios hijos, la suma del reparto debe ser igual al monto.</div>
     </div>
     <div class="mfoot"><button class="btn bg_ sm" id="ct-remove" style="margin-right:auto;display:none" onclick="ctRemoveAlloc()">Quitar asignación</button><button class="btn bg_ sm" onclick="cM('mo-chtx')">Cancelar</button><button class="btn bp sm" id="ct-save" onclick="saveChildTx()">Guardar</button></div>
   </div>
@@ -2325,6 +2326,8 @@ async function pullFromSupabase(){
         // Si la columna aún no existe en Supabase llega undefined -> null.
         billingDay:s.billing_day!=null?Number(s.billing_day):null,
         billingDayTouched:s.billing_day!=null,
+        childInfo:sanitizeChildInfo(s.child_info),
+        childInfoTouched:s.child_info!=null,
       };
     });
 
@@ -2596,12 +2599,35 @@ function goalToCloud(g){
     // account_id SOLO se envía si el objetivo tiene cuenta (o si se le acaba de quitar): el resto no depende de que la columna exista.
     ...((g.accountId||g.accountIdTouched)?{account_id:g.accountId||null}:{})};
 }
+// ---- Gastos recurrentes de hijos: una suscripción normal con childInfo = {sub:'Colegiatura', alloc:[{childId,amount}]} ----
+function sanitizeChildInfo(ci){
+  if(!ci||typeof ci!=='object'||!Array.isArray(ci.alloc))return undefined;
+  const alloc=ci.alloc.filter(a=>a&&a.childId&&Number.isFinite(Number(a.amount))&&Number(a.amount)>0).map(a=>({childId:String(a.childId),amount:M(a.amount)}));
+  if(!alloc.length)return undefined;
+  return{sub:typeof ci.sub==='string'?ci.sub.slice(0,40):'',alloc};
+}
+// Igual que arriba pero solo con hijos que todavía existen (null si no queda ninguno)
+function subChildInfo(sb_){
+  const ci=sanitizeChildInfo(sb_&&sb_.childInfo);if(!ci)return null;
+  const alloc=ci.alloc.filter(a=>Store.getChildById(a.childId));
+  return alloc.length?{sub:ci.sub,alloc}:null;
+}
+function rescaleChildInfo(ci,newCost){
+  const cents=chRescale(ci.alloc.map(a=>Math.round(M(a.amount)*100)),Math.round(M(newCost)*100));
+  return{sub:ci.sub,alloc:ci.alloc.map((a,i)=>({childId:a.childId,amount:M(cents[i]/100)}))};
+}
+function childRecurringOf(childId){
+  return S.subscriptions.filter(x=>(x.status||'active')==='active').filter(x=>{const ci=subChildInfo(x);return ci&&ci.alloc.some(a=>a.childId===childId)});
+}
+function recurringMonthlyShare(x,share){return M(share)*(x.freq==='monthly'?1:x.freq==='annual'?1/12:4.33)}
 function subscriptionToCloud(s,catId){
   return{id:s.id,user_id:currentUserId,name:s.name,icon:s.icon||null,cost_cents:amtToCents(s.cost),
     freq:s.freq,next_date:s.nextDate,account_id:s.accountId||null,category_id:catId||null,status:s.status||'active',
     // billing_day SOLO se envía si esta suscripción lo usa (día 29-31) o lo
     // usó antes y se está borrando: el resto no depende de que la columna exista.
-    ...((s.billingDay!=null||s.billingDayTouched)?{billing_day:s.billingDay!=null?s.billingDay:null}:{})};
+    ...((s.billingDay!=null||s.billingDayTouched)?{billing_day:s.billingDay!=null?s.billingDay:null}:{}),
+    // child_info SOLO se envía si es un gasto recurrente de hijos (o si se le acaba de quitar): el resto no depende de que la columna exista.
+    ...((s.childInfo||s.childInfoTouched)?{child_info:s.childInfo||null}:{})};
 }
 function vehicleToCloud(v){
   const hasExtra=v.financed||v.monthlyPayment!=null||v.totalMonths!=null;
@@ -3591,6 +3617,12 @@ const Store = {
     if(c.status!=='archived')return{ok:false,error:'Primero archiva el perfil para poder eliminarlo'};
     S.transactions.filter(t=>Array.isArray(t.childAlloc)&&t.childAlloc.some(a=>a&&a.childId===id)).forEach(t=>{
       this._patchTxNoBalance(t.id,{childAlloc:t.childAlloc.filter(a=>a&&a.childId!==id)}); // [] limpia también la nube
+    });
+    // Gastos recurrentes: los que eran SOLO de este hijo se eliminan; los compartidos siguen con los demás (reparto reescalado al costo).
+    S.subscriptions.filter(x=>{const ci=sanitizeChildInfo(x.childInfo);return ci&&ci.alloc.some(a=>a.childId===id)}).forEach(x=>{
+      const ci=sanitizeChildInfo(x.childInfo),rest=ci.alloc.filter(a=>a.childId!==id);
+      if(!rest.length)this.deleteSubscription(x.id);
+      else this.updateSubscription(x.id,{childInfo:rescaleChildInfo({sub:ci.sub,alloc:rest},x.cost),childInfoTouched:true});
     });
     S.goals.filter(g=>g.childId===id).forEach(g=>{
       S.goals=S.goals.filter(x=>x.id!==g.id);
@@ -5585,7 +5617,8 @@ function chRescale(old,total){
   out[out.length-1]+=total-out.reduce((x,y)=>x+y,0);
   return out.every(c=>c>0)?out:chSplitCents(total,old.length);
 }
-let _ctMode='new',_ctTxId=null,_ctType='expense',_ctSaving=false,_ctPre='';
+let _ctMode='new',_ctTxId=null,_ctType='expense',_ctSaving=false,_ctPre='',_ctSubId=null;
+const CT_HINT='Sigue siendo UN solo movimiento: el saldo de la cuenta se mueve una sola vez y en los totales generales cuenta una sola vez. Si lo compartes entre varios hijos, la suma del reparto debe ser igual al monto.';
 function ctTotalCents(){
   if(_ctMode==='alloc'){const t=Store.getTransactionById(_ctTxId);return t?Math.round(M(t.amount)*100):0}
   return Math.round(M($('ct-amt').value)*100);
@@ -5638,6 +5671,45 @@ function ctShell(title){
   $('ct-title').textContent=title;
   $('ct-sum').style.display='none';
   $('ct-remove').style.display='none';
+  // Por si el modal quedó en modo "gasto recurrente": se restauran etiquetas y campos normales
+  _ctSubId=null;
+  $('ct-amt-l').textContent='Monto';$('ct-dt-l').textContent='Fecha';$('ct-sub-l').textContent='Subcategoría';$('ct-dsc-l').textContent='Descripción (opcional)';
+  $('ct-freq-g').style.display='none';$('ct-notes-g').style.display='';$('ct-hint').textContent=CT_HINT;
+}
+// Alta o edición de un gasto recurrente de hijos (es una suscripción con reparto entre hijos). Reutiliza el reparto de "Registrar gasto".
+function openChildRecurring(childId,subId){
+  const act=Store.getChildren().filter(c=>c.status!=='archived');
+  if(!act.length){toast('Primero agrega un hijo',false);return}
+  const sub=subId?Store.getSubscriptionById(subId):null;
+  if(subId&&!sub){toast('Este gasto recurrente ya no existe',false);return}
+  const ci=sub?subChildInfo(sub):null;
+  _ctSaving=false;_ctMode='recurring';_ctTxId=null;_ctType='expense';
+  ctShell(sub?'Editar gasto recurrente':'Nuevo gasto recurrente');
+  _ctSubId=sub?sub.id:null;
+  $('ct-summary').style.display='none';$('ct-new-fields').style.display='block';
+  $('ct-amt-l').textContent='Costo total por periodo';$('ct-dt-l').textContent='Próximo cobro';$('ct-sub-l').textContent='Tipo de gasto';$('ct-dsc-l').textContent='Nombre (opcional)';
+  $('ct-freq-g').style.display='block';$('ct-notes-g').style.display='none';
+  $('ct-hint').textContent='Cada vez que pulses «Renovar» se registra UN gasto con este reparto (el saldo se mueve una sola vez). No hay cobros automáticos.';
+  $('ct-amt').value=sub?sub.cost:'';$('ct-dt').value=sub?sub.nextDate:td_();$('ct-dsc').value=sub?sub.name:'';$('ct-notes').value='';$('ct-newsub').value='';
+  $('ct-freq').value=sub?(sub.freq||'monthly'):'monthly';
+  const accs=selectableAccounts();const cur=sub?Store.getAccountById(sub.accountId):null;
+  if(cur&&!accs.some(a=>a.id===cur.id))accs.push(cur);
+  $('ct-acc').innerHTML='<option value="">Selecciona una cuenta</option>'+accs.map(a=>`<option value="${a.id}">${esc(a.name)} (${accBalanceLabel(a)})</option>`).join('');
+  $('ct-acc').value=sub&&cur?cur.id:'';
+  $('ct-sub-g').style.display='block';$('ct-newsub-g').style.display='block';$('ct-cat-g').style.display='none';
+  const amounts={};if(ci)ci.alloc.forEach(a=>{amounts[a.childId]=a.amount});
+  ctBuildList(amounts,ci?ci.alloc.map(a=>a.childId):[],ci?'':childId);
+  $('ct-sub').innerHTML=ci&&ci.sub?`<option value="${esc(ci.sub)}">${esc(ci.sub)}</option>`:'';
+  if(ci&&ci.sub)$('ct-sub').value=ci.sub;
+  ctFillSubs();
+  ctRecalc(ci?'edit':'sel');
+  oM('mo-chtx');
+}
+async function delChildRecurring(id){
+  const x=Store.getSubscriptionById(id);if(!x)return;
+  const ok=await confirm_('¿Eliminar este gasto recurrente?','Dejará de sugerirse en Suscripciones y en los próximos pagos. Los gastos que ya registraste se conservan.','Eliminar');
+  if(!ok)return;
+  Store.deleteSubscription(id);renderChildren();renderSubs();renderDash();toast('Gasto recurrente eliminado');
 }
 // Registrar un gasto o ingreso NUEVO para uno o varios hijos (desde Hijos).
 function openChildExpense(childId,type){
@@ -5688,6 +5760,31 @@ async function saveChildTx(){
   try{
     const col=ctCollect();
     if(col.error){toast(col.error,false);return}
+    if(_ctMode==='recurring'){
+      const amt=M($('ct-amt').value),dt=$('ct-dt').value,accId=$('ct-acc').value,freq=$('ct-freq').value;
+      if(!isValidAmount(amt)){toast('El costo debe ser mayor a 0',false);return}
+      if(!dt){toast('La fecha del próximo cobro es requerida',false);return}
+      const acc=Store.getAccountById(accId);
+      if(!acc){toast('Selecciona una cuenta',false);return}
+      const nw=($('ct-newsub').value||'').trim();
+      if(nw.length>40){toast('El tipo nuevo es muy largo (máximo 40 caracteres)',false);return}
+      const sub=nw||$('ct-sub').value;
+      const hc=ensureChildrenCategory();
+      if(sub&&!(hc.subs||[]).includes(sub))Store.addSubcategory(hc.id,sub);
+      const name=($('ct-dsc').value||'').trim()||sub||'Gasto recurrente';
+      const base={name,cost:amt,freq,nextDate:dt,accountId:accId,icon:'👶',category:hc.name,childInfo:{sub,alloc:col.alloc},childInfoTouched:true};
+      if(_ctSubId){
+        const prev=Store.getSubscriptionById(_ctSubId);
+        if(!prev){toast('Este gasto recurrente ya no existe',false);return}
+        // Día de cobro: se conserva el guardado si no cambió la fecha ni la frecuencia (igual que en Suscripciones)
+        if(prev.nextDate!==dt||prev.freq!==freq){base.billingDay=billingDayOf(dt,freq);base.billingDayTouched=base.billingDay!==null||!!prev.billingDayTouched}
+        Store.updateSubscription(_ctSubId,base);
+      }else{
+        base.since=td_();base.billingDay=billingDayOf(dt,freq);base.billingDayTouched=base.billingDay!==null;
+        Store.addSubscription(base);
+      }
+      done=true;cM('mo-chtx');renderChildren();renderSubs();renderDash();toast(_ctSubId?'Gasto recurrente actualizado':'Gasto recurrente agregado');return;
+    }
     if(_ctMode==='alloc'){
       const r=Store.setTxChildAlloc(_ctTxId,col.alloc);
       if(!r.ok){toast(r.error,false);return}
@@ -6404,13 +6501,41 @@ function childSummaryTabHTML(c){
   // 5) Datos del perfil (discreto)
   const dep=CHILD_DEPENDENCY[c.dependency]||CHILD_DEPENDENCY.total;
   const info=`<div style="font-size:12px;color:var(--t3);line-height:1.6;padding:2px 4px 8px">Dependencia económica: <strong style="color:var(--t2)">${esc(dep)}</strong>${c.notes?`<div style="margin-top:6px;color:var(--t2);white-space:pre-wrap">${esc(c.notes)}</div>`:''}</div>`;
-  return actions+budCard+topCard+goalCard+movCard+info;
+  // 4b) Próximo cobro de los gastos recurrentes
+  const recs=childRecurringOf(c.id).sort((x,y)=>x.nextDate<y.nextDate?-1:x.nextDate>y.nextDate?1:0);
+  let recCard='';
+  if(recs.length){
+    const nx=recs[0],ci=subChildInfo(nx),mine=ci.alloc.find(a=>a.childId===c.id),dl=daysUntil(nx.nextDate);
+    const tot=recs.reduce((acc,x)=>{const k=subChildInfo(x).alloc.find(a=>a.childId===c.id);return acc+recurringMonthlyShare(x,k?k.amount:0)},0);
+    recCard=card(sec('Gastos recurrentes','presupuesto')+`<div style="font-size:11px;color:var(--t3)">Próximo cobro</div><div style="display:flex;justify-content:space-between;gap:8px;margin-top:3px"><div style="font-size:13px;font-weight:500;min-width:0">${esc(nx.name)} <span style="font-weight:400;color:var(--t3)">· ${fmtDate(nx.nextDate)} · ${dl<0?'vencido':dl===0?'hoy':'en '+dl+' d'}</span></div><div style="font-family:'DM Mono',monospace;font-size:13px;white-space:nowrap">${fmt(mine?mine.amount:0)}</div></div><div style="font-size:11px;color:var(--t3);margin-top:6px">${recs.length} activo${recs.length===1?'':'s'} · equivalente mensual ${fmt(tot)}</div>`);
+  }
+  return actions+budCard+recCard+topCard+goalCard+movCard+info;
+}
+function childRecurringHTML(c){
+  const canAct=c.status!=='archived',fl={monthly:'Mensual',annual:'Anual',weekly:'Semanal'};
+  const subs=childRecurringOf(c.id).sort((a,b)=>a.nextDate<b.nextDate?-1:a.nextDate>b.nextDate?1:0);
+  const head=`<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:10px"><div style="font-weight:600;font-size:13px">Gastos recurrentes</div>${canAct?`<button class="btn bp sm" onclick="openChildRecurring('${c.id}')">+ Nuevo recurrente</button>`:''}</div>`;
+  if(!subs.length)return`<div class="card" style="padding:14px 16px;margin-bottom:12px">${head}<div style="font-size:12px;color:var(--t3);line-height:1.6">Colegiatura, guardería, manutención, seguros… Regístralos aquí y renueva cada uno cuando se cobre.</div></div>`;
+  let monthly=0;
+  const rows=subs.map(x=>{
+    const ci=subChildInfo(x),mine=ci.alloc.find(a=>a.childId===c.id),share=mine?mine.amount:0;
+    monthly+=recurringMonthlyShare(x,share);
+    const others=ci.alloc.filter(a=>a.childId!==c.id).map(a=>(Store.getChildById(a.childId)||{}).name).filter(Boolean);
+    const dl=daysUntil(x.nextDate),acc=Store.getAccountById(x.accountId);
+    const chip=`<span style="color:${dl<=3?'var(--red)':dl<=7?'var(--yel)':'var(--t3)'}">${dl<0?'Vencido':dl===0?'Hoy':'en '+dl+' d'}</span>`;
+    return`<div style="padding:10px 0;border-top:1px solid var(--bdr)">
+      <div style="display:flex;justify-content:space-between;gap:10px;align-items:flex-start"><div style="min-width:0"><div style="font-size:13px;font-weight:500">${esc(x.name)}</div><div style="font-size:11px;color:var(--t3);margin-top:2px">${esc(ci.sub||'Sin tipo')} · ${fl[x.freq]||''} · ${esc(acc?acc.name:'Sin cuenta')}</div></div>
+      <div style="text-align:right"><div style="font-family:'DM Mono',monospace;font-size:13px;white-space:nowrap">${fmt(share)}</div>${others.length?`<div style="font-size:10px;color:var(--t3)">de ${fmt(x.cost)} · con ${esc(others.join(', '))}</div>`:''}</div></div>
+      <div style="font-size:11px;color:var(--t3);margin-top:4px">Próximo cobro: ${fmtDate(x.nextDate)} · ${chip}</div>
+      <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:8px"><button class="btn bp sm" onclick="renewSub('${x.id}')">Renovar</button>${canAct?`<button class="btn bg_ sm" onclick="openChildRecurring('${c.id}','${x.id}')">Editar</button>`:''}<button class="btn bg_ sm" onclick="delChildRecurring('${x.id}')">Eliminar</button></div></div>`;
+  }).join('');
+  return`<div class="card" style="padding:14px 16px;margin-bottom:12px">${head}<div style="font-size:11px;color:var(--t3);margin-bottom:2px">Equivalente mensual para ${esc(c.name)}: <strong style="color:var(--t1);font-family:'DM Mono',monospace">${fmt(monthly)}</strong></div>${rows}</div>`;
 }
 function childDetailHTML(c){
   const tabs=[['resumen','Resumen'],['presupuesto','Presupuesto'],['ahorro','Ahorro'],['movimientos','Movimientos']];
   if(!tabs.some(x=>x[0]===_childTab))_childTab='resumen';
   const nav=`<div class="tabs ch4" role="tablist">${tabs.map(([k,l])=>`<button class="tab${_childTab===k?' on':''}" role="tab" aria-selected="${_childTab===k}" onclick="setChildTab('${k}')">${l}</button>`).join('')}</div>`;
-  const body=_childTab==='presupuesto'?childBudgetHTML(c):_childTab==='ahorro'?childGoalsHTML(c):_childTab==='movimientos'?childMovementsHTML(c):childSummaryTabHTML(c);
+  const body=_childTab==='presupuesto'?childBudgetHTML(c)+childRecurringHTML(c):_childTab==='ahorro'?childGoalsHTML(c):_childTab==='movimientos'?childMovementsHTML(c):childSummaryTabHTML(c);
   return childPageHead('<button class="btn bg_" onclick="closeChildDetail()">← Hijos</button>')+childDetailHeaderHTML(c)+nav+body;
 }
 function openChildM(id,forceStage){
@@ -6461,7 +6586,9 @@ async function deleteChildFlow(id){
   if(c.status!=='archived'){toast('Primero archiva el perfil para poder eliminarlo',false);renderChildren();return}
   const nMov=S.transactions.filter(t=>Array.isArray(t.childAlloc)&&t.childAlloc.some(a=>a&&a.childId===id)).length;
   const nGoals=S.goals.filter(g=>g.childId===id).length;
-  const msg=`Se eliminará el perfil de ${c.name}${nGoals?`, sus ${nGoals} objetivo${nGoals===1?'':'s'} de ahorro`:''} y sus presupuestos. ${nMov?`Los ${nMov} movimiento${nMov===1?'':'s'} asignado${nMov===1?'':'s'} se conserva${nMov===1?'':'n'} como gasto${nMov===1?'':'s'} o ingreso${nMov===1?'':'s'} normal${nMov===1?'':'es'} (tus saldos no cambian) y solo pierde${nMov===1?'':'n'} la asignación a ${c.name}. `:''}Esta acción no se puede deshacer.`;
+  const recAll=S.subscriptions.map(x=>sanitizeChildInfo(x.childInfo)).filter(ci=>ci&&ci.alloc.some(a=>a.childId===id));
+  const nRec=recAll.filter(ci=>ci.alloc.length===1).length,nRecSh=recAll.length-nRec;
+  const msg=`Se eliminará el perfil de ${c.name}${nGoals?`, sus ${nGoals} objetivo${nGoals===1?'':'s'} de ahorro`:''}${nRec?`, ${nRec} gasto${nRec===1?'':'s'} recurrente${nRec===1?'':'s'} que ${nRec===1?'era':'eran'} solo suyo${nRec===1?'':'s'}`:''} y sus presupuestos. ${nRecSh?`Los ${nRecSh} gasto${nRecSh===1?'':'s'} recurrente${nRecSh===1?'':'s'} compartido${nRecSh===1?'':'s'} se conserva${nRecSh===1?'':'n'} con los demás hijos. `:''}${nMov?`Los ${nMov} movimiento${nMov===1?'':'s'} asignado${nMov===1?'':'s'} se conserva${nMov===1?'':'n'} como gasto${nMov===1?'':'s'} o ingreso${nMov===1?'':'s'} normal${nMov===1?'':'es'} (tus saldos no cambian) y solo pierde${nMov===1?'':'n'} la asignación a ${c.name}. `:''}Esta acción no se puede deshacer.`;
   const ok=await confirm_('¿Eliminar este perfil?',msg,'Eliminar');
   if(!ok){renderChildren();return}
   const r=Store.deleteChild(id);
@@ -8176,7 +8303,8 @@ function openSubM(editId=null){
   // fill cat selector (expense)
   const sc=$('sub-cat');sc.innerHTML='<option value="">Sin categoría</option>';
   S.categories.filter(c=>c.type==='expense').forEach(c=>{const o=document.createElement('option');o.value=c.name;o.textContent=c.icon+' '+c.name;sc.appendChild(o)});
-  if(editId){const s=Store.getSubscriptionById(editId);$('sub-acc').value=s.accountId||'';$('sub-cat').value=s.category||''}
+  $('sub-cat').disabled=false;
+  if(editId){const s=Store.getSubscriptionById(editId);$('sub-acc').value=s.accountId||'';$('sub-cat').value=s.category||'';if(subChildInfo(s))$('sub-cat').disabled=true} // gasto de hijos: categoría fija; el reparto se edita desde Hijos
   oM('mo-sub');
 }
 async function saveSub(){
@@ -8191,6 +8319,11 @@ async function saveSub(){
     // guardado (la fecha puede estar "encogida" a 28 por un mes corto y
     // recalcularlo aquí lo perdería); si cambiaste la fecha, manda la nueva.
     const prev=Store.getSubscriptionById(eid);
+    const prevCi=prev?subChildInfo(prev):null;
+    if(prevCi){
+      obj.category=prev.category; // fija en "Hijos"
+      if(Math.round(M(prev.cost)*100)!==Math.round(M(obj.cost)*100)){obj.childInfo=rescaleChildInfo(prevCi,obj.cost);obj.childInfoTouched=true} // el reparto se reescala y sigue sumando exacto
+    }
     if(!prev||prev.nextDate!==obj.nextDate||prev.freq!==obj.freq){
       obj.billingDay=billingDayOf(obj.nextDate,obj.freq);
       obj.billingDayTouched=obj.billingDay!==null||!!(prev&&prev.billingDayTouched);
@@ -8221,6 +8354,8 @@ function renderSubs(){
   const cardHTML=(s)=>{
     const status=s.status||'active';
     const dl=daysUntil(s.nextDate);
+    const ciS=subChildInfo(s);
+    const kidsBadge=ciS?` <span class="bdg bdg-n" style="margin-left:6px">👶 ${esc(ciS.alloc.map(a=>(Store.getChildById(a.childId)||{}).name||'').filter(Boolean).join(', '))}</span>`:'';
     const monthlyCost=s.freq==='monthly'?s.cost:s.freq==='annual'?s.cost/12:s.cost*4.33;
     const annualCost=monthlyCost*12;
     const hist=Store.getSubscriptionHistory(s.id);
@@ -8235,7 +8370,7 @@ function renderSubs(){
     const menuJson='['+menuParts.join(',')+']';
     // Toda la tarjeta abre el historial al hacer clic — el menú y el
     // botón "Renovar" cortan la propagación.
-    return`<div class="card card-click" style="${status!=='active'?'opacity:.8':''}" onclick="openSubHistory('${s.id}')"><div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:11px"><div style="font-size:26px">${esc(s.icon)}</div><div style="display:flex;align-items:center;gap:6px" onclick="event.stopPropagation()">${statusBadge}<button class="btn bg_ ico sm" title="Más opciones" onclick="showRowMenu(this,${menuJson})">⋮</button></div></div><div style="font-size:15px;font-weight:500;margin-bottom:2px">${esc(s.name)}</div><div style="font-size:12px;color:var(--t3);margin-bottom:9px">${fl[s.freq]} · próx: ${fmtDate(s.nextDate)} · desde: ${sinceLbl}</div><div style="display:flex;align-items:baseline;gap:8px;margin-bottom:5px"><div style="font-family:'DM Mono',monospace;font-size:17px;color:var(--red)">${fmt(monthlyCost)}<span style="font-size:11px;color:var(--t3);margin-left:2px">/mes</span></div></div><div style="font-size:12px;color:var(--t3);margin-bottom:6px">Anual: <span style="font-family:'DM Mono',monospace;color:var(--t2)">${fmt(annualCost)}</span></div><div style="font-size:12px;color:var(--t3);margin-bottom:11px;display:flex;justify-content:space-between"><span>${hist.length} pago${hist.length!==1?'s':''} registrado${hist.length!==1?'s':''}</span><span style="font-family:'DM Mono',monospace;color:var(--t2)">Total: ${fmt(totalPaid)}</span></div>${status==='active'?`<button class="btn bg_ sm" style="width:100%" onclick="event.stopPropagation();renewSub('${s.id}')">Renovar</button>`:''}</div>`;
+    return`<div class="card card-click" style="${status!=='active'?'opacity:.8':''}" onclick="openSubHistory('${s.id}')"><div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:11px"><div style="font-size:26px">${esc(s.icon)}</div><div style="display:flex;align-items:center;gap:6px" onclick="event.stopPropagation()">${statusBadge}<button class="btn bg_ ico sm" title="Más opciones" onclick="showRowMenu(this,${menuJson})">⋮</button></div></div><div style="font-size:15px;font-weight:500;margin-bottom:2px">${esc(s.name)}${kidsBadge}</div><div style="font-size:12px;color:var(--t3);margin-bottom:9px">${fl[s.freq]} · próx: ${fmtDate(s.nextDate)} · desde: ${sinceLbl}</div><div style="display:flex;align-items:baseline;gap:8px;margin-bottom:5px"><div style="font-family:'DM Mono',monospace;font-size:17px;color:var(--red)">${fmt(monthlyCost)}<span style="font-size:11px;color:var(--t3);margin-left:2px">/mes</span></div></div><div style="font-size:12px;color:var(--t3);margin-bottom:6px">Anual: <span style="font-family:'DM Mono',monospace;color:var(--t2)">${fmt(annualCost)}</span></div><div style="font-size:12px;color:var(--t3);margin-bottom:11px;display:flex;justify-content:space-between"><span>${hist.length} pago${hist.length!==1?'s':''} registrado${hist.length!==1?'s':''}</span><span style="font-family:'DM Mono',monospace;color:var(--t2)">Total: ${fmt(totalPaid)}</span></div>${status==='active'?`<button class="btn bg_ sm" style="width:100%" onclick="event.stopPropagation();renewSub('${s.id}')">Renovar</button>`:''}</div>`;
   };
   let html=activeSubs.length?`<div class="g3">${activeSubs.map(cardHTML).join('')}</div>`:emptyState('↻','Sin suscripciones activas','Reactiva una desde abajo, o agrega una nueva.','+ Nueva suscripción',"openSubM()");
   if(inactiveSubs.length){
@@ -8290,14 +8425,25 @@ async function renewSub(id){
   const patch={nextDate:ymdLocal(nd)};
   if(anchor||s.billingDayTouched){patch.billingDay=anchor||null;patch.billingDayTouched=!!anchor||!!s.billingDayTouched}
   Store.updateSubscription(id,patch);
-  Store.addTransaction({type:'expense',amount:s.cost,date:td_(),time:tnow_(),description:s.name+' (suscripción)',category:s.category||'Entretenimiento',accountId:s.accountId,notes:'Renovación manual',subscriptionId:s.id});
+  const rtx={type:'expense',amount:s.cost,date:td_(),time:tnow_(),description:s.name+' (suscripción)',category:s.category||'Entretenimiento',accountId:s.accountId,notes:'Renovación manual',subscriptionId:s.id};
+  // Gasto recurrente de hijos: el reparto se reescala al costo actual (suma exacta) y el gasto queda en "Hijos" con su tipo como subcategoría.
+  const rci=subChildInfo(s);
+  if(rci){
+    const r=rescaleChildInfo(rci,s.cost);
+    if(!validateChildAlloc('expense',s.cost,r.alloc)){
+      const hc=ensureChildrenCategory();
+      rtx.category=hc.name;rtx.childAlloc=r.alloc;
+      if(r.sub){rtx.subcategory=r.sub;if(!(hc.subs||[]).includes(r.sub))Store.addSubcategory(hc.id,r.sub)}
+    }
+  }
+  Store.addTransaction(rtx);
   // Bug real encontrado: el filtro de mes de Transacciones (las flechitas
   // ‹ › arriba de la tabla) NO se resetea al cambiar de pantalla — si el
   // usuario había navegado a un mes distinto antes, la transacción de hoy
   // quedaba invisible aunque sí se hubiera creado. La reseteamos a "hoy"
   // para que la renovación sea visible de inmediato si vas a Transacciones.
   if(typeof txMonthToday==='function')txMonthToday();
-  renderSubs();renderDash();toast(`${s.name} renovada`);
+  renderSubs();renderDash();if(typeof renderChildren==='function')renderChildren();toast(`${s.name} renovada`);
 }
 async function delSub(id){const ok=await confirm_('¿Eliminar suscripción?','');if(!ok)return;Store.deleteSubscription(id);renderSubs();toast('Eliminada')}
 
