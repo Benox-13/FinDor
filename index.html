@@ -1818,7 +1818,7 @@ body.modal-open #bottom-nav{display:none !important}
 // Objetivo: que un fallo inesperado (sobre todo en el iPhone, donde no hay consola) deje un aviso corto y un
 // registro que se pueda ver y copiar en Configuración → Datos → Diagnóstico. Nada de esto sube a la nube.
 // Se guarda en finance_v4_errlog (se borra con el cambio de usuario y con "Borrar todo", como el resto de lo local).
-const APP_BUILD='2026-10-21 · r6'; // cambia en cada entrega: sirve para saber qué versión está corriendo (el service worker puede servir una anterior)
+const APP_BUILD='2026-10-22 · r7'; // cambia en cada entrega: sirve para saber qué versión está corriendo (el service worker puede servir una anterior)
 const ERRLOG_KEY='finance_v4_errlog',ERRLOG_MAX=5;
 let _errLast={sig:'',t:0},_errToastAt=0;
 function errToText(x){
@@ -2413,9 +2413,17 @@ async function pullFromSupabase(){
     }
 
     // --- budget_goals: ingreso esperado + % de ahorro esperado, por mes ---
+    // Misma regla que hijos: la nube manda en los meses que tiene; los meses que SOLO existen en local (creados antes de que
+    // existiera la tabla, o sin conexión) se conservan y se suben después. Antes, al crear la tabla vacía, se perdían.
+    let budgetGoalsLocalOnly=[];
     const newBudgetGoals=optionalMissing.has('budget_goals')
       ?S.budgetGoals
-      :(results.budget_goals||[]).map(g=>({id:g.id,period:g.period_key,expectedIncome:centsToAmt(g.expected_income_cents),savingsPct:g.savings_pct||0}));
+      :(()=>{
+        const fromCloud=(results.budget_goals||[]).map(g=>({id:g.id,period:g.period_key,expectedIncome:centsToAmt(g.expected_income_cents),savingsPct:g.savings_pct||0}));
+        const periods=new Set(fromCloud.map(g=>g.period));
+        budgetGoalsLocalOnly=(S.budgetGoals||[]).filter(g=>g&&g.period&&!periods.has(g.period));
+        return [...fromCloud,...budgetGoalsLocalOnly];
+      })();
 
     // --- hijos: la nube manda en los ids que tiene; los perfiles que SOLO existen
     // en local (creados antes de correr el SQL, o sin conexión) se conservan y se
@@ -2520,6 +2528,11 @@ async function pullFromSupabase(){
     shrinkExistingPhoto();
     if(localOnlyNW.length)syncNWHistoryUp(localOnlyNW); // sin await a propósito: es "best-effort"
     // Sube lo que la nube aún no tiene: PRIMERO los perfiles y después sus presupuestos (la FK exige que el hijo exista).
+    if(budgetGoalsLocalOnly.length)(async()=>{
+      for(const g of budgetGoalsLocalOnly){
+        await cloudWrite(sb.from('budget_goals').upsert({user_id:currentUserId,period_key:g.period,expected_income_cents:amtToCents(g.expectedIncome||0),savings_pct:g.savingsPct||0},{onConflict:'user_id,period_key'}),`meta de presupuesto ${g.period}`);
+      }
+    })();
     if(childrenLocalOnly.length||childBudgetsLocalOnly.length)(async()=>{for(const c of childrenLocalOnly)await pushChildBestEffort(c);for(const r of childBudgetsLocalOnly)await pushChildBudgetBestEffort(r)})();
   }catch(err){
     console.error('Error al traer datos de Supabase:',err);
