@@ -661,7 +661,7 @@ body.modal-open #bottom-nav{display:none !important}
   </div>
   <div class="card" style="margin-bottom:14px"><div class="slbl">Gasto por día de la semana</div><div class="cht" style="height:180px"><canvas id="ch-weekday"></canvas></div></div>
   <div class="card"><div class="slbl">Tendencia de balance</div><div class="cht" style="height:180px"><canvas id="ch-trend"></canvas></div></div>
-  <div class="card" style="margin-top:14px"><div class="slbl">Evolución del patrimonio</div><div class="cht" style="height:180px"><canvas id="ch-nw-report"></canvas></div></div>
+  <div class="card" style="margin-top:14px"><div class="slbl">Evolución del patrimonio</div><div class="cht" style="height:180px"><canvas id="ch-nw-report"></canvas></div><div id="nw-chart-note" style="display:none;font-size:11px;color:var(--t3);margin-top:8px;line-height:1.5">Desde nov 2026 el patrimonio incluye la deuda de tarjetas de crédito; los meses anteriores no la incluyen, por eso puede verse un escalón en ese mes.</div></div>
 
   <!-- TENDENCIAS MÁS PROFUNDAS -->
   <div class="slbl" style="margin:24px 0 10px">TENDENCIAS</div>
@@ -1818,7 +1818,7 @@ body.modal-open #bottom-nav{display:none !important}
 // Objetivo: que un fallo inesperado (sobre todo en el iPhone, donde no hay consola) deje un aviso corto y un
 // registro que se pueda ver y copiar en Configuración → Datos → Diagnóstico. Nada de esto sube a la nube.
 // Se guarda en finance_v4_errlog (se borra con el cambio de usuario y con "Borrar todo", como el resto de lo local).
-const APP_BUILD='2026-10-22 · r7'; // cambia en cada entrega: sirve para saber qué versión está corriendo (el service worker puede servir una anterior)
+const APP_BUILD='2026-10-23 · r8'; // cambia en cada entrega: sirve para saber qué versión está corriendo (el service worker puede servir una anterior)
 const ERRLOG_KEY='finance_v4_errlog',ERRLOG_MAX=5;
 let _errLast={sig:'',t:0},_errToastAt=0;
 function errToText(x){
@@ -3313,6 +3313,11 @@ function slblBadge(icon,color){
 // se usa para vistazos rápidos dentro de tarjetas chicas (ej. el hero de
 // patrimonio) sin cargar Chart.js/canvas ahí, que es más pesado para un
 // adorno de este tamaño.
+// La nota solo aparece si la gráfica mezcla meses sin tarjetas con meses con tarjetas
+function nwChartNote(hist){
+  const el=$('nw-chart-note');if(!el)return;
+  el.style.display=hist.some(h=>!nwBasisIncludesCards(h.k))&&hist.some(h=>nwBasisIncludesCards(h.k))?'block':'none';
+}
 function sparklineSVG(vals,color,w=180,h=56){
   if(!vals||vals.length<2)return '';
   const min=Math.min(...vals),max=Math.max(...vals);
@@ -4717,12 +4722,29 @@ async function pushPendingIfAny(){
   if(syncQueue.length)await processSyncQueue();
   if(Object.keys(retryableWrites).length)await retryFailedWrites();
 }
-function updateNW(){
+// ---- Patrimonio neto ----
+// En una tarjeta de crédito el saldo guardado es el crédito DISPONIBLE ("Crédito disponible ahora"), así que lo que se debe
+// es límite − disponible. Antes las tarjetas valían 0 en el patrimonio y su deuda no se restaba.
+// Los snapshots mensuales hasta oct 2026 se guardaron SIN la deuda de tarjetas; desde NW_CARDS_FROM sí la incluyen
+// (la base de cada mes se decide por su clave, porque en la nube solo viaja el total).
+const NW_CARDS_FROM='2026-11';
+function nwBasisIncludesCards(k){return String(k||'')>=NW_CARDS_FROM}
+function creditCardDebt(a){
+  const bal=M(a.balance||0),lim=M(a.limit||0);
+  // Con límite: límite − disponible (si hay saldo a favor no se suma como patrimonio). Sin límite capturado: solo un saldo negativo cuenta como deuda.
+  return lim>0?Math.max(0,M(lim-bal)):Math.max(0,M(-bal));
+}
+function netWorthParts(){
   const assets=S.accounts.reduce((a,x)=>a+(x.type==='credit'?0:M(x.balance||0)),0);
   const owedToMe=S.debts_owed.reduce((a,d)=>a+Math.max(0,d.amount-(d.paid||0)),0);
   const iOwe=S.debts_iowe.reduce((a,d)=>a+Math.max(0,d.amount-(d.paid||0)),0);
-  // Se descuenta el dinero de terceros retenido: no es patrimonio tuyo.
-  const nw=assets+owedToMe-iOwe-Store.thirdPartyHeld();
+  const held=Store.thirdPartyHeld(); // dinero de terceros retenido: no es patrimonio tuyo
+  const cards=S.accounts.reduce((a,x)=>a+(x.type==='credit'?creditCardDebt(x):0),0);
+  const nwNoCards=assets+owedToMe-iOwe-held;
+  return{assets,owedToMe,iOwe,held,cards,nwNoCards,nw:nwNoCards-cards};
+}
+function updateNW(){
+  const nw=netWorthParts().nw;
   $('snw').textContent=fmt(nw);
   return nw;
 }
@@ -4986,14 +5008,21 @@ function renderDash(){
   // Hero de patrimonio neto — lo primero que se ve, respondiendo "¿cuál es
   // mi situación financiera?" de un vistazo, con comparación contra el
   // snapshot del mes pasado si existe.
+  const nwp=netWorthParts();
   const nw=updateNW();
-  const nwSpark=[...(S.nwHistory||[])].sort((a,b)=>a.k.localeCompare(b.k)).slice(-8).map(h=>h.nw);
-  if(!nwSpark.length||nwSpark[nwSpark.length-1]!==nw)nwSpark.push(nw); // el snapshot de hoy puede no estar guardado todavía
+  const nwHistSorted=[...(S.nwHistory||[])].sort((a,b)=>a.k.localeCompare(b.k)).slice(-8);
+  const nwSpark=nwHistSorted.map(h=>h.nw);
+  // El punto de hoy se calcula con la MISMA base que el último snapshot, para que la minigráfica no muestre una caída falsa
+  const lastSnap=nwHistSorted[nwHistSorted.length-1];
+  const nwLive=lastSnap&&!nwBasisIncludesCards(lastSnap.k)?nwp.nwNoCards:nw;
+  if(!nwSpark.length||nwSpark[nwSpark.length-1]!==nwLive)nwSpark.push(nwLive); // el snapshot de hoy puede no estar guardado todavía
   const prevKey=new Date(yr,mo-1).getFullYear()+'-'+String(new Date(yr,mo-1).getMonth()+1).padStart(2,'0');
   const prevSnap=(S.nwHistory||[]).find(h=>h.k===prevKey);
   let deltaHTML='';
   if(prevSnap){
-    const delta=nw-prevSnap.nw;
+    // Si el mes pasado se guardó sin tarjetas, se compara contra el patrimonio de hoy también sin tarjetas (misma base)
+    const nwCmp=nwBasisIncludesCards(prevSnap.k)?nw:nwp.nwNoCards;
+    const delta=nwCmp-prevSnap.nw;
     const pct=prevSnap.nw!==0?Math.round(delta/Math.abs(prevSnap.nw)*100):0;
     deltaHTML=`<div class="nw-hero-delta" style="color:${delta>=0?'var(--inc)':'var(--exp)'}">${delta>=0?'↑':'↓'} ${fmt(Math.abs(delta))} (${pct>=0?'+':''}${pct}%) vs. mes pasado</div>`;
   }
@@ -5003,6 +5032,7 @@ function renderDash(){
       <div class="nw-hero-label">Patrimonio neto</div>
       <div class="nw-hero-val">${fmt(nw)}</div>
       ${deltaHTML}
+      ${nwp.cards>0?`<div style="font-size:11px;color:var(--t3);margin-top:4px">Incluye −${fmt(nwp.cards)} de deuda en tarjetas</div>`:''}
     </div>
     <div class="nw-hero-chart">${sparklineSVG(nwSpark,nwSpark.length>=2&&nwSpark[nwSpark.length-1]>=nwSpark[0]?'#30d693':'#ff5f6d',220,64)}</div>
   </div>`;
@@ -7769,6 +7799,7 @@ function renderAnalysis(){
   // la comparación del hero del Dashboard.
   if(ch4)ch4.destroy();
   const nwHist=[...(S.nwHistory||[])].sort((a,b)=>a.k.localeCompare(b.k));
+  nwChartNote(nwHist);
   if(nwHist.length>=2){
     const nwLabels=nwHist.map(h=>{const d=dateLocal(h.k+'-01');return d.toLocaleDateString('es-MX',{month:'short',year:'2-digit'})});
     const nwVals=nwHist.map(h=>h.nw);
@@ -10240,11 +10271,9 @@ function snapshotNW(){
   if(!S.nwHistory)S.nwHistory=[];
   const now=new Date();const key=now.getFullYear()+'-'+String(now.getMonth()+1).padStart(2,'0');
   if(S.nwHistory.find(x=>x.k===key))return; // already snapped this month
-  const assets=S.accounts.reduce((a,x)=>a+(x.type==='credit'?0:M(x.balance||0)),0);
-  const owedToMe=S.debts_owed.reduce((a,d)=>a+Math.max(0,d.amount-(d.paid||0)),0);
-  const iOwe=S.debts_iowe.reduce((a,d)=>a+Math.max(0,d.amount-(d.paid||0)),0);
-  const held=Store.thirdPartyHeld(); // dinero de terceros: no cuenta como patrimonio propio
-  const entry={k:key,nw:assets-held+owedToMe-iOwe,assets:assets-held,debts:iOwe};
+  const p=netWorthParts();
+  const withCards=nwBasisIncludesCards(key); // un snapshot de un mes anterior a nov 2026 sigue sin tarjetas, para no mezclar bases
+  const entry={k:key,nw:withCards?p.nw:p.nwNoCards,assets:p.assets-p.held,debts:p.iOwe+(withCards?p.cards:0)};
   S.nwHistory.push(entry);
   if(S.nwHistory.length>24)S.nwHistory.shift();
   save();
