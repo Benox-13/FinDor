@@ -835,6 +835,7 @@ body.modal-open #bottom-nav{display:none !important}
       <div class="sr"><div style="display:flex;align-items:center;gap:12px"><div class="ic-badge ic-badge-b">📤</div><div><div class="si-l">Exportar datos</div><div class="si-s">Backup en JSON</div></div></div><button class="btn bg_ sm" onclick="exportData()">Exportar</button></div>
       <div class="sr"><div style="display:flex;align-items:center;gap:12px"><div class="ic-badge ic-badge-b">📥</div><div><div class="si-l">Importar datos</div><div class="si-s">Restaurar desde backup</div></div></div><label class="btn bg_ sm" style="cursor:pointer">Importar<input type="file" accept=".json" onchange="importData(event)" style="display:none"></label></div>
       <div class="sr"><div style="display:flex;align-items:center;gap:12px"><div class="ic-badge ic-badge-g">📊</div><div><div class="si-l">Importar transacciones desde Excel</div><div class="si-s">Sube un .xlsx/.xls/.csv con tu historial</div></div></div><button class="btn bg_ sm" onclick="openImportM()">Importar Excel</button></div>
+      <div class="sr"><div style="display:flex;align-items:center;gap:12px"><div class="ic-badge ic-badge-b">🩺</div><div><div class="si-l">Diagnóstico</div><div class="si-s">Último error y estado de sincronización</div></div></div><button class="btn bg_ sm" onclick="openDiag()">Ver</button></div>
     </div>
     <!-- ZONA DE RIESGO — separada del resto para que una acción
          irreversible nunca quede al mismo nivel visual que exportar/
@@ -847,6 +848,15 @@ body.modal-open #bottom-nav{display:none !important}
       </div>
     </div>
   </div>
+
+<!-- DIAGNÓSTICO: últimos errores y estado de sincronización (para revisar en el iPhone) -->
+<div class="mo" id="mo-diag">
+  <div class="md">
+    <div class="mh"><span class="mttl">Diagnóstico</span><button class="btn bg_ ico sm" onclick="cM('mo-diag')">✕</button></div>
+    <div class="mbody"><div id="diag-body" style="font-size:12px;line-height:1.6"></div></div>
+    <div class="mfoot"><button class="btn bg_ sm" style="margin-right:auto" onclick="diagClear()">Limpiar registro</button><button class="btn bg_ sm" onclick="cM('mo-diag')">Cerrar</button><button class="btn bp sm" onclick="diagCopy()">Copiar informe</button></div>
+  </div>
+</div>
 
 <!-- BORRAR TODO — con opción de alcance (antes borraba solo local, y como
      la nube seguía intacta, un simple refresh traía todo de vuelta) -->
@@ -1804,6 +1814,54 @@ body.modal-open #bottom-nav{display:none !important}
 <div class="toast" id="toast"><span id="t-ic">✓</span><span id="t-msg"></span></div>
 
 <script>
+// ==================== REGISTRO GLOBAL DE ERRORES ====================
+// Objetivo: que un fallo inesperado (sobre todo en el iPhone, donde no hay consola) deje un aviso corto y un
+// registro que se pueda ver y copiar en Configuración → Datos → Diagnóstico. Nada de esto sube a la nube.
+// Se guarda en finance_v4_errlog (se borra con el cambio de usuario y con "Borrar todo", como el resto de lo local).
+const APP_BUILD='2026-10-21 · r6'; // cambia en cada entrega: sirve para saber qué versión está corriendo (el service worker puede servir una anterior)
+const ERRLOG_KEY='finance_v4_errlog',ERRLOG_MAX=5;
+let _errLast={sig:'',t:0},_errToastAt=0;
+function errToText(x){
+  try{
+    if(x instanceof Error)return (x.name||'Error')+': '+(x.message||'');
+    if(typeof x==='string')return x;
+    if(Array.isArray(x))return x.map(errToText).join(' ');
+    if(x&&typeof x==='object'&&x.message)return String(x.message);
+    return JSON.stringify(x);
+  }catch(e){return String(x)}
+}
+function readErrLog(){try{const a=JSON.parse(localStorage.getItem(ERRLOG_KEY)||'[]');return Array.isArray(a)?a:[]}catch(e){return[]}}
+function writeErrLog(a){try{localStorage.setItem(ERRLOG_KEY,JSON.stringify(a.slice(0,ERRLOG_MAX)))}catch(e){}}
+// Errores de red / extensiones del navegador: se anotan en silencio, sin molestar con un aviso
+function errIsNoise(msg,file){
+  return /ResizeObserver loop|Failed to fetch|NetworkError|Load failed|network request failed|AbortError/i.test(msg)||/^(safari-extension|chrome-extension|moz-extension|safari-web-extension):/.test(file||'');
+}
+function logAppError(kind,err,opts){
+  try{
+    opts=opts||{};
+    const msg=errToText(err).slice(0,300);
+    if(!msg||/^Script error\.?$/i.test(msg)&&!opts.line)return;
+    const stack=(err&&err.stack?String(err.stack):'').split('\n').slice(0,3).join(' | ').replace(/https?:\/\/[^\s)|]*\//g,'').slice(0,300);
+    const where=opts.line?`línea ${opts.line}${opts.col?':'+opts.col:''}`:'';
+    const now=Date.now(),sig=kind+'|'+msg;
+    let log=readErrLog();
+    if(sig===_errLast.sig&&now-_errLast.t<3000&&log.length){log[0].n=(log[0].n||1)+1}
+    else{
+      const pg=document.querySelector&&document.querySelector('.page.on');
+      log.unshift({t:new Date().toISOString(),kind,msg,where,stack,page:pg?pg.id.replace('page-',''):'',n:1});
+    }
+    _errLast={sig,t:now};
+    writeErrLog(log);
+    // Aviso corto (máximo uno cada 6 s) solo para fallos reales; los silenciosos solo quedan en el registro
+    if(!opts.silent&&!errIsNoise(msg,opts.file)&&now-_errToastAt>6000&&typeof toast==='function'&&document.getElementById('toast')){
+      _errToastAt=now;toast('Error inesperado — detalle en Configuración › Datos › Diagnóstico',false);
+    }
+  }catch(e){/* el registro de errores NUNCA debe causar otro error */}
+}
+window.addEventListener('error',e=>{if(e&&(e.error||e.message))logAppError('error',e.error||e.message,{file:e.filename,line:e.lineno,col:e.colno})});
+window.addEventListener('unhandledrejection',e=>{if(e)logAppError('promesa',e.reason!==undefined?e.reason:'Promesa rechazada sin motivo')});
+// Los console.error de la app (fallos de sincronización, datos dañados…) también quedan anotados, en silencio
+(function(){const ce=console.error;console.error=function(){try{ce.apply(console,arguments)}catch(e){}logAppError('consola',[].slice.call(arguments),{silent:true})}})();
 // Helpers mínimos primero — authInit() (justo abajo) los necesita de forma
 // SÍNCRONA en el camino de "Supabase no cargó", así que tienen que existir
 // antes de esa llamada, no después. (Antes estaban en la sección CORE, más
@@ -8795,6 +8853,49 @@ function cfgTab(t,el){
   if(t==='categorias')renderCats();
   if(t==='dashboard')renderDashOrderList();
   if(t==='historial')renderNWHistory();
+}
+// ---- Diagnóstico ----
+function diagStatus(){
+  let sw='no disponible';
+  try{if('serviceWorker' in navigator)sw=navigator.serviceWorker.controller?'activo':'no activo'}catch(e){}
+  const pg=document.querySelector('.page.on');
+  const synErr=Object.entries(lastSyncErrors||{}).map(([k,v])=>`${k}: ${String(v).slice(0,160)}`);
+  return[
+    ['Versión de la app',APP_BUILD],
+    ['Conexión',navigator.onLine?'con internet':'sin internet'],
+    ['Sesión',currentUserId?'iniciada':'sin sesión'],
+    ['Datos locales del usuario actual',currentUserId?(localOwnerOK()?'correctos':'NO coinciden'):'—'],
+    ['Cambios pendientes de subir',String(pendingChangesCount())],
+    ['Service worker',sw],
+    ['Pantalla actual',pg?pg.id.replace('page-',''):'—'],
+    ['Errores de sincronización',synErr.length?synErr.join(' · '):'ninguno']
+  ];
+}
+function diagReport(){
+  const st=diagStatus().map(([k,v])=>`${k}: ${v}`).join('\n');
+  const log=readErrLog();
+  const errs=log.length?log.map((e,i)=>`#${i+1} ${e.t} [${e.kind}]${e.n>1?' ×'+e.n:''}${e.page?' (pantalla: '+e.page+')':''}\n${e.msg}${e.where?'\n'+e.where:''}${e.stack?'\n'+e.stack:''}`).join('\n\n'):'Sin errores registrados.';
+  return`Informe de diagnóstico — Fînance\n${new Date().toISOString()}\n\n${st}\n\nERRORES RECIENTES\n${errs}\n\n(No incluye tus datos financieros ni tu correo.)`;
+}
+function renderDiag(){
+  const st=diagStatus().map(([k,v])=>`<div style="display:flex;justify-content:space-between;gap:10px;padding:5px 0;border-bottom:1px solid var(--bdr)"><span style="color:var(--t3)">${esc(k)}</span><span style="text-align:right;word-break:break-word">${esc(v)}</span></div>`).join('');
+  const log=readErrLog();
+  const errs=log.length?log.map((e,i)=>`<div style="padding:8px 10px;border-radius:var(--r);background:var(--bg3);margin-top:8px"><div style="font-size:11px;color:var(--t3)">${i===0?'Último · ':''}${esc(new Date(e.t).toLocaleString('es-MX'))} · ${esc(e.kind)}${e.n>1?' ×'+e.n:''}${e.page?' · pantalla: '+esc(e.page):''}</div><div style="margin-top:3px;word-break:break-word">${esc(e.msg)}</div>${e.where?`<div style="font-size:11px;color:var(--t3)">${esc(e.where)}</div>`:''}${e.stack?`<div style="font-size:10px;color:var(--t3);margin-top:3px;word-break:break-all;font-family:'DM Mono',monospace">${esc(e.stack)}</div>`:''}</div>`).join(''):`<div style="color:var(--t3);margin-top:6px">Sin errores registrados. ✓</div>`;
+  $('diag-body').innerHTML=`<div style="font-weight:600;font-size:13px;margin-bottom:4px">Estado</div>${st}<div style="font-weight:600;font-size:13px;margin:14px 0 2px">Errores recientes</div>${errs}<div style="font-size:11px;color:var(--t3);margin-top:12px;line-height:1.5">El informe no incluye tus datos financieros ni tu correo. Si algo falla, toca «Copiar informe» y pégalo en el chat.</div>`;
+}
+function openDiag(){renderDiag();oM('mo-diag')}
+function diagClear(){writeErrLog([]);_errLast={sig:'',t:0};renderDiag();toast('Registro limpio')}
+async function diagCopy(){
+  const txt=diagReport();
+  try{
+    if(navigator.clipboard&&navigator.clipboard.writeText){await navigator.clipboard.writeText(txt);toast('Informe copiado');return}
+  }catch(e){/* se intenta el método alterno */}
+  try{
+    const ta=document.createElement('textarea');ta.value=txt;ta.setAttribute('readonly','');ta.style.cssText='position:fixed;top:0;left:0;opacity:0';
+    document.body.appendChild(ta);ta.select();ta.setSelectionRange(0,txt.length);
+    const ok=document.execCommand('copy');document.body.removeChild(ta);
+    toast(ok?'Informe copiado':'No se pudo copiar',ok);
+  }catch(e){toast('No se pudo copiar',false)}
 }
 function renderSettings(){
   renderProfAvatar();
