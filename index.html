@@ -1818,7 +1818,7 @@ body.modal-open #bottom-nav{display:none !important}
 // Objetivo: que un fallo inesperado (sobre todo en el iPhone, donde no hay consola) deje un aviso corto y un
 // registro que se pueda ver y copiar en Configuración → Datos → Diagnóstico. Nada de esto sube a la nube.
 // Se guarda en finance_v4_errlog (se borra con el cambio de usuario y con "Borrar todo", como el resto de lo local).
-const APP_BUILD='2026-10-23 · r8'; // cambia en cada entrega: sirve para saber qué versión está corriendo (el service worker puede servir una anterior)
+const APP_BUILD='2026-10-23 · r9'; // cambia en cada entrega: sirve para saber qué versión está corriendo (el service worker puede servir una anterior)
 const ERRLOG_KEY='finance_v4_errlog',ERRLOG_MAX=5;
 let _errLast={sig:'',t:0},_errToastAt=0;
 function errToText(x){
@@ -2741,9 +2741,10 @@ async function findOrCreateByName(table,filterCol,filterVal,name,extra){
 // cualquier otro registro que lo referenciaba (ej. accountId de una
 // transacción). Así, después de esta migración, local y nube quedan con
 // exactamente los mismos ids para siempre.
-async function pushAllToSupabase(){
-  if(!sb||!currentUserId){toast('No hay sesión activa para sincronizar',false);return}
-  toast('Subiendo tus datos a la nube — no cierres la app...');
+async function pushAllToSupabase(opts){
+  const quiet=!!(opts&&opts.quiet); // la importación de respaldo da su propio resultado
+  if(!sb||!currentUserId){if(!quiet)toast('No hay sesión activa para sincronizar',false);return false}
+  if(!quiet)toast('Subiendo tus datos a la nube — no cierres la app...');
   try{
     // 1. Cuentas (sin dependencias) — reconciliar ids primero, porque
     //    transacciones/deudas/suscripciones/registros de sección las referencian.
@@ -2778,13 +2779,11 @@ async function pushAllToSupabase(){
     const catByName=Object.fromEntries(S.categories.map(c=>[c.name,c.id]));
 
     // 3. Transacciones (dependen de cuentas + categorías, ya reconciliadas)
+    // Antes se insertaba con subcategory_id=null y TODAS las subcategorías de los movimientos se perdían en la nube.
+    // _pushTransaction resuelve la categoría y la subcategoría por nombre y reconcilia el id (y si algo falla lo deja en la cola de reintentos).
     for(const t of S.transactions){
-      const catId=t.category?catByName[t.category]:null; // nombre puede ser de categoría o subcategoría — si no matchea categoría, se guarda sin category_id (limitación conocida, ver nota abajo)
-      const payload=transactionToCloud(t,catId,null);
-      if(!isUUID(t.id))delete payload.id;
-      const {data,error}=await sb.from('transactions').insert(payload).select('id').single();
-      if(error){console.warn('Supabase: falló insertar transacción',t.description,error.message);continue}
-      t.id=data.id;
+      const ok=await Store._pushTransaction(t,false);
+      if(!ok)console.warn('Supabase: falló subir transacción',t.description);
     }
 
     // 4. Deudas
@@ -2871,10 +2870,12 @@ async function pushAllToSupabase(){
     await pushSettingsNow();
 
     save(); // persistimos localmente los ids ya reconciliados
-    toast('¡Listo! Tus datos ya están en la nube.');
+    if(!quiet)toast('¡Listo! Tus datos ya están en la nube.');
+    return true;
   }catch(err){
     console.error('Error en la migración inicial a Supabase:',err);
-    toast('Algo falló subiendo tus datos — revisa la consola',false);
+    if(!quiet)toast('Algo falló subiendo tus datos — revisa la consola',false);
+    return false;
   }
 }
 
@@ -2894,6 +2895,7 @@ async function pushAllToSupabase(){
 // traer de la nube sin haber empujado primero.
 async function safeSyncPull(){
   if(!sb||!currentUserId||!localOwnerOK())return;
+  if(importFlag()||_importRunning)return; // un reemplazo por importación está en curso o sin terminar: no se baja nada de la nube
   await processSyncQueue();
   await retryFailedWrites();
   const pendingTx=S.transactions.filter(t=>!isUUID(t.id));
@@ -2932,6 +2934,8 @@ async function safeSyncPull(){
 // confirmación cada pocos minutos si la nube sigue vacía.
 async function fullSync(){
   if(!sb||!currentUserId||!localOwnerOK())return;
+  if(_importRunning)return;
+  if(importFlag()){await resumeImport();return} // termina de subir el respaldo importado antes que cualquier otra cosa
   await safeSyncPull();
 
   const {data,error}=await sb.from('accounts').select('id').limit(1);
@@ -2969,6 +2973,13 @@ setInterval(autoSyncTick,5*60*1000);
 // locales (finance_v4_owner) y se compara en cada inicio de sesión, ANTES de sincronizar.
 const OWNER_KEY='finance_v4_owner';
 let _ownerMem=''; // respaldo en memoria por si localStorage no deja escribir
+// ---- Importar respaldo = reemplazar TODO (dispositivo y nube). Marca de "reemplazo pendiente" ----
+// Mientras exista la marca NO se baja nada de la nube (podría estar a medias y pisar el respaldo importado);
+// la app termina de subir el respaldo desde el dispositivo en la siguiente sincronización.
+const IMPORT_FLAG='finance_v4_importpending';
+let _importRunning=false,_importPending=null,_importMsg='',_importWarned=false;
+function importFlag(){try{const v=JSON.parse(localStorage.getItem(IMPORT_FLAG)||'null');return v&&typeof v==='object'?v:null}catch(e){return null}}
+function setImportFlag(v){try{if(v)localStorage.setItem(IMPORT_FLAG,JSON.stringify(v));else localStorage.removeItem(IMPORT_FLAG)}catch(e){}}
 function getLocalOwner(){try{const v=localStorage.getItem(OWNER_KEY);if(v)return v}catch(e){}return _ownerMem}
 function setLocalOwner(id){_ownerMem=id;try{localStorage.setItem(OWNER_KEY,id)}catch(e){}}
 // true solo si hay sesión Y los datos locales son de ESA misma sesión (candado antes de cualquier subida/descarga)
@@ -8910,6 +8921,7 @@ function diagStatus(){
     ['Sesión',currentUserId?'iniciada':'sin sesión'],
     ['Datos locales del usuario actual',currentUserId?(localOwnerOK()?'correctos':'NO coinciden'):'—'],
     ['Cambios pendientes de subir',String(pendingChangesCount())],
+    ['Importación de respaldo',importFlag()?`pendiente (intento ${importFlag().attempts||0} de 3)`:'ninguna pendiente'],
     ['Service worker',sw],
     ['Pantalla actual',pg?pg.id.replace('page-',''):'—'],
     ['Errores de sincronización',synErr.length?synErr.join(' · '):'ninguno']
@@ -9101,7 +9113,8 @@ function moveDashWidget(key,dir){
 }
 function saveDW(){['txs','cats','accs','tdc','goals','budget','upcoming','subs','debts','health'].forEach(k=>{const el=$('w-'+k);if(el)S.dw[k]=el.checked});save();pushSettings();renderDash();toast('Dashboard actualizado')}
 function saveNotif(){S.notif=normNotif(S.notif);['bgt','dbt','sub','gol'].forEach(k=>{const el=$('n-'+k);if(el)S.notif[k]=el.checked});save();pushSettings();toast('Preferencias guardadas')}
-function exportData(){const a=document.createElement('a');a.href='data:application/json,'+encodeURIComponent(JSON.stringify(S,null,2));a.download='finance-backup.json';a.click();toast('Datos exportados')}
+function downloadJSON(obj,filename){const a=document.createElement('a');a.href='data:application/json,'+encodeURIComponent(JSON.stringify(obj,null,2));a.download=filename;a.click()}
+function exportData(){downloadJSON(S,'finance-backup.json');toast('Datos exportados')}
 // Importar respaldo: antes se reemplazaba todo con CUALQUIER JSON (por ejemplo
 // un "{}" dejaba la app rota y además se guardaba así). Ahora el archivo debe
 // parecer un respaldo (objeto con cuentas o movimientos) y se le completan las
@@ -9115,7 +9128,12 @@ function importData(e){
       const isObj=parsed!==null&&typeof parsed==='object'&&!Array.isArray(parsed);
       if(!isObj||(!Array.isArray(parsed.accounts)&&!Array.isArray(parsed.transactions)))throw new Error('no parece un respaldo');
       repairAppState(parsed,defaultAppState());
-      S=parsed;save();refreshAllUI();toast('Datos importados');
+      // El respaldo reemplaza TAMBIÉN la nube (antes solo cambiaba este dispositivo y la siguiente sincronización lo borraba en silencio).
+      if(!sb||!currentUserId||!navigator.onLine){toast('Para importar necesitas sesión e internet: el respaldo reemplaza también lo que está en la nube.',false);return}
+      _importPending=parsed;
+      const n=(a)=>Array.isArray(a)?a.length:0;
+      _importMsg=`El respaldo trae: ${n(parsed.accounts)} cuentas, ${n(parsed.transactions)} movimientos, ${n(parsed.children)} hijos, ${n(parsed.goals)} objetivos y ${n(parsed.subscriptions)} suscripciones. Esto REEMPLAZA todo lo que tienes ahora, en este dispositivo y en la nube. Antes se descargará una copia de tu estado actual. Escribe tu contraseña para confirmar.`;
+      askNukePassword('import');
     }catch(err){console.warn('Importar respaldo:',err);toast('Archivo inválido',false)}
     finally{input.value=''}
   };
@@ -9139,6 +9157,7 @@ function askNukePassword(type){
   $('nuke-pw-msg').textContent=type==='everything'
     ?'Esto va a borrar TODO, incluida la nube, para siempre. Escribe tu contraseña para confirmar.'
     :'Esto va a borrar los datos guardados en este dispositivo'+(()=>{const n=Object.keys(retryableWrites).length+syncQueue.length;return n?` (hay ${n} cambio${n>1?'s':''} sin subir a la nube que se perderán)`:''})()+'. Escribe tu contraseña para confirmar.';
+  if(type==='import'){$('nuke-pw-msg').textContent=_importMsg;$('nuke-pw-btn').textContent='Confirmar y reemplazar'}else{$('nuke-pw-btn').textContent='Confirmar y borrar'}
   oM('mo-nuke-pw');
 }
 async function confirmNukePassword(){
@@ -9147,15 +9166,16 @@ async function confirmNukePassword(){
   const btn=$('nuke-pw-btn');btn.disabled=true;btn.textContent='Verificando...';
   const {data:{session}}=await sb.auth.getSession();
   const email=session?.user?.email;
-  if(!email){btn.disabled=false;btn.textContent='Confirmar y borrar';toast('No se pudo verificar tu sesión.',false);return}
+  if(!email){btn.disabled=false;btn.textContent=_nukePendingType==='import'?'Confirmar y reemplazar':'Confirmar y borrar';toast('No se pudo verificar tu sesión.',false);return}
   const {error}=await sb.auth.signInWithPassword({email,password:pass});
-  btn.disabled=false;btn.textContent='Confirmar y borrar';
+  btn.disabled=false;btn.textContent=_nukePendingType==='import'?'Confirmar y reemplazar':'Confirmar y borrar';
   if(error){
     $('nuke-pw-error').textContent='Contraseña incorrecta.';$('nuke-pw-error').style.display='block';
     return;
   }
   cM('mo-nuke-pw');
-  if(_nukePendingType==='everything')await nukeEverything();
+  if(_nukePendingType==='import')await runImportReplace();
+  else if(_nukePendingType==='everything')await nukeEverything();
   else await nukeLocalOnly();
 }
 // Borra TODO lo que la app guarda en este dispositivo (estado, colas de
@@ -9183,32 +9203,35 @@ const NUKE_TABLES=['transactions','debts','goals','subscriptions','budgets','bud
   'vehicle_records','vehicles','investment_records','investments',
   'custom_section_records','custom_section_members','custom_section_categories','custom_sections',
   'subcategories','categories','accounts','settings','net_worth_snapshots'];
+// Vacía TODAS las tablas del usuario en la nube y VERIFICA que no quede ninguna fila. Devuelve la lista de problemas ([] = todo bien).
+// La usan "Borrar todo" y "Importar respaldo".
+async function wipeCloudTables(){
+  // BUGS REALES: (1) faltaban 3 tablas (límites por subcategoría, inversiones y sus registros), que volvían al
+  // sincronizar; (2) los errores se ignoraban y se borraba lo local aunque la nube hubiera fallado; (3) un borrado "sin error"
+  // que no borra filas (por ejemplo, si falta la política de DELETE en Supabase) pasaba desapercibido.
+  // Las tablas opcionales pueden no existir todavía: sus errores se ignoran.
+  const OPTIONAL=new Set(['budget_goals','subcategory_budgets','children','child_budgets']);
+  const failed=[];
+  for(const t of NUKE_TABLES){
+    try{
+      const {error}=await sb.from(t).delete().eq('user_id',currentUserId);
+      if(error&&!OPTIONAL.has(t))failed.push(`${t}: ${error.message}`);
+    }catch(err){failed.push(`${t}: ${err.message||err}`)}
+  }
+  for(const t of NUKE_TABLES){
+    try{
+      const {count,error}=await sb.from(t).select('*',{count:'exact',head:true}).eq('user_id',currentUserId);
+      if(error){if(!OPTIONAL.has(t))failed.push(`verificar ${t}: ${error.message}`);continue}
+      if(count>0)failed.push(`${t}: quedaron ${count} fila(s)`);
+    }catch(err){failed.push(`verificar ${t}: ${err.message||err}`)}
+  }
+  return failed;
+}
 async function nukeEverything(){
   if(sb&&currentUserId){
     toast('Borrando todo de la nube...');
-    // BUGS REALES: (1) faltaban 3 tablas (límites por subcategoría, inversiones
-    // y sus registros), que volvían al sincronizar; (2) los errores se ignoraban
-    // y se borraba lo local aunque la nube hubiera fallado (los datos
-    // regresaban solos); (3) un borrado "sin error" que no borra filas (por
-    // ejemplo, si falta la política de DELETE en Supabase) pasaba desapercibido.
-    // Ahora: se intenta con TODAS, se VERIFICA que no quede ninguna fila y,
-    // si algo falla, NO se toca nada local y se avisa para reintentar.
-    // Las dos tablas opcionales pueden no existir todavía: sus errores se ignoran.
-    const OPTIONAL=new Set(['budget_goals','subcategory_budgets','children','child_budgets']);
-    const failed=[];
-    for(const t of NUKE_TABLES){
-      try{
-        const {error}=await sb.from(t).delete().eq('user_id',currentUserId);
-        if(error&&!OPTIONAL.has(t))failed.push(`${t}: ${error.message}`);
-      }catch(err){failed.push(`${t}: ${err.message||err}`)}
-    }
-    for(const t of NUKE_TABLES){
-      try{
-        const {count,error}=await sb.from(t).select('*',{count:'exact',head:true}).eq('user_id',currentUserId);
-        if(error){if(!OPTIONAL.has(t))failed.push(`verificar ${t}: ${error.message}`);continue}
-        if(count>0)failed.push(`${t}: quedaron ${count} fila(s)`);
-      }catch(err){failed.push(`verificar ${t}: ${err.message||err}`)}
-    }
+    // Si algo falla, NO se toca nada local y se avisa para reintentar.
+    const failed=await wipeCloudTables();
     if(failed.length){
       console.error('Borrar todo quedó incompleto:',failed);
       toast(`No se pudo borrar todo de la nube (${failed.length} problema${failed.length>1?'s':''}). Tus datos de este dispositivo NO se tocaron: revisa tu conexión y vuelve a intentarlo.`,false);
@@ -9218,6 +9241,132 @@ async function nukeEverything(){
   clearAllLocalAppData();
   location.reload();
   return true;
+}
+
+// ==================== IMPORTAR RESPALDO (reemplaza dispositivo + nube) ====================
+// Lo que pushAllToSupabase no sube (inversiones y sus movimientos, límites por subcategoría e historial de patrimonio).
+async function pushImportExtras(){
+  const problems=[];
+  try{
+    for(const v of (S.investments||[])){
+      const payload=investmentToCloud(v);if(!isUUID(v.id))delete payload.id;
+      const {data,error}=await sb.from('investments').insert(payload).select('id').single();
+      if(error){problems.push(`inversión ${v.name}: ${error.message}`);continue}
+      v.id=data.id;
+      for(const r of (v.records||[])){
+        const rp=investmentRecordToCloud(r,v.id);if(!isUUID(r.id))delete rp.id;
+        const {data:rd,error:re}=await sb.from('investment_records').insert(rp).select('id').single();
+        if(re)problems.push(`movimiento de inversión ${v.name}: ${re.message}`);else r.id=rd.id;
+      }
+    }
+  }catch(e){problems.push('inversiones: '+(e.message||e))}
+  try{
+    const top=new Set(S.categories.map(c=>c.name));
+    for(const b of (S.budgets||[]).filter(b=>!top.has(b.category)&&getCatParent(b.category))){
+      const parent=S.categories.find(c=>c.name===getCatParent(b.category));
+      if(!parent||!isUUID(parent.id))continue;
+      const subId=await findOrCreateByName('subcategories','category_id',parent.id,b.category);
+      if(!subId){problems.push(`subcategoría ${b.category}`);continue}
+      const {error}=await sb.from('subcategory_budgets').upsert({user_id:currentUserId,subcategory_id:subId,period_key:b.period,limit_cents:amtToCents(b.limit)},{onConflict:'user_id,subcategory_id,period_key'});
+      if(error&&!isMissingTableError(error.message))problems.push(`límite de ${b.category}: ${error.message}`);
+    }
+  }catch(e){problems.push('límites por subcategoría: '+(e.message||e))}
+  try{
+    for(const h of (S.nwHistory||[])){if(!(await pushNWSnapshot(h)))problems.push(`historial de patrimonio ${h.k}`)}
+  }catch(e){problems.push('historial de patrimonio: '+(e.message||e))}
+  save();
+  return problems;
+}
+// Compara lo que hay en la nube con lo que hay en el dispositivo: si falta algo, la importación NO se da por terminada.
+async function verifyCloudAgainstLocal(){
+  const OPTIONAL=new Set(['budget_goals','subcategory_budgets','children','child_budgets']);
+  const sum=(arr,f)=>(arr||[]).reduce((a,x)=>a+f(x),0);
+  const top=new Set(S.categories.map(c=>c.name));
+  const exp={
+    accounts:S.accounts.length,categories:S.categories.length,subcategories:sum(S.categories,c=>(c.subs||[]).length),
+    transactions:S.transactions.length,debts:S.debts_owed.length+S.debts_iowe.length,goals:S.goals.length,subscriptions:S.subscriptions.length,
+    budgets:(S.budgets||[]).filter(b=>top.has(b.category)).length,
+    subcategory_budgets:(S.budgets||[]).filter(b=>!top.has(b.category)&&getCatParent(b.category)).length,
+    budget_goals:(S.budgetGoals||[]).length,children:(S.children||[]).length,child_budgets:(S.childBudgets||[]).length,
+    vehicles:(S.vehicles||[]).length,vehicle_records:sum(S.vehicles,v=>(v.records||[]).length),
+    investments:(S.investments||[]).length,investment_records:sum(S.investments,v=>(v.records||[]).length),
+    custom_sections:(S.customSections||[]).length,net_worth_snapshots:(S.nwHistory||[]).length
+  };
+  const problems=[];
+  for(const [t,n] of Object.entries(exp)){
+    if(!n)continue;
+    try{
+      const {count,error}=await sb.from(t).select('*',{count:'exact',head:true}).eq('user_id',currentUserId);
+      if(error){if(!OPTIONAL.has(t))problems.push(`verificar ${t}: ${error.message}`);continue}
+      if(typeof count==='number'&&count<n)problems.push(`${t}: en la nube ${count} de ${n}`);
+    }catch(err){problems.push(`verificar ${t}: ${err.message||err}`)}
+  }
+  return problems;
+}
+// Sube el estado local a una nube ya vacía y verifica. Sirve para la importación y para reanudarla.
+async function finishImportUpload(){
+  const fl=importFlag()||{};
+  fl.attempts=(fl.attempts||0)+1;setImportFlag(fl);
+  toast('Subiendo el respaldo a la nube — no cierres la app...');
+  const problems=[];
+  const done=await pushAllToSupabase({quiet:true});
+  if(!done)problems.push('la subida principal no terminó');
+  problems.push(...await pushImportExtras());
+  problems.push(...await verifyCloudAgainstLocal());
+  if(!problems.length){
+    setImportFlag(null);save();refreshAllUI();
+    toast(`Respaldo importado y subido a la nube: ${S.accounts.length} cuentas y ${S.transactions.length} movimientos.`);
+    return true;
+  }
+  console.error('Importar respaldo: la subida quedó incompleta:',problems);
+  toast(`No se pudo terminar de subir el respaldo (${problems.length} problema${problems.length>1?'s':''}). Tus datos importados siguen en este dispositivo y la app volverá a intentarlo al abrirla; mientras tanto no se baja nada de la nube.`,false);
+  return false;
+}
+async function runImportReplace(){
+  const incoming=_importPending;_importPending=null;
+  if(!incoming){toast('No hay un respaldo para importar',false);return}
+  if(_importRunning)return;
+  _importRunning=true;
+  try{
+    // 1) Copia de seguridad del estado actual, por si hay que deshacer
+    try{downloadJSON(S,`finance-backup-antes-de-importar-${td_()}.json`)}catch(e){console.warn('No se pudo descargar la copia de seguridad:',e)}
+    // 2) Vaciar la nube con verificación. Si falla: no se toca nada de este dispositivo.
+    toast('Preparando la nube...');
+    const failed=await wipeCloudTables();
+    if(failed.length){
+      console.error('Importar respaldo: no se pudo vaciar la nube:',failed);
+      toast(`No se pudo vaciar la nube (${failed.length} problema${failed.length>1?'s':''}). Tus datos NO se tocaron: revisa tu conexión y vuelve a intentarlo.`,false);
+      return;
+    }
+    // 3) El respaldo pasa a ser el estado de este dispositivo; las colas pendientes del estado anterior ya no aplican
+    retryableWrites={};syncQueue=[];saveRetryableWrites();saveSyncQueue();
+    S=incoming;save();
+    setImportFlag({t:Date.now(),attempts:0}); // desde aquí no se baja nada de la nube hasta terminar de subir
+    refreshAllUI();
+    // 4) Subir y verificar
+    await finishImportUpload();
+  }finally{_importRunning=false}
+}
+// Si una importación quedó a medias (se cerró la app, se cayó la red...), se repite desde el dispositivo: vaciar la nube y subir.
+async function resumeImport(){
+  const fl=importFlag();if(!fl)return;
+  if((fl.attempts||0)>=3){
+    if(!_importWarned){_importWarned=true;toast('La importación del respaldo no se pudo terminar (detalle en Configuración › Datos › Diagnóstico). Tus datos importados siguen en este dispositivo y no se baja nada de la nube. Vuelve a importar el archivo.',false)}
+    return;
+  }
+  if(_importRunning)return;
+  _importRunning=true;
+  try{
+    toast('Terminando de subir el respaldo importado...');
+    const failed=await wipeCloudTables();
+    if(failed.length){
+      console.error('Reanudar importación: no se pudo vaciar la nube:',failed);
+      fl.attempts=(fl.attempts||0)+1;setImportFlag(fl);
+      toast('No se pudo terminar la importación todavía; se reintentará.',false);
+      return;
+    }
+    await finishImportUpload();
+  }finally{_importRunning=false}
 }
 
 // ==================== INIT ====================
