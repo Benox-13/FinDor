@@ -850,6 +850,19 @@ body.modal-open #bottom-nav{display:none !important}
   </div>
 
 <!-- DIAGNÓSTICO: últimos errores y estado de sincronización (para revisar en el iPhone) -->
+<!-- REPORTE DE UN HIJO: resumen del mes o del año para copiar, y CSV de sus movimientos -->
+<div class="mo" id="mo-chrep">
+  <div class="md">
+    <div class="mh"><span class="mttl" id="rep-title">Reporte</span><button class="btn bg_ ico sm" onclick="cM('mo-chrep')">✕</button></div>
+    <div class="mbody">
+      <div style="display:flex;gap:6px;margin-bottom:10px"><button class="btn bp sm" id="rep-b-month" onclick="setRepMode('month')">Mes</button><button class="btn bg_ sm" id="rep-b-year" onclick="setRepMode('year')">Año</button></div>
+      <div class="fg"><select class="fc" id="rep-period" onchange="renderChildReport()" aria-label="Periodo del reporte"></select></div>
+      <div id="rep-body" style="font-size:12px;line-height:1.6;white-space:pre-wrap;word-break:break-word;font-family:'DM Mono',monospace;background:var(--bg3);border-radius:var(--r);padding:12px 14px"></div>
+    </div>
+    <div class="mfoot"><button class="btn bg_ sm" style="margin-right:auto" onclick="downloadChildReportCSV()">Descargar CSV</button><button class="btn bg_ sm" onclick="cM('mo-chrep')">Cerrar</button><button class="btn bp sm" onclick="copyChildReport()">Copiar reporte</button></div>
+  </div>
+</div>
+
 <div class="mo" id="mo-diag">
   <div class="md">
     <div class="mh"><span class="mttl">Diagnóstico</span><button class="btn bg_ ico sm" onclick="cM('mo-diag')">✕</button></div>
@@ -1818,7 +1831,7 @@ body.modal-open #bottom-nav{display:none !important}
 // Objetivo: que un fallo inesperado (sobre todo en el iPhone, donde no hay consola) deje un aviso corto y un
 // registro que se pueda ver y copiar en Configuración → Datos → Diagnóstico. Nada de esto sube a la nube.
 // Se guarda en finance_v4_errlog (se borra con el cambio de usuario y con "Borrar todo", como el resto de lo local).
-const APP_BUILD='2026-10-23 · r9'; // cambia en cada entrega: sirve para saber qué versión está corriendo (el service worker puede servir una anterior)
+const APP_BUILD='2026-10-25 · r11'; // cambia en cada entrega: sirve para saber qué versión está corriendo (el service worker puede servir una anterior)
 const ERRLOG_KEY='finance_v4_errlog',ERRLOG_MAX=5;
 let _errLast={sig:'',t:0},_errToastAt=0;
 function errToText(x){
@@ -6217,12 +6230,14 @@ function childBudgetHTML(c){
     }
   }
   // Evolución: planeado vs real de los últimos 6 meses (hasta el mes mostrado)
-  const hist=childPeriodsBack(P,6).map(q=>({q,pl:childBudgetFor(c,'',q),re:childMonthSpend(c.id,q)}));
+  const hist=childPeriodsBack(P,_childChartMonths).map(q=>({q,pl:childBudgetFor(c,'',q),re:childMonthSpend(c.id,q)}));
   const mx=Math.max(1,...hist.map(h=>Math.max(h.pl,h.re)));
   const bar2=(lbl,v,col,txt)=>`<div style="display:flex;align-items:center;gap:6px;margin-top:5px;font-size:10px;color:var(--t3)"><span style="width:50px;flex:none">${lbl}</span><div style="flex:1;height:6px;background:var(--bg3);border-radius:99px;overflow:hidden"><div style="width:${Math.min(100,v/mx*100)}%;height:100%;background:${col}"></div></div><span style="min-width:84px;text-align:right;font-family:'DM Mono',monospace">${txt}</span></div>`;
   const histRows=hist.map(h=>{const over=h.pl>0&&h.re>h.pl;
     return`<div style="padding:8px 0;border-top:1px solid var(--bdr)"><div style="display:flex;justify-content:space-between;gap:8px;font-size:12px"><span style="text-transform:capitalize">${esc(childPeriodLabel(h.q))}</span><span style="font-family:'DM Mono',monospace;color:${over?'var(--red)':'var(--t3)'}">${h.pl>0?Math.round(h.re/h.pl*100)+'%':'—'}</span></div>${bar2('Planeado',h.pl,'var(--t3)',h.pl>0?fmt(h.pl):'—')}${bar2('Real',h.re,over?'var(--red)':'var(--act)',fmt(h.re))}</div>`}).join('');
-  const evol=`<div style="margin-top:14px"><div style="font-size:11px;color:var(--t3);margin-bottom:4px">Evolución (últimos 6 meses)</div>${histRows}</div>`;
+  const conLimite=hist.filter(h=>h.pl>0),excedidos=conLimite.filter(h=>h.re>h.pl).length;
+  const resumenEvol=conLimite.length?`<div style="font-size:11px;color:${excedidos?'var(--red)':'var(--inc)'};margin:2px 0 4px">${excedidos?`Te pasaste del presupuesto en ${excedidos} de ${conLimite.length} meses con presupuesto`:`Dentro del presupuesto en los ${conLimite.length} meses con presupuesto`}</div>`:'';
+  const evol=`<div style="margin-top:14px"><div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap"><div style="font-size:11px;color:var(--t3)">Evolución (últimos ${_childChartMonths} meses)</div>${childMonthsToggleHTML()}</div>${resumenEvol}${histRows}</div>`;
   return`<div class="card" style="padding:14px 16px;margin-bottom:12px">${head}${body}${evol}</div>`;
 }
 // ---- editor del presupuesto de un mes ----
@@ -6321,6 +6336,9 @@ function saveChildBud(){
 
 // ---- movimientos de un hijo (detalle) ----
 let _childFilters={from:'',to:'',type:'',sub:'',acc:''},_childLimit=30;
+let _childMovView='lista',_childChartMonths=6; // vista de Movimientos (lista o gráficas) y meses que abarcan las gráficas (6 o 12)
+function setChildMovView(v){_childMovView=v;renderChildren()}
+function setChildChartMonths(n){_childChartMonths=n===12?12:6;renderChildren()}
 function childMovements(childId){
   return S.transactions.filter(t=>Array.isArray(t.childAlloc)&&t.childAlloc.some(a=>a&&a.childId===childId))
     .map(t=>({tx:t,share:M(t.childAlloc.find(a=>a.childId===childId).amount)}))
@@ -6368,10 +6386,12 @@ function childMovementsHTML(c){
       <div style="font-size:11px;color:var(--t3);margin-top:2px">${fmtDate(t.date)}${t.subcategory?' · '+esc(t.subcategory):''} · ${acc?esc(acc.name):'cuenta eliminada'}${others.length?` · 👥 Compartido con ${others.map(esc).join(', ')}`:''}</div></div>
       <div style="text-align:right;white-space:nowrap"><div style="font-family:'DM Mono',monospace;font-size:13px;color:${isInc?'var(--inc)':'var(--exp)'}">${isInc?'+':'−'}${fmt(m.share)}</div>${M(t.amount)!==m.share?`<div style="font-size:10px;color:var(--t3)">de ${fmt(t.amount)}</div>`:''}</div></div></div>`;
   }).join('');
-  return`<div class="card" style="padding:14px 16px;margin-bottom:12px">${head}${filt}
-    <div style="font-size:12px;color:var(--t3);margin-bottom:4px">${list.length} movimiento${list.length===1?'':'s'} · Gasto <strong style="color:var(--exp)">${fmt(exp)}</strong>${inc?` · Ingresos <strong style="color:var(--inc)">${fmt(inc)}</strong>`:''}</div>
+  const listBody=`
+    <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:4px"><div style="font-size:12px;color:var(--t3)">${list.length} movimiento${list.length===1?'':'s'} · Gasto <strong style="color:var(--exp)">${fmt(exp)}</strong>${inc?` · Ingresos <strong style="color:var(--inc)">${fmt(inc)}</strong>`:''}</div>${list.length?`<button class="btn bg_ sm" style="font-size:11px" onclick="exportChildCSV('${c.id}')">Exportar CSV</button>`:''}</div>
     ${rows||'<div style="font-size:12px;color:var(--t3);padding:10px 0">Ningún movimiento coincide con los filtros.</div>'}
-    ${list.length>_childLimit?`<button class="btn bg_ sm" style="width:100%;margin-top:8px" onclick="moreChildMovs()">Ver más (${list.length-_childLimit})</button>`:''}</div>`;
+    ${list.length>_childLimit?`<button class="btn bg_ sm" style="width:100%;margin-top:8px" onclick="moreChildMovs()">Ver más (${list.length-_childLimit})</button>`:''}`;
+  const tog=`<div style="display:flex;gap:6px;margin-bottom:10px"><button class="btn ${_childMovView==='lista'?'bp':'bg_'} sm" aria-pressed="${_childMovView==='lista'}" onclick="setChildMovView('lista')">Lista</button><button class="btn ${_childMovView==='graficas'?'bp':'bg_'} sm" aria-pressed="${_childMovView==='graficas'}" onclick="setChildMovView('graficas')">Gráficas</button></div>`;
+  return`<div class="card" style="padding:14px 16px;margin-bottom:12px">${head}${filt}${tog}${_childMovView==='graficas'?childChartsHTML(c):listBody}</div>`;
 }
 function childMonthIncome(childId,period){
   return M(S.transactions.reduce((sum,t)=>{
@@ -6521,7 +6541,7 @@ function childListHTML(){
     +(active.length?active.map(c=>childCardHTML(c,period)).join(''):'<div class="card" style="padding:18px;text-align:center;font-size:13px;color:var(--t3)">No hay perfiles activos. Los archivados están abajo y puedes reactivarlos.</div>')+archBlock;
 }
 function toggleChildArch(){_childArchOpen=!_childArchOpen;renderChildren()}
-function openChildDetail(id){_childView=id;_childBudPeriod=td_().slice(0,7);_childTab='resumen';_childMenuOpen=false;_childFiltOpen=false;_childCardMenu=null;_childFilters={from:'',to:'',type:'',sub:'',acc:''};_childLimit=30;renderChildren();window.scrollTo(0,0)}
+function openChildDetail(id){_childView=id;_childBudPeriod=td_().slice(0,7);_childTab='resumen';_childMovView='lista';_childMenuOpen=false;_childFiltOpen=false;_childCardMenu=null;_childFilters={from:'',to:'',type:'',sub:'',acc:''};_childLimit=30;renderChildren();window.scrollTo(0,0)}
 function closeChildDetail(){_childView=null;renderChildren();window.scrollTo(0,0)}
 function setChildTab(t){
   _childTab=t;_childMenuOpen=false;
@@ -6537,6 +6557,254 @@ function toggleChildFilt(){_childFiltOpen=!_childFiltOpen;renderChildren()}
 function childBarHTML(pct,h){
   return`<div style="height:${h||6}px;background:var(--bg3);border-radius:99px;overflow:hidden;margin-top:8px"><div style="width:${Math.max(0,Math.min(100,pct))}%;height:100%;background:${pct>=100?'var(--red)':pct>=80?'var(--yel)':'var(--act)'}"></div></div>`;
 }
+// ---------- Gráficas de Hijos (SVG y CSS puros: sin Chart.js, adaptan solas al tema claro/oscuro) ----------
+function fmtCompact(n){
+  const v=Math.abs(n||0);
+  const s=v>=1e6?(v/1e6).toFixed(v>=1e7?0:1)+'M':v>=1e3?(v/1e3).toFixed(v>=1e4?0:1)+'k':String(Math.round(v));
+  return(n<0?'−':'')+'$'+s.replace(/\.0(?=[Mk])/,'');
+}
+function childMonthShort(p){return dateLocal(p+'-01').toLocaleDateString('es-MX',{month:'short'}).replace('.','')}
+function childMonthsToggleHTML(){
+  const b=(n)=>`<button class="btn ${_childChartMonths===n?'bp':'bg_'} sm" style="font-size:11px;padding:3px 9px" aria-pressed="${_childChartMonths===n}" onclick="setChildChartMonths(${n})">${n} meses</button>`;
+  return`<div style="display:flex;gap:4px">${b(6)}${b(12)}</div>`;
+}
+// Meses que abarcan las gráficas: el rango de fechas de los filtros si lo hay (máximo 24 meses); si no, los últimos 6 o 12
+function childChartRange(){
+  const f=_childFilters,now=td_().slice(0,7);
+  let periods;
+  if(f.from||f.to){
+    const endP=(f.to||td_()).slice(0,7);
+    const startP=f.from?f.from.slice(0,7):childPeriodsBack(endP,_childChartMonths)[0];
+    periods=[];
+    if(startP<=endP){let d=dateLocal(startP+'-01');const e=dateLocal(endP+'-01');while(d<=e&&periods.length<60){periods.push(d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0'));d=addMonthsLocal(d,1)}}
+    if(periods.length>24)periods=periods.slice(-24);
+  }else periods=childPeriodsBack(now,_childChartMonths);
+  const custom=!!(f.from||f.to);
+  return{periods,custom,from:custom&&f.from?f.from:periods[0]+'-01',to:custom&&f.to?f.to:periods[periods.length-1]+'-31'};
+}
+function childBarsSVG(labels,values,aria){
+  const W=300,H=132,padL=4,padR=4,padT=16,padB=18,n=values.length;
+  const mx=Math.max(1,...values),bw=(W-padL-padR)/n,gap=Math.min(6,bw*.25),inner=H-padT-padB;
+  const nonZero=values.filter(v=>v>0),avg=values.length?values.reduce((a,v)=>a+v,0)/values.length:0;
+  let o=`<svg viewBox="0 0 ${W} ${H}" width="100%" role="img" aria-label="${esc(aria||'')}" style="display:block">`;
+  o+=`<line x1="${padL}" x2="${W-padR}" y1="${H-padB}" y2="${H-padB}" stroke="var(--bdr)"/>`;
+  if(avg>0&&nonZero.length>1){const ya=H-padB-(avg/mx)*inner;o+=`<line x1="${padL}" x2="${W-padR}" y1="${ya.toFixed(1)}" y2="${ya.toFixed(1)}" stroke="var(--t3)" stroke-dasharray="3 3" opacity=".7"/>`}
+  values.forEach((v,i)=>{
+    const h=Math.round((v/mx)*inner),x=padL+i*bw+gap/2,y=H-padB-h,last=i===n-1;
+    o+=`<rect x="${x.toFixed(1)}" y="${y}" width="${Math.max(2,bw-gap).toFixed(1)}" height="${h}" rx="3" fill="var(--act)" opacity="${last?1:.55}"><title>${esc(labels[i].full)}: ${esc(fmt(v))}</title></rect>`;
+    if(n<=6&&v>0)o+=`<text x="${(x+(bw-gap)/2).toFixed(1)}" y="${y-3}" font-size="9" fill="var(--t2)" text-anchor="middle">${esc(fmtCompact(v))}</text>`;
+    o+=`<text x="${(x+(bw-gap)/2).toFixed(1)}" y="${H-5}" font-size="${n>8?8:9}" fill="var(--t3)" text-anchor="middle">${esc(labels[i].short)}</text>`;
+  });
+  return o+'</svg>';
+}
+function childLineSVG(labels,series,aria){
+  const W=300,H=146,padL=36,padR=10,padT=10,padB=20,n=labels.length,inner=H-padT-padB;
+  const mx=Math.max(1,...series.flatMap(x=>x.values))*1.1;
+  const X=i=>n===1?(padL+(W-padL-padR)/2):padL+i*(W-padL-padR)/(n-1),Y=v=>H-padB-(v/mx)*inner;
+  let o=`<svg viewBox="0 0 ${W} ${H}" width="100%" role="img" aria-label="${esc(aria||'')}" style="display:block">`;
+  [0,.5,1].forEach(k=>{const y=H-padB-k*inner;o+=`<line x1="${padL}" x2="${W-padR}" y1="${y.toFixed(1)}" y2="${y.toFixed(1)}" stroke="var(--bdr)"${k===0?'':' stroke-dasharray="2 3"'}/><text x="${padL-4}" y="${(y+3).toFixed(1)}" font-size="9" fill="var(--t3)" text-anchor="end">${esc(fmtCompact(mx*k/1.1))}</text>`});
+  const step=n>8?2:1;
+  labels.forEach((l,i)=>{if(i%step===0||i===n-1)o+=`<text x="${X(i).toFixed(1)}" y="${H-5}" font-size="9" fill="var(--t3)" text-anchor="middle">${esc(l.short)}</text>`});
+  series.forEach(sr=>{
+    o+=`<polyline fill="none" stroke="${sr.color}" stroke-width="2" ${sr.dash?'stroke-dasharray="5 3" ':''}stroke-linejoin="round" points="${sr.values.map((v,i)=>X(i).toFixed(1)+','+Y(v).toFixed(1)).join(' ')}"/>`;
+    sr.values.forEach((v,i)=>{o+=`<circle cx="${X(i).toFixed(1)}" cy="${Y(v).toFixed(1)}" r="2.5" fill="${sr.color}"><title>${esc(labels[i].full)} · ${esc(sr.name)}: ${esc(fmt(v))}</title></circle>`});
+  });
+  return o+'</svg>';
+}
+const CHILD_CHART_COLORS=['#6c8cff','#30d693','#ffb347','#ff6f91','#b57bff','#4dd0e1'];
+// Movimientos → Gráficas: gasto por categoría y por mes, con los MISMOS filtros que la lista (solo la parte de este hijo)
+function childChartsHTML(c){
+  const f=_childFilters;
+  const note=t=>`<div style="font-size:12px;color:var(--t3);line-height:1.6;padding:6px 0">${t}</div>`;
+  if(f.type==='income')return note('Las gráficas muestran gastos. Quita el filtro de tipo «Ingresos» para verlas.');
+  const R=childChartRange();
+  const mv=childMovements(c.id).filter(m=>{
+    const t=m.tx;
+    if(t.type!=='expense'||t.date<R.from||t.date>R.to)return false;
+    if(f.sub&&(t.subcategory||'')!==f.sub)return false;
+    if(f.acc&&t.accountId!==f.acc)return false;
+    return true;
+  });
+  const periodoTxt=R.custom?'Según tu rango de fechas':`Últimos ${_childChartMonths} meses`;
+  const bar=`<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:8px"><div style="font-size:11px;color:var(--t3)">${esc(periodoTxt)}</div>${R.custom?'':childMonthsToggleHTML()}</div>`;
+  if(!mv.length)return bar+note('No hay gastos en este periodo con los filtros actuales.');
+  const total=M(mv.reduce((a,m)=>a+m.share,0));
+  // por categoría (las 6 principales + "Otros")
+  const byCat=new Map();mv.forEach(m=>{const k=childCatKey(m.tx);byCat.set(k,M((byCat.get(k)||0)+m.share))});
+  const sorted=[...byCat.entries()].sort((a,b)=>b[1]-a[1]);
+  const top=sorted.slice(0,6),rest=sorted.slice(6);
+  const rows=top.map(([k,v],i)=>({name:k||'Sin subcategoría',v,color:CHILD_CHART_COLORS[i]}));
+  if(rest.length)rows.push({name:`Otros (${rest.length})`,v:M(rest.reduce((a,e)=>a+e[1],0)),color:'var(--t3)'});
+  const maxV=Math.max(...rows.map(r=>r.v));
+  const catHTML=rows.map(r=>`<div style="padding:5px 0"><div style="display:flex;justify-content:space-between;gap:8px;font-size:12px"><span style="min-width:0;display:flex;align-items:center;gap:6px"><span style="width:8px;height:8px;border-radius:50%;background:${r.color};flex:none"></span><span>${esc(r.name)}</span></span><span style="font-family:'DM Mono',monospace;white-space:nowrap">${fmt(r.v)} <span style="color:var(--t3)">· ${Math.round(r.v/total*100)}%</span></span></div><div style="height:6px;background:var(--bg3);border-radius:99px;overflow:hidden;margin-top:4px"><div style="width:${(r.v/maxV*100).toFixed(1)}%;height:100%;background:${r.color}"></div></div></div>`).join('');
+  // por mes
+  const byMonth=new Map(R.periods.map(p=>[p,0]));
+  mv.forEach(m=>{const p=m.tx.date.slice(0,7);if(byMonth.has(p))byMonth.set(p,M(byMonth.get(p)+m.share))});
+  const labels=R.periods.map(p=>({short:childMonthShort(p),full:childPeriodLabel(p)}));
+  const vals=R.periods.map(p=>byMonth.get(p));
+  const avg=M(vals.reduce((a,v)=>a+v,0)/vals.length),mxI=vals.indexOf(Math.max(...vals));
+  return bar+`<div class="card" style="padding:12px 14px;margin-bottom:10px;background:var(--bg3)"><div style="font-weight:600;font-size:13px;margin-bottom:2px">Gasto por categoría</div><div style="font-size:11px;color:var(--t3);margin-bottom:4px">Total: <strong style="color:var(--exp)">${fmt(total)}</strong></div>${catHTML}</div>
+    <div class="card" style="padding:12px 14px;background:var(--bg3)"><div style="font-weight:600;font-size:13px;margin-bottom:6px">Evolución mensual del gasto</div>${childBarsSVG(labels,vals,'Gasto mensual de '+c.name)}<div style="font-size:11px;color:var(--t3);margin-top:6px">Promedio mensual: <strong style="color:var(--t2)">${fmt(avg)}</strong> · Mes más alto: <strong style="color:var(--t2)">${esc(labels[mxI].full)}</strong> (${fmt(vals[mxI])})<span style="opacity:.8"> · línea punteada = promedio</span></div></div>`;
+}
+// Ahorro: evolución mensual del ahorro REAL (con cuenta) y PLANIFICADO de los objetivos activos
+function childSavingsSeries(c,periods){
+  const goals=Store.getGoals().filter(g=>g.childId===c.id&&!g.finalized);
+  const real=periods.map(()=>0),plan=periods.map(()=>0),last=periods.length-1;
+  for(const g of goals){
+    const b=childGoalBreakdown(g);
+    const items=b.items.slice().sort((x,y)=>x.tx.date<y.tx.date?-1:x.tx.date>y.tx.date?1:0);
+    if(!items.length){real[last]+=b.real;plan[last]+=b.planned;continue} // sin aportaciones fechadas: solo cuenta hoy
+    const realRaw=items.filter(i=>i.backed).reduce((a,i)=>a+i.value,0),planRaw=items.filter(i=>!i.backed).reduce((a,i)=>a+i.value,0);
+    const startReal=b.real-realRaw,startPlan=b.planned-planRaw; // ahorro inicial/ajustes que no tienen fecha: se muestran desde la primera aportación
+    const firstP=items[0].tx.date.slice(0,7);
+    periods.forEach((p,i)=>{
+      if(p<firstP)return;
+      let r=startReal,pl=startPlan;
+      for(const it of items){if(it.tx.date.slice(0,7)<=p){if(it.backed)r+=it.value;else pl+=it.value}}
+      real[i]+=Math.max(0,r);plan[i]+=Math.max(0,pl);
+    });
+  }
+  return{real:real.map(M),plan:plan.map(M),n:goals.length};
+}
+function childSavingsChartHTML(c){
+  const canAct=c.status!=='archived';
+  const periods=childPeriodsBack(td_().slice(0,7),_childChartMonths);
+  const sr=childSavingsSeries(c,periods);
+  if(!sr.n)return'';
+  const labels=periods.map(p=>({short:childMonthShort(p),full:childPeriodLabel(p)}));
+  const hasData=sr.real.some(v=>v>0)||sr.plan.some(v=>v>0);
+  const head=`<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:8px"><div style="font-weight:600;font-size:13px">Evolución del ahorro</div>${childMonthsToggleHTML()}</div>`;
+  if(!hasData)return`<div class="card" style="padding:14px 16px;margin-bottom:12px">${head}<div style="font-size:12px;color:var(--t3);line-height:1.6">Todavía no hay aportaciones registradas en los últimos ${_childChartMonths} meses.${canAct?' Cuando abones a un objetivo verás aquí cómo crece el ahorro.':''}</div></div>`;
+  const series=[{name:'Real',color:'var(--inc)',values:sr.real},{name:'Planificado',color:'var(--yel)',values:sr.plan,dash:true}];
+  return`<div class="card" style="padding:14px 16px;margin-bottom:12px">${head}${childLineSVG(labels,series,'Evolución del ahorro de '+c.name)}
+    <div style="display:flex;gap:14px;flex-wrap:wrap;font-size:11px;color:var(--t3);margin-top:6px"><span><span style="color:var(--inc)">●</span> Real hoy: <strong style="color:var(--inc)">${fmt(sr.real[sr.real.length-1])}</strong></span><span><span style="color:var(--yel)">●</span> Planificado hoy: <strong style="color:var(--yel)">${fmt(sr.plan[sr.plan.length-1])}</strong></span></div>
+    <div style="font-size:10px;color:var(--t3);margin-top:6px;line-height:1.5">Se arma con las aportaciones registradas en objetivos activos; el ahorro inicial se muestra desde la primera aportación.</div></div>`;
+}
+// ---------- Reporte y exportación de un hijo ----------
+function downloadText(text,filename,mime){
+  const blob=new Blob([text],{type:(mime||'text/plain')+';charset=utf-8'});
+  const url=URL.createObjectURL(blob);
+  const a=document.createElement('a');a.href=url;a.download=filename;document.body.appendChild(a);a.click();document.body.removeChild(a);
+  setTimeout(()=>URL.revokeObjectURL(url),4000);
+}
+function childFileSlug(name){return String(name||'hijo').normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/[^A-Za-z0-9_-]+/g,'-').replace(/^-+|-+$/g,'')||'hijo'}
+// Celda CSV: comillas dobles escapadas y protección contra fórmulas de Excel (=, +, -, @) en texto escrito por el usuario
+function csvCell(v){
+  let t=String(v==null?'':v);
+  if(/^[=+\-@\t\r]/.test(t))t="'"+t;
+  return /[",\n\r]/.test(t)?'"'+t.replace(/"/g,'""')+'"':t;
+}
+// movs = [{tx,share}] como los devuelve childMovements
+function childMovementsCSV(c,movs){
+  const head=['Fecha','Tipo','Descripción','Categoría','Subcategoría','Cuenta','Monto total','Parte de '+c.name,'Compartido con'];
+  const rows=movs.map(m=>{
+    const t=m.tx,acc=Store.getAccountById(t.accountId);
+    const others=t.childAlloc.filter(a=>a.childId!==c.id).map(a=>(Store.getChildById(a.childId)||{}).name).filter(Boolean).join(' / ');
+    return[t.date,t.type==='income'?'Ingreso':'Gasto',t.description||'',t.category||'',t.subcategory||'',acc?acc.name:'cuenta eliminada',M(t.amount).toFixed(2),M(m.share).toFixed(2),others];
+  });
+  return'\uFEFF'+[head,...rows].map(r=>r.map(csvCell).join(',')).join('\r\n');
+}
+function exportChildCSV(childId){
+  const c=Store.getChildById(childId);if(!c)return;
+  const list=childFilteredMovements(c.id);
+  if(!list.length){toast('No hay movimientos para exportar',false);return}
+  downloadText(childMovementsCSV(c,list),`movimientos-${childFileSlug(c.name)}-${td_()}.csv`,'text/csv');
+  toast(`${list.length} movimiento${list.length===1?'':'s'} exportado${list.length===1?'':'s'}`);
+}
+// Datos del reporte. mode: 'month' (key 'AAAA-MM') o 'year' (key 'AAAA'). Todo sale de las mismas funciones que usa la pantalla.
+function childReportData(c,mode,key){
+  const inP=d=>!!d&&(mode==='month'?d.slice(0,7)===key:d.slice(0,4)===key);
+  const movs=childMovements(c.id).filter(m=>inP(m.tx.date));
+  const exp=movs.filter(m=>m.tx.type==='expense'),inc=movs.filter(m=>m.tx.type==='income');
+  const sum=a=>M(a.reduce((x,m)=>x+m.share,0));
+  const byCat=new Map();exp.forEach(m=>{const k=childCatKey(m.tx)||'Sin subcategoría';byCat.set(k,M((byCat.get(k)||0)+m.share))});
+  const cats=[...byCat.entries()].sort((a,b)=>b[1]-a[1]);
+  const now=td_();
+  const months=mode==='year'?Array.from({length:key===now.slice(0,4)?Number(now.slice(5,7)):12},(_,i)=>key+'-'+String(i+1).padStart(2,'0')):[key];
+  const perMonth=months.map(p=>({p,spent:childMonthSpend(c.id,p),plan:childBudgetFor(c,'',p)}));
+  const conPres=perMonth.filter(x=>x.plan>0);
+  return{movs,exp,inc,spent:sum(exp),income:sum(inc),cats,perMonth,
+    plan:M(conPres.reduce((a,x)=>a+x.plan,0)),planSpent:M(conPres.reduce((a,x)=>a+x.spent,0)),mesesConPres:conPres.length,mesesExcedidos:conPres.filter(x=>x.spent>x.plan).length,
+    top:exp.slice().sort((a,b)=>b.share-a.share).slice(0,5)};
+}
+function childReportText(c,mode,key){
+  const d=childReportData(c,mode,key),st=CHILD_STAGES[c.stage]||CHILD_STAGES.child;
+  const titulo=mode==='month'?childPeriodLabel(key):'año '+key;
+  const L=[];
+  L.push(`REPORTE DE ${c.name.toUpperCase()} — ${titulo}`);
+  L.push(`${st.label} · ${childAgeText(c)}${c.status==='archived'?' · perfil archivado':''}`);
+  L.push(`Generado: ${fmtDate(td_())}`);
+  L.push('','RESUMEN');
+  L.push(`Gasto: ${fmt(d.spent)}`);
+  L.push(`Ingresos asignados: ${fmt(d.income)}`);
+  L.push(`Neto: ${d.income-d.spent<0?'−':''}${fmt(Math.abs(M(d.income-d.spent)))}`);
+  if(d.mesesConPres){
+    L.push(mode==='month'?`Presupuesto del mes: ${fmt(d.plan)} · Usado: ${d.plan>0?Math.round(d.spent/d.plan*100):0}%`
+      :`Presupuesto de los ${d.mesesConPres} mes${d.mesesConPres===1?'':'es'} con presupuesto: ${fmt(d.plan)} · Gastado en esos meses: ${fmt(d.planSpent)} (${Math.round(d.planSpent/d.plan*100)}%)`);
+    if(mode==='year')L.push(`Meses por encima del presupuesto: ${d.mesesExcedidos} de ${d.mesesConPres}`);
+  }else L.push('Presupuesto: sin presupuesto definido en este periodo');
+  if(!d.movs.length)L.push('','Sin movimientos asignados en este periodo.');
+  else{
+    if(d.cats.length){L.push('','GASTO POR CATEGORÍA');d.cats.forEach(([k,v])=>L.push(`${k}: ${fmt(v)} (${d.spent>0?Math.round(v/d.spent*100):0}%)`))}
+    if(mode==='year'){L.push('','GASTO POR MES');d.perMonth.forEach(x=>L.push(`${childPeriodLabel(x.p)}: ${fmt(x.spent)}${x.plan>0?` (presupuesto ${fmt(x.plan)})`:''}`))}
+    if(d.top.length){L.push('','MAYORES GASTOS');d.top.forEach((m,i)=>L.push(`${i+1}. ${fmtDate(m.tx.date)} · ${m.tx.description||'Sin descripción'} · ${fmt(m.share)}`))}
+  }
+  const goals=childGoals(c.id).filter(g=>!g.finalized);
+  if(goals.length){L.push('','AHORRO (a hoy)');goals.forEach(g=>{const b=childGoalBreakdown(g);L.push(`${g.name}: real ${fmt(b.real)} · planificado ${fmt(b.planned)} · meta ${fmt(b.target)}`)})}
+  const recs=childRecurringOf(c.id);
+  if(recs.length){
+    L.push('','GASTOS RECURRENTES ACTIVOS');let mensual=0;
+    recs.forEach(x=>{const ci=subChildInfo(x),mine=ci.alloc.find(a=>a.childId===c.id),share=mine?mine.amount:0;mensual+=recurringMonthlyShare(x,share);
+      L.push(`${x.name}: ${fmt(share)}${ci.alloc.length>1?` (de ${fmt(x.cost)} compartido)`:''} ${x.freq==='monthly'?'mensual':x.freq==='annual'?'anual':'semanal'} · próximo cobro ${fmtDate(x.nextDate)}`)});
+    L.push(`Equivalente mensual: ${fmt(M(mensual))}`);
+  }
+  return L.join('\n');
+}
+let _repMode='month',_repChild=null;
+function repPeriodOptions(c,mode){
+  const firstDate=childMovements(c.id).map(m=>m.tx.date).filter(Boolean).sort()[0];
+  const nowP=td_().slice(0,7);
+  if(mode==='year'){
+    const y0=Number((firstDate||td_()).slice(0,4)),y1=Number(nowP.slice(0,4));
+    const ys=[];for(let y=y1;y>=Math.min(y0,y1);y--)ys.push(String(y));
+    return ys.map(y=>({v:y,l:y}));
+  }
+  const start=(firstDate||td_()).slice(0,7);
+  const out=[];let d=dateLocal(nowP+'-01');
+  for(let i=0;i<60;i++){const p=d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0');out.push({v:p,l:childPeriodLabel(p)});if(p<=start)break;d=addMonthsLocal(d,-1)}
+  return out;
+}
+function fillRepPeriod(c){
+  const opts=repPeriodOptions(c,_repMode);
+  $('rep-period').innerHTML=opts.map(o=>`<option value="${esc(o.v)}">${esc(o.l)}</option>`).join('');
+  $('rep-b-month').className='btn '+(_repMode==='month'?'bp':'bg_')+' sm';
+  $('rep-b-year').className='btn '+(_repMode==='year'?'bp':'bg_')+' sm';
+}
+function openChildReport(childId){
+  const c=Store.getChildById(childId);if(!c)return;
+  _repChild=childId;_repMode='month';_childMenuOpen=false;
+  $('rep-title').textContent='Reporte · '+c.name;
+  fillRepPeriod(c);renderChildReport();oM('mo-chrep');renderChildren();
+}
+function setRepMode(m){
+  const c=Store.getChildById(_repChild);if(!c)return;
+  _repMode=m==='year'?'year':'month';fillRepPeriod(c);renderChildReport();
+}
+function renderChildReport(){
+  const c=Store.getChildById(_repChild);if(!c)return;
+  $('rep-body').textContent=childReportText(c,_repMode,$('rep-period').value||td_().slice(0,_repMode==='year'?4:7));
+}
+async function copyChildReport(){
+  const ok=await copyTextToClipboard($('rep-body').textContent);
+  toast(ok?'Reporte copiado':'No se pudo copiar',ok);
+}
+function downloadChildReportCSV(){
+  const c=Store.getChildById(_repChild);if(!c)return;
+  const key=$('rep-period').value,d=childReportData(c,_repMode,key);
+  if(!d.movs.length){toast('No hay movimientos en este periodo para exportar',false);return}
+  downloadText(childMovementsCSV(c,d.movs),`movimientos-${childFileSlug(c.name)}-${key}.csv`,'text/csv');
+  toast(`${d.movs.length} movimiento${d.movs.length===1?'':'s'} exportado${d.movs.length===1?'':'s'}`);
+}
 function childDetailHeaderHTML(c){
   const st=CHILD_STAGES[c.stage]||CHILD_STAGES.child,period=td_().slice(0,7),spent=childMonthSpend(c.id,period),bud=childBudgetFor(c,'',period);
   const sav=childSavingsTotals([c.id]),pct=bud>0?Math.round(spent/bud*100):0;
@@ -6549,7 +6817,7 @@ function childDetailHeaderHTML(c){
         <div style="font-size:12px;color:var(--t3);margin-top:3px">${esc(st.label)} · ${esc(childAgeText(c))}</div></div>
         <div style="display:flex;gap:6px"><button class="btn bg_ sm" onclick="openChildM('${c.id}')">Editar</button><button class="btn bg_ sm" aria-label="Más opciones" aria-expanded="${_childMenuOpen}" onclick="toggleChildMenu()">⋯</button></div>
       </div>
-      ${_childMenuOpen?`<div style="margin-top:10px;padding-top:10px;border-top:1px solid var(--bdr)"><div style="display:flex;gap:6px;flex-wrap:wrap"><button class="btn bg_ sm" onclick="toggleChildArchive('${c.id}')">${c.status==='archived'?'Reactivar perfil':'Archivar perfil'}</button>${c.status==='archived'?`<button class="btn bg_ sm" style="color:var(--red)" onclick="deleteChildFlow('${c.id}')">Eliminar perfil</button>`:''}</div>${c.status==='archived'?'':'<div style="font-size:11px;color:var(--t3);margin-top:8px">Para eliminar un perfil, primero archívalo.</div>'}</div>`:''}
+      ${_childMenuOpen?`<div style="margin-top:10px;padding-top:10px;border-top:1px solid var(--bdr)"><div style="display:flex;gap:6px;flex-wrap:wrap"><button class="btn bg_ sm" onclick="openChildReport('${c.id}')">Reporte</button><button class="btn bg_ sm" onclick="toggleChildArchive('${c.id}')">${c.status==='archived'?'Reactivar perfil':'Archivar perfil'}</button>${c.status==='archived'?`<button class="btn bg_ sm" style="color:var(--red)" onclick="deleteChildFlow('${c.id}')">Eliminar perfil</button>`:''}</div>${c.status==='archived'?'':'<div style="font-size:11px;color:var(--t3);margin-top:8px">Para eliminar un perfil, primero archívalo.</div>'}</div>`:''}
       <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(96px,1fr));gap:12px;margin-top:14px">
         ${kpi('Gasto del mes',fmt(spent))}
         ${kpi('Disponible',bud>0?fmt(bud-spent):'—',bud>0&&bud-spent<0?'var(--red)':'')}
@@ -6647,7 +6915,7 @@ function childDetailHTML(c){
   const tabs=[['resumen','Resumen'],['presupuesto','Presupuesto'],['ahorro','Ahorro'],['movimientos','Movimientos']];
   if(!tabs.some(x=>x[0]===_childTab))_childTab='resumen';
   const nav=`<div class="tabs ch4" role="tablist">${tabs.map(([k,l])=>`<button class="tab${_childTab===k?' on':''}" role="tab" aria-selected="${_childTab===k}" onclick="setChildTab('${k}')">${l}</button>`).join('')}</div>`;
-  const body=_childTab==='presupuesto'?childBudgetHTML(c)+childRecurringHTML(c):_childTab==='ahorro'?childGoalsHTML(c):_childTab==='movimientos'?childMovementsHTML(c):childSummaryTabHTML(c);
+  const body=_childTab==='presupuesto'?childBudgetHTML(c)+childRecurringHTML(c):_childTab==='ahorro'?childSavingsChartHTML(c)+childGoalsHTML(c):_childTab==='movimientos'?childMovementsHTML(c):childSummaryTabHTML(c);
   return childPageHead('<button class="btn bg_" onclick="closeChildDetail()">← Hijos</button>')+childDetailHeaderHTML(c)+nav+body;
 }
 function openChildM(id,forceStage){
@@ -8941,17 +9209,21 @@ function renderDiag(){
 }
 function openDiag(){renderDiag();oM('mo-diag')}
 function diagClear(){writeErrLog([]);_errLast={sig:'',t:0};renderDiag();toast('Registro limpio')}
-async function diagCopy(){
-  const txt=diagReport();
+// Copia texto al portapapeles (con método alterno para Safari). Devuelve true/false.
+async function copyTextToClipboard(txt){
   try{
-    if(navigator.clipboard&&navigator.clipboard.writeText){await navigator.clipboard.writeText(txt);toast('Informe copiado');return}
+    if(navigator.clipboard&&navigator.clipboard.writeText){await navigator.clipboard.writeText(txt);return true}
   }catch(e){/* se intenta el método alterno */}
   try{
     const ta=document.createElement('textarea');ta.value=txt;ta.setAttribute('readonly','');ta.style.cssText='position:fixed;top:0;left:0;opacity:0';
     document.body.appendChild(ta);ta.select();ta.setSelectionRange(0,txt.length);
     const ok=document.execCommand('copy');document.body.removeChild(ta);
-    toast(ok?'Informe copiado':'No se pudo copiar',ok);
-  }catch(e){toast('No se pudo copiar',false)}
+    return !!ok;
+  }catch(e){return false}
+}
+async function diagCopy(){
+  const ok=await copyTextToClipboard(diagReport());
+  toast(ok?'Informe copiado':'No se pudo copiar',ok);
 }
 function renderSettings(){
   renderProfAvatar();
