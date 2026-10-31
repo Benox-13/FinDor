@@ -1068,7 +1068,7 @@ body.modal-open #bottom-nav{display:none !important}
             <div class="fg"><label class="fl">Dirección</label><select class="fc" id="tx-tp-dir"><option value="in">Entrada (me llega dinero)</option><option value="out">Salida (envío / entrego dinero)</option></select></div>
             <div class="fg"><label class="fl">Tercero</label><input class="fc" type="text" id="tx-tp-name" maxlength="60" placeholder="Ej: Luis"></div>
           </div>
-          <div style="font-size:11px;color:var(--t3);line-height:1.5">Actualiza el saldo y el historial de la cuenta, pero NO cuenta como ingreso, gasto, presupuesto, estadística ni patrimonio. La operación queda "Completada" sola cuando registras una entrada y una salida del mismo monto.</div>
+          <div style="font-size:11px;color:var(--t3);line-height:1.5">Actualiza el saldo y el historial de la cuenta, pero NO cuenta como ingreso, gasto, presupuesto, estadística ni patrimonio. Puedes registrar varias entradas y varias salidas (pagos parciales): la operación queda "Completada" sola cuando lo que entró suma exactamente lo que salió.</div>
         </div>
       </div>
       <!-- MSI SECTION -->
@@ -1831,7 +1831,7 @@ body.modal-open #bottom-nav{display:none !important}
 // Objetivo: que un fallo inesperado (sobre todo en el iPhone, donde no hay consola) deje un aviso corto y un
 // registro que se pueda ver y copiar en Configuración → Datos → Diagnóstico. Nada de esto sube a la nube.
 // Se guarda en finance_v4_errlog (se borra con el cambio de usuario y con "Borrar todo", como el resto de lo local).
-const APP_BUILD='2026-10-25 · r11'; // cambia en cada entrega: sirve para saber qué versión está corriendo (el service worker puede servir una anterior)
+const APP_BUILD='2026-10-26 · r12'; // cambia en cada entrega: sirve para saber qué versión está corriendo (el service worker puede servir una anterior)
 const ERRLOG_KEY='finance_v4_errlog',ERRLOG_MAX=5;
 let _errLast={sig:'',t:0},_errToastAt=0;
 function errToText(x){
@@ -3782,21 +3782,35 @@ const Store = {
   // el historial de las cuentas se actualizan con addTransaction de siempre.
   // Lo único que hay que descontar aparte es el PATRIMONIO (thirdPartyHeld).
   thirdPartyLegs(ref){return S.transactions.filter(t=>t.thirdPartyRef===ref)},
+  // Totales de un grupo de piezas (en centavos para comparar sin errores de decimales)
+  thirdPartyTotals(legs){
+    let i=0,o=0;
+    (legs||[]).forEach(l=>{const c=Math.round(M(l.amount)*100);if(l.transferDirection==='in')i+=c;else if(l.transferDirection==='out')o+=c});
+    return{inC:i,outC:o,inTotal:i/100,outTotal:o/100};
+  },
+  // "Completada" solo cuando hay entradas y salidas y lo que entró es EXACTAMENTE lo que salió
+  thirdPartyAutoStatus(legs){const t=this.thirdPartyTotals(legs);return(t.inC>0&&t.outC>0&&t.inC===t.outC)?'completed':'pending'},
   thirdPartyOps(){
     const map=new Map();
     S.transactions.filter(t=>t.thirdPartyRef).forEach(t=>{
-      if(!map.has(t.thirdPartyRef))map.set(t.thirdPartyRef,{ref:t.thirdPartyRef,name:'',inLeg:null,outLeg:null,legs:[]});
+      if(!map.has(t.thirdPartyRef))map.set(t.thirdPartyRef,{ref:t.thirdPartyRef,name:'',inLeg:null,outLeg:null,inLegs:[],outLegs:[],legs:[]});
       const op=map.get(t.thirdPartyRef);
       op.legs.push(t);
-      if(t.transferDirection==='in')op.inLeg=t;else if(t.transferDirection==='out')op.outLeg=t;
+      if(t.transferDirection==='in')op.inLegs.push(t);else if(t.transferDirection==='out')op.outLegs.push(t);
       if(t.thirdPartyName)op.name=t.thirdPartyName;
     });
     const ops=[...map.values()];
+    const byDate=(x,y)=>{const kx=(x.date||'')+(x.time||''),ky=(y.date||'')+(y.time||'');return kx<ky?-1:kx>ky?1:0};
     ops.forEach(op=>{
+      // Una operación puede tener VARIAS entradas y VARIAS salidas (pagos parciales). inLeg/outLeg = la más reciente de cada lado.
+      op.inLegs.sort(byDate);op.outLegs.sort(byDate);op.legs.sort(byDate);
+      op.inLeg=op.inLegs[op.inLegs.length-1]||null;op.outLeg=op.outLegs[op.outLegs.length-1]||null;
       // "Completada" solo si TODAS sus piezas lo dicen (si una quedó atrás por
       // un fallo de sincronización, se trata como pendiente).
       op.status=op.legs.every(l=>l.thirdPartyStatus==='completed')?'completed':'pending';
-      op.diff=M((op.inLeg?M(op.inLeg.amount):0)-(op.outLeg?M(op.outLeg.amount):0));
+      const t=this.thirdPartyTotals(op.legs);
+      op.inTotal=t.inTotal;op.outTotal=t.outTotal;
+      op.diff=M(t.inTotal-t.outTotal); // >0: entró más de lo que ha salido (sigue siendo de terceros); <0: salió de más (te lo deben)
       op.date=op.legs.map(l=>l.date).sort().pop()||'';
     });
     ops.sort((a,b)=>(a.status===b.status?0:a.status==='pending'?-1:1)||(b.date>a.date?1:b.date<a.date?-1:0));
@@ -3842,8 +3856,7 @@ const Store = {
       const op=this.thirdPartyOps().find(o=>o.ref===ref);
       if(!op)return{ok:false,error:'Esa operación ya no existe'};
       if(op.status==='completed')return{ok:false,error:'Esa operación ya está completada'};
-      if(direction==='in'&&op.inLeg)return{ok:false,error:'Esa operación ya tiene su entrada'};
-      if(direction==='out'&&op.outLeg)return{ok:false,error:'Esa operación ya tiene su salida'};
+      // Antes solo se permitía UNA entrada y UNA salida: un pago parcial dejaba la operación sin poder completarse.
       tpName=op.name;
     }
     if(!tpName)return{ok:false,error:'Escribe el nombre del tercero'};
@@ -3857,8 +3870,7 @@ const Store = {
     // que la fila existiera y perderse sin avisar.) Solo la OTRA pieza, que ya
     // existe desde antes, se actualiza.
     const others=this.thirdPartyLegs(ref);
-    const opposite=others.find(l=>l.transferDirection!==direction);
-    const finalStatus=(opposite&&M(opposite.amount)===amt)?'completed':'pending';
+    const finalStatus=this.thirdPartyAutoStatus([...others,{transferDirection:direction,amount:amt}]);
     const tx=this.addTransaction({type:'transfer',amount:amt,date,time:time||tnow_(),description:desc,category:cat.name,accountId,
       transferDirection:direction,notes:notes||'',thirdPartyRef:ref,thirdPartyStatus:finalStatus,thirdPartyName:tpName});
     others.forEach(l=>{if(l.thirdPartyStatus!==finalStatus)this._patchTxNoBalance(l.id,{thirdPartyStatus:finalStatus})});
@@ -3878,9 +3890,32 @@ const Store = {
   recomputeThirdPartyStatus(ref){
     const legs=this.thirdPartyLegs(ref);
     if(!legs.length)return;
-    const inL=legs.find(l=>l.transferDirection==='in'),outL=legs.find(l=>l.transferDirection==='out');
-    const status=(inL&&outL&&M(inL.amount)===M(outL.amount))?'completed':'pending';
+    const status=this.thirdPartyAutoStatus(legs);
     legs.forEach(l=>{if(l.thirdPartyStatus!==status)this._patchTxNoBalance(l.id,{thirdPartyStatus:status})});
+  },
+  // Edita una pieza (cuenta, monto, fecha, hora, descripción, notas) y el nombre del tercero (de toda la operación).
+  // El saldo se ajusta con updateTransaction (revierte el viejo y aplica el nuevo). La dirección no se cambia: para eso, borra y registra de nuevo.
+  updateThirdPartyLeg(id,{accountId,amount,date,time,description,notes,name}){
+    const tx=this.getTransactionById(id);
+    if(!tx||!tx.thirdPartyRef)return{ok:false,error:'Ese movimiento ya no existe'};
+    const amt=M(amount);
+    if(!isValidAmount(amt))return{ok:false,error:'El monto debe ser mayor a 0'};
+    if(!date)return{ok:false,error:'La fecha es requerida'};
+    const acc=this.getAccountById(accountId);
+    if(!acc)return{ok:false,error:'La cuenta no existe'};
+    if(acc.type==='credit')return{ok:false,error:'Las operaciones con terceros no se registran en tarjetas de crédito'};
+    if(acc.locked)return{ok:false,error:`"${acc.name}" está bloqueada — desbloquéala para registrar el movimiento`};
+    const prevAcc=this.getAccountById(tx.accountId);
+    if(prevAcc&&prevAcc.locked)return{ok:false,error:`"${prevAcc.name}" está bloqueada — no se pueden editar movimientos de esta cuenta`};
+    const tpName=String(name==null?(tx.thirdPartyName||''):name).trim();
+    if(!tpName)return{ok:false,error:'Escribe el nombre del tercero'};
+    if(tpName.length>60)return{ok:false,error:'El nombre del tercero es muy largo (máximo 60 caracteres)'};
+    const amountChanged=M(tx.amount)!==amt;
+    this.updateTransaction(id,{amount:amt,date,time:time||tx.time,description:(description||'').trim()||tx.description,accountId,notes:notes||''});
+    if(tpName!==(tx.thirdPartyName||''))this.thirdPartyLegs(tx.thirdPartyRef).forEach(l=>this._patchTxNoBalance(l.id,{thirdPartyName:tpName}));
+    // El estado se recalcula solo si cambió un monto (así, editar la fecha o las notas no reabre una operación que completaste a mano)
+    if(amountChanged)this.recomputeThirdPartyStatus(tx.thirdPartyRef);
+    return{ok:true};
   },
   // Cambio manual de estado. "Completada" exige que existan la entrada y la
   // salida (aunque difieran en monto: esa diferencia queda excluida de tu patrimonio).
@@ -5323,15 +5358,33 @@ function getCatType(catName){const c=S.categories.find(c=>c.name===catName||c.su
 // ==================== TRANSACTIONS ====================
 let txType='expense';
 let editingTxId=null;
+let _editingTpLeg=false; // true cuando se edita una pieza de una operación con terceros
 
+function resetTpUI(){
+  const c=$('tx-tp');if(c)c.disabled=false;
+  const d=$('tx-tp-dir');if(d)d.disabled=false;
+  const n=$('tx-tp-name');if(n)n.disabled=false;
+  const g=$('tx-tp-op')&&$('tx-tp-op').closest('.fg');if(g)g.style.display='';
+}
+// Edición de una pieza: se conserva la operación y la dirección; se puede cambiar cuenta, monto, fecha, notas y el nombre del tercero.
+function prepareTpEdit(tx){
+  $('tx-modal-title').textContent='Editar operación con terceros';
+  $('tx-tp').checked=true;$('tx-tp').disabled=true;
+  applyTpMode(); // vuelve a dejar solo cuentas que no son tarjeta de crédito
+  ensureAccountOption('tx-acc',tx.accountId);
+  $('tx-acc').value=tx.accountId||'';
+  const g=$('tx-tp-op').closest('.fg');if(g)g.style.display='none';
+  $('tx-tp-dir').value=tx.transferDirection;$('tx-tp-dir').disabled=true;
+  $('tx-tp-name').value=tx.thirdPartyName||'';$('tx-tp-name').disabled=false;
+}
 function openTxM(editId=null){
-  editingTxId=editId;
+  editingTxId=editId;_editingTpLeg=false;resetTpUI();
   if(editId){
     const tx=S.transactions.find(t=>t.id===editId);if(!tx)return;
     if(tx.linkedTxId){toast('Esta transacción es la mitad de una transferencia — bórrala (se borra el par completo) y créala de nuevo si necesitas cambiarla.',false);editingTxId=null;return}
-    if(tx.thirdPartyRef){toast('Las operaciones con terceros no se editan aquí: elimina el movimiento y regístralo de nuevo, o cambia su estado desde "Operaciones con terceros".',false);editingTxId=null;return}
     const lockedAcc=[tx.accountId,tx.accountId2].filter(Boolean).map(id=>Store.getAccountById(id)).find(a=>a?.locked);
     if(lockedAcc){toast(`"${lockedAcc.name}" está bloqueada — no se pueden editar movimientos de esta cuenta.`,false);return}
+    _editingTpLeg=!!tx.thirdPartyRef;
     $('tx-modal-title').textContent='Editar transacción';
     $('tx-save-btn').textContent='Actualizar';
     setTxT(tx.type);
@@ -5349,6 +5402,7 @@ function openTxM(editId=null){
     $('tx-acc').value=tx.accountId||'';
     if(tx.accountId2)$('tx-acc2').value=tx.accountId2;
     onAccChange();
+    if(_editingTpLeg)prepareTpEdit(tx);
   } else {
     editingTxId=null;
     $('tx-modal-title').textContent='Nueva transacción';
@@ -5656,6 +5710,17 @@ async function saveTx(){
     // Más simple y seguro: pedir borrar y volver a crear.
     if(existing?.linkedTxId){
       toast('Esta transacción es la mitad de una transferencia — bórrala (se borra el par completo) y créala de nuevo si necesitas cambiarla.',false);
+      return;
+    }
+    if(existing&&existing.thirdPartyRef){
+      const okTp=await confirm_('¿Guardar cambios?','Se actualizará este movimiento y se ajustará el saldo de la cuenta.','Guardar');
+      if(!okTp)return;
+      saveBtn.disabled=true;
+      try{
+        const r=Store.updateThirdPartyLeg(editingTxId,{accountId:accId,amount:amt,date:dt,time,description:$('tx-dsc').value,notes:$('tx-notes').value,name:$('tx-tp-name').value});
+        if(!r.ok){toast(r.error,false);return}
+        cM('mo-tx');renderTxP();renderDash();renderAccounts();toast('Movimiento actualizado');
+      }finally{saveBtn.disabled=false}
       return;
     }
     const ok=await confirm_('¿Guardar cambios?','Se actualizará esta transacción y se ajustará el balance de la cuenta.','Guardar');
@@ -6988,10 +7053,10 @@ async function toggleChildArchive(id){
 // Modo "terceros" del formulario de Transferencia. Con el interruptor
 // apagado todo funciona exactamente como siempre.
 let _tpAccFiltered=false;
-function isTpMode(){const c=$('tx-tp');return !!(c&&c.checked&&txType==='transfer'&&!editingTxId)}
+function isTpMode(){const c=$('tx-tp');return !!(c&&c.checked&&txType==='transfer'&&(!editingTxId||_editingTpLeg))}
 function syncTpUI(){
   const wrap=$('tx-tp-wrap');if(!wrap)return;
-  const show=txType==='transfer'&&!editingTxId;
+  const show=txType==='transfer'&&(!editingTxId||_editingTpLeg);
   wrap.style.display=show?'block':'none';
   if(!show&&$('tx-tp').checked)$('tx-tp').checked=false;
   applyTpMode();
@@ -7022,11 +7087,12 @@ function togTp(){
 function fillTpOpSelect(){
   const sel=$('tx-tp-op');if(!sel)return;
   const cur=sel.value;
-  // Solo operaciones pendientes a las que les falta una pieza (así no se puede duplicar entrada o salida).
-  const open=Store.thirdPartyOps().filter(o=>o.status==='pending'&&(!o.inLeg||!o.outLeg));
+  // Todas las operaciones pendientes: pueden recibir más entradas o salidas hasta que lo que entró y lo que salió sumen lo mismo.
+  const open=Store.thirdPartyOps().filter(o=>o.status==='pending');
   sel.innerHTML='<option value="">➕ Nueva operación</option>'+open.map(o=>{
-    const have=o.inLeg?`entrada ${fmt(o.inLeg.amount)}`:`salida ${fmt(o.outLeg.amount)}`;
-    return`<option value="${o.ref}">${esc(o.name)} · tiene ${have} (falta ${o.inLeg?'la salida':'la entrada'})</option>`;
+    const d=o.diff;
+    const falta=d>0?`falta que salgan ${fmt(d)}`:d<0?`salió de más ${fmt(-d)}`:'sin diferencia';
+    return`<option value="${o.ref}">${esc(o.name)} · entró ${fmt(o.inTotal)} · salió ${fmt(o.outTotal)} (${falta})</option>`;
   }).join('');
   if(cur&&open.some(o=>o.ref===cur))sel.value=cur;
 }
@@ -7034,10 +7100,10 @@ function onTpOpChange(){
   const ref=$('tx-tp-op').value,nameEl=$('tx-tp-name'),dirEl=$('tx-tp-dir');
   const op=ref?Store.thirdPartyOps().find(o=>o.ref===ref):null;
   if(!op){$('tx-tp-op').value='';nameEl.disabled=false;dirEl.disabled=false;return}
-  // Al vincular, el nombre y la dirección que falta quedan fijos.
+  // Al vincular, el nombre queda fijo; la dirección se sugiere según lo que falta (pero se puede cambiar) y el monto con la diferencia pendiente.
   nameEl.value=op.name;nameEl.disabled=true;
-  dirEl.value=op.inLeg?'out':'in';dirEl.disabled=true;
-  const amtEl=$('tx-amt');if(!amtEl.value)amtEl.value=(op.inLeg||op.outLeg).amount;
+  dirEl.disabled=false;dirEl.value=op.diff>0?'out':op.diff<0?'in':(op.inLeg?'out':'in');
+  const amtEl=$('tx-amt');if(!amtEl.value)amtEl.value=op.diff!==0?Math.abs(op.diff):((op.inLeg||op.outLeg)?(op.inLeg||op.outLeg).amount:'');
 }
 async function saveThirdPartyLeg(amt,dt,time,accId){
   const saveBtn=$('tx-save-btn');
@@ -7053,7 +7119,7 @@ async function saveThirdPartyLeg(amt,dt,time,accId){
     if(!res.ok){toast(res.error,false);return}
     const op=Store.thirdPartyOps().find(o=>o.ref===res.ref);
     cM('mo-tx');renderDash();renderTxP();renderAccounts();
-    toast(op&&op.status==='completed'?'Operación con terceros completada ✓':'Movimiento registrado — la operación queda pendiente');
+    toast(op&&op.status==='completed'?'Operación con terceros completada ✓':`Movimiento registrado — la operación sigue pendiente${op&&op.diff!==0?` (${op.diff>0?'falta que salgan':'salió de más'} ${fmt(Math.abs(op.diff))})`:''}`);
   }finally{saveBtn.disabled=false}
 }
 // Abre el formulario ya en modo terceros, vinculado a una operación pendiente.
@@ -7087,20 +7153,21 @@ function renderTpOps(){
   const done=ops.filter(o=>o.status==='completed');
   const held=Store.thirdPartyHeld();
   const accName=id=>{const a=Store.getAccountById(id);return a?esc(a.name):'cuenta eliminada'};
-  const leg=(l,dir,op)=>{
-    const lbl=dir==='in'?'⬇ Entrada':'⬆ Salida';
-    if(l)return`<div>${lbl} <strong style="font-family:'DM Mono',monospace">${fmt(l.amount)}</strong> · ${accName(l.accountId)} · ${fmtDate(l.date)}</div>`;
-    return`<div style="color:var(--t3)">${lbl}: falta registrar ${op.status==='pending'?`<button class="btn bg_ sm" style="font-size:11px;padding:3px 9px;margin-left:6px" onclick="openTpLegM('${op.ref}')">+ Registrar</button>`:''}</div>`;
+  const legRow=(l)=>{
+    const dir=l.transferDirection==='in'?'in':'out';
+    return`<div style="display:flex;justify-content:space-between;gap:8px;align-items:center"><span>${dir==='in'?'⬇ Entrada':'⬆ Salida'} <strong style="font-family:'DM Mono',monospace">${fmt(l.amount)}</strong> · ${accName(l.accountId)} · ${fmtDate(l.date)}</span><button class="btn bg_ sm" style="font-size:11px;padding:2px 8px" aria-label="Editar movimiento" onclick="openTxM('${l.id}')">✏️</button></div>`;
   };
   const card=op=>{
     const isP=op.status==='pending';
-    const diffLine=(op.inLeg&&op.outLeg&&op.diff!==0)?`<div style="color:var(--yel);font-size:11px;margin-top:4px">Diferencia: ${fmt(Math.abs(op.diff))} ${op.diff>0?'(entró de más: sigue siendo de terceros)':'(salió de más: te lo deben)'}</div>`:'';
-    const btn=isP
-      ?((op.inLeg&&op.outLeg)?`<button class="btn bg_ sm" style="font-size:11px;margin-top:8px" onclick="tpSetStatus('${op.ref}','completed')">Marcar completada</button>`:'')
+    const d=op.diff;
+    const diffLine=(op.legs.length&&d!==0)?`<div style="color:var(--yel);font-size:11px;margin-top:4px">${d>0?`Falta que salgan ${fmt(d)} (mientras tanto sigue siendo de terceros)`:`Salió de más: ${fmt(-d)} (te lo deben)`}</div>`:'';
+    const btns=isP
+      ?`<button class="btn bg_ sm" style="font-size:11px;margin-top:8px" onclick="openTpLegM('${op.ref}')">+ Registrar movimiento</button>${(op.inLegs.length&&op.outLegs.length)?` <button class="btn bg_ sm" style="font-size:11px;margin-top:8px" onclick="tpSetStatus('${op.ref}','completed')">Marcar completada</button>`:''}`
       :`<button class="btn bg_ sm" style="font-size:11px;margin-top:8px" onclick="tpSetStatus('${op.ref}','pending')">Reabrir</button>`;
     return`<div class="card" style="padding:12px 14px;margin-bottom:8px;border-left:3px solid ${isP?'var(--yel)':'var(--inc)'};${isP?'':'opacity:.8'}">
       <div style="display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap;align-items:center"><div><strong>${esc(op.name)}</strong> <span style="font-size:10px;padding:2px 7px;border-radius:99px;border:1px solid ${isP?'var(--yel)':'var(--inc)'};color:${isP?'var(--yel)':'var(--inc)'}">${isP?'Pendiente':'Completada'}</span></div></div>
-      <div style="font-size:12px;margin-top:6px;line-height:1.7">${leg(op.inLeg,'in',op)}${leg(op.outLeg,'out',op)}</div>${diffLine}${btn}</div>`;
+      <div style="font-size:11px;color:var(--t3);margin-top:4px">Entró <strong style="color:var(--t2)">${fmt(op.inTotal)}</strong> · Salió <strong style="color:var(--t2)">${fmt(op.outTotal)}</strong></div>
+      <div style="font-size:12px;margin-top:6px;line-height:1.9">${op.legs.map(legRow).join('')}</div>${diffLine}${btns}</div>`;
   };
   const head=`<div class="slbl" role="button" tabindex="0" aria-expanded="${_tpOpen}" style="cursor:pointer;user-select:none" onclick="toggleTpCard()" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();toggleTpCard()}"><span>🤝 Operaciones con terceros (${pend.length} pendiente${pend.length===1?'':'s'})</span>${held!==0?`<span style="color:var(--yel)">· ${held>0?'Retenido':'Te deben'} ${fmt(Math.abs(held))}</span>`:''}<span style="font-size:13px">${_tpOpen?'▾':'▸'}</span></div>`;
   const body=`<div style="display:${_tpOpen?'block':'none'};margin-bottom:12px">${pend.map(card).join('')}${done.slice(0,10).map(card).join('')}${done.length>10?`<div style="font-size:11px;color:var(--t3);text-align:center">y ${done.length-10} completada${done.length-10===1?'':'s'} más (están en el historial)</div>`:''}</div>`;
