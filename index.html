@@ -583,6 +583,7 @@ body.modal-open #bottom-nav{display:none !important}
       </div>
     </div>
     <div id="tp-ops-card"></div>
+    <div id="tx-msi-card"></div>
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;flex-wrap:wrap;gap:8px">
       <div id="tx-summary-bar" style="font-size:12px;color:var(--t3)"></div>
       <div style="display:flex;gap:6px">
@@ -1831,7 +1832,7 @@ body.modal-open #bottom-nav{display:none !important}
 // Objetivo: que un fallo inesperado (sobre todo en el iPhone, donde no hay consola) deje un aviso corto y un
 // registro que se pueda ver y copiar en Configuración → Datos → Diagnóstico. Nada de esto sube a la nube.
 // Se guarda en finance_v4_errlog (se borra con el cambio de usuario y con "Borrar todo", como el resto de lo local).
-const APP_BUILD='2026-10-26 · r12'; // cambia en cada entrega: sirve para saber qué versión está corriendo (el service worker puede servir una anterior)
+const APP_BUILD='2026-11-08 · r13'; // cambia en cada entrega: sirve para saber qué versión está corriendo (el service worker puede servir una anterior)
 const ERRLOG_KEY='finance_v4_errlog',ERRLOG_MAX=5;
 let _errLast={sig:'',t:0},_errToastAt=0;
 function errToText(x){
@@ -7312,6 +7313,58 @@ function computeTDCDailyAccumulated(accountId,periodStartStr,periodEndStr){
   return byDate;
 }
 
+// ==================== MSI QUE SE FACTURAN EN EL PERIODO (Transacciones) ====================
+// Con una tarjeta de crédito (con día de corte) y un periodo de facturación
+// elegido, lista las compras a MSI que cobran mensualidad en ESE periodo,
+// sean de ese periodo o de uno anterior. Usa los mismos criterios que
+// Facturación (periodKeyForDate y msiPeriodAmount), así que el total de un
+// periodo CERRADO coincide con la parte MSI de su factura. Solo lee datos:
+// no modifica nada ni necesita SQL. No depende de los filtros de la lista.
+let _txMsiOpen=(()=>{try{return localStorage.getItem('finance_v4_ui_txmsi_open')==='1'}catch(e){return false}})();
+function toggleTxMsiCard(){
+  _txMsiOpen=!_txMsiOpen;
+  try{localStorage.setItem('finance_v4_ui_txmsi_open',_txMsiOpen?'1':'0')}catch(e){}
+  const b=$('txmsi-body'),a=$('txmsi-arrow'),h=$('txmsi-head');
+  if(b)b.style.display=_txMsiOpen?'block':'none';
+  if(a)a.textContent=_txMsiOpen?'▾':'▸';
+  if(h)h.setAttribute('aria-expanded',_txMsiOpen?'true':'false');
+}
+// periodStartStr = fecha de corte con que EMPIEZA el periodo elegido.
+function msiBillingForPeriod(acc,periodStartStr){
+  const cut=acc.cutDay;
+  const pSel=periodKeyForDate(periodStartStr,cut);
+  const pToday=periodKeyForDate(td_(),cut);
+  const rows=[];
+  S.transactions.forEach(t=>{
+    if(!t.msi||t.type!=='expense'||t.accountId!==acc.id)return;
+    const st=msiStatus(t);
+    const idx=pSel-periodKeyForDate(t.date,cut); // 0 = periodo de la compra
+    if(idx<0||idx>=st.effectiveMonths)return;
+    const monthly=M(t.msi.monthly);
+    // Un adelanto solo acorta lo que viene: en periodos ya cerrados no cuenta.
+    const adv=idx>=st.elapsed?st.advancePaid:0;
+    rows.push({t,monthly,n:idx+1,months:t.msi.months,
+      leftMonths:Math.max(0,st.effectiveMonths-(idx+1)),
+      balanceAfter:Math.max(0,M(t.amount)-(idx+1)*monthly-adv)});
+  });
+  rows.sort((a,b)=>a.t.date<b.t.date?1:a.t.date>b.t.date?-1:0);
+  return{rows,total:rows.reduce((s,r)=>M(s+r.monthly),0),open:pSel>=pToday,hasAdv:rows.some(r=>M(r.t.msi.advancePaid||0)>0)};
+}
+function renderTxMsiCard(acc,periodStartStr){
+  const el=$('tx-msi-card');if(!el)return;
+  if(!acc||!acc.cutDay||!periodStartStr){el.innerHTML='';return}
+  const r=msiBillingForPeriod(acc,periodStartStr);
+  const head=(extra)=>`<div class="slbl" id="txmsi-head" role="button" tabindex="0" aria-expanded="${_txMsiOpen}" style="cursor:pointer;user-select:none;margin-bottom:0" onclick="toggleTxMsiCard()" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();toggleTxMsiCard()}"><span>MSI QUE SE FACTURAN EN ESTE PERIODO (${r.rows.length})</span>${extra}<span id="txmsi-arrow" style="font-size:13px">${_txMsiOpen?'▾':'▸'}</span></div>`;
+  if(!r.rows.length){
+    el.innerHTML=`<div style="border:1px solid var(--bdr);border-radius:var(--r);padding:12px 14px;margin-bottom:14px"><div class="slbl" style="margin-bottom:0"><span>MSI QUE SE FACTURAN EN ESTE PERIODO</span></div><div style="color:var(--t3);font-size:12px;margin-top:6px">Ninguna compra a MSI cobra mensualidad en este periodo.</div></div>`;
+    return;
+  }
+  const items=r.rows.map(x=>`<div class="msi-r" style="margin-bottom:8px;padding:10px 12px"><div style="display:flex;justify-content:space-between;gap:8px;margin-bottom:4px"><span style="font-weight:500;font-size:13px">${esc(x.t.description)}</span><span style="color:var(--pur);font-family:'DM Mono',monospace;font-size:13px">${fmt(x.monthly)}</span></div><div style="display:flex;justify-content:space-between;gap:8px;font-size:11px;color:var(--t3);flex-wrap:wrap"><span>Compra ${esc(x.t.date)} · total ${fmt(x.t.amount)}</span><span>Mes ${x.n} de ${x.months} · ${x.leftMonths} restante${x.leftMonths===1?'':'s'}</span></div><div style="font-size:11px;color:var(--t3);margin-top:3px">Por facturar después de esta mensualidad: <span style="font-family:'DM Mono',monospace;color:var(--txt)">${fmt(x.balanceAfter)}</span></div></div>`).join('');
+  const nota=r.open?`Periodo abierto: estas mensualidades se facturan al corte (día ${acc.cutDay}) y por eso todavía no están en «Gastado este periodo».`:`Periodo cerrado: este total es la parte de MSI de su factura.`;
+  const notaAdv=r.hasAdv?` Los adelantos de pago solo se reflejan de este periodo en adelante.`:'';
+  el.innerHTML=`<div style="border:1px solid var(--bdr);border-radius:var(--r);padding:12px 14px;margin-bottom:14px">${head(`<span style="color:var(--pur)">· ${fmt(r.total)}</span>`)}<div id="txmsi-body" style="display:${_txMsiOpen?'block':'none'};margin-top:10px">${items}<div style="font-size:11px;line-height:1.5;color:var(--t3)">ⓘ ${nota}${notaAdv}</div></div></div>`;
+}
+
 function renderTxP(){
   renderTpOps();
   if(document.getElementById('page-children')&&document.getElementById('page-children').classList.contains('on'))renderChildren(); // un cambio en un movimiento se refleja en Hijos
@@ -7343,6 +7396,7 @@ function renderTxP(){
   if(isTDC&&billingPeriod){[dateFrom,dateTo]=billingPeriod.split('|');}
   else if(!isTDC&&fm){monthPrefix=fm;}
   const txs=Store.queryTransactions({type:ft||undefined,accountId:accId||undefined,category:cat||undefined,dateFrom,dateTo,monthPrefix,search:q||undefined,sortBy,sortDir});
+  renderTxMsiCard(isTDC?acc:null,isTDC&&billingPeriod?dateFrom:'');// antes del aviso de lista vacía: un periodo puede tener solo mensualidades de compras anteriores
 
   const tb=$('tx-tb');
   const summaryBar=$('tx-summary-bar');
