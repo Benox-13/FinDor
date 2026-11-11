@@ -1832,7 +1832,7 @@ body.modal-open #bottom-nav{display:none !important}
 // Objetivo: que un fallo inesperado (sobre todo en el iPhone, donde no hay consola) deje un aviso corto y un
 // registro que se pueda ver y copiar en Configuración → Datos → Diagnóstico. Nada de esto sube a la nube.
 // Se guarda en finance_v4_errlog (se borra con el cambio de usuario y con "Borrar todo", como el resto de lo local).
-const APP_BUILD='2026-11-08 · r13'; // cambia en cada entrega: sirve para saber qué versión está corriendo (el service worker puede servir una anterior)
+const APP_BUILD='2026-11-08 · r14'; // cambia en cada entrega: sirve para saber qué versión está corriendo (el service worker puede servir una anterior)
 const ERRLOG_KEY='finance_v4_errlog',ERRLOG_MAX=5;
 let _errLast={sig:'',t:0},_errToastAt=0;
 function errToText(x){
@@ -4936,7 +4936,8 @@ function openBillingPay(accId,prefillAmt=null){
     let lastCut=new Date(now.getFullYear(),now.getMonth(),a.cutDay);
     if(lastCut>now)lastCut=new Date(now.getFullYear(),now.getMonth()-1,a.cutDay);
     const prevCut=new Date(lastCut.getFullYear(),lastCut.getMonth()-1,a.cutDay);
-    invoiceAmt=S.transactions.filter(t=>t.type==='expense'&&t.accountId===accId&&t.date>toLocal(prevCut)&&t.date<=toLocal(lastCut)).reduce((s,t)=>s+M(t.amount),0);
+    // Misma función que Facturación y la tarjeta de Cuentas (antes sumaba aquí el MSI completo y el día de corte en el periodo que cierra).
+    invoiceAmt=tdcSpendForPeriod(accId,toLocal(prevCut),a.cutDay);
     // BUG REAL ENCONTRADO: a esta función en particular se me había
     // pasado restarle los pagos ya hechos — mostraba/precargaba siempre
     // el monto completo del periodo, sin importar cuánto ya se hubiera
@@ -7305,7 +7306,7 @@ function computeDailyBalances(accountId){
 // cuenten la misma historia.
 function computeTDCDailyAccumulated(accountId,periodStartStr,periodEndStr){
   const txs=S.transactions
-    .filter(t=>t.accountId===accountId&&t.type==='expense'&&!t.msi&&t.date>periodStartStr&&(!periodEndStr||t.date<=periodEndStr))
+    .filter(t=>t.accountId===accountId&&t.type==='expense'&&!t.msi&&t.date>=periodStartStr&&(!periodEndStr||t.date<=periodEndStr))
     .slice().sort((a,b)=>(a.date+(a.time||'00:00')).localeCompare(b.date+(b.time||'00:00')));
   let running=0;
   const byDate={};
@@ -7393,7 +7394,13 @@ function renderTxP(){
 
   // Cálculo delegado a Store — renderTxP ya no filtra, solo pinta.
   let dateFrom,dateTo,monthPrefix;
-  if(isTDC&&billingPeriod){[dateFrom,dateTo]=billingPeriod.split('|');}
+  if(isTDC&&billingPeriod){
+    // Criterio único del día de corte (igual que Facturación y MSI): el día de corte EMPIEZA el
+    // periodo nuevo. El selector guarda «corte|corte siguiente»; el corte siguiente ya es del
+    // periodo que sigue, así que la lista llega hasta el día anterior (antes aparecía en ambos).
+    let finExclusivo;[dateFrom,finExclusivo]=billingPeriod.split('|');
+    const dFin=dateLocal(finExclusivo);dFin.setDate(dFin.getDate()-1);dateTo=ymdLocal(dFin);
+  }
   else if(!isTDC&&fm){monthPrefix=fm;}
   const txs=Store.queryTransactions({type:ft||undefined,accountId:accId||undefined,category:cat||undefined,dateFrom,dateTo,monthPrefix,search:q||undefined,sortBy,sortDir});
   renderTxMsiCard(isTDC?acc:null,isTDC&&billingPeriod?dateFrom:'');// antes del aviso de lista vacía: un periodo puede tener solo mensualidades de compras anteriores
