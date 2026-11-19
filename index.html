@@ -1832,7 +1832,7 @@ body.modal-open #bottom-nav{display:none !important}
 // Objetivo: que un fallo inesperado (sobre todo en el iPhone, donde no hay consola) deje un aviso corto y un
 // registro que se pueda ver y copiar en Configuración → Datos → Diagnóstico. Nada de esto sube a la nube.
 // Se guarda en finance_v4_errlog (se borra con el cambio de usuario y con "Borrar todo", como el resto de lo local).
-const APP_BUILD='2026-11-08 · r14'; // cambia en cada entrega: sirve para saber qué versión está corriendo (el service worker puede servir una anterior)
+const APP_BUILD='2026-11-19 · r15'; // cambia en cada entrega: sirve para saber qué versión está corriendo (el service worker puede servir una anterior)
 const ERRLOG_KEY='finance_v4_errlog',ERRLOG_MAX=5;
 let _errLast={sig:'',t:0},_errToastAt=0;
 function errToText(x){
@@ -2531,7 +2531,7 @@ async function pullFromSupabase(){
     // Todo convertido con éxito — ahora sí reemplazamos S y refrescamos la
     // pantalla. Si algo de arriba hubiera lanzado un error, el catch de
     // abajo evita que lleguemos a pisar los datos locales a medias.
-    S.accounts=newAccounts;S.categories=newCategories;S.transactions=newTransactions;
+    S.accounts=newAccounts;S.categories=newCategories;S.transactions=newTransactions;sortCategoriesAlpha();
     S.debts_owed=newDebtsOwed;S.debts_iowe=newDebtsIowe;S.goals=newGoals;
     S.subscriptions=newSubscriptions;S.budgets=newBudgets;S.budgetGoals=newBudgetGoals;S.children=newChildren;S.childBudgets=newChildBudgets;S.vehicles=newVehicles;S.investments=newInvestments;
     S.customSections=newCustomSections;S.settings=newSettings;S.dw=newDw;S.notif=newNotif;S.budgetRollover=newRollover;
@@ -3478,7 +3478,21 @@ function loadAppState(){
   if(fixed.length){console.info('Estado local completado con valores por defecto:',fixed.join(', '));window.__stateRecovery={kind:'repaired',keys:fixed}}
   return loaded;
 }
+// ==================== ORDEN ALFABÉTICO DE CATEGORÍAS Y SUBCATEGORÍAS ====================
+// Se ordena el DATO (S.categories y cada cat.subs) en los pocos puntos donde entran o
+// cambian: al abrir la app, tras sincronizar, al importar respaldo y al crear una
+// categoría/subcategoría. Así todas las pantallas y selectores salen ordenados sin
+// tener que ordenar en cada una. Criterio español: sin distinguir mayúsculas ni acentos
+// (Ñ después de N) y con números en orden natural (Auto 2 antes que Auto 10).
+const _alfaES=new Intl.Collator('es',{sensitivity:'base',numeric:true});
+function alfaES(a,b){a=String(a==null?'':a);b=String(b==null?'':b);return _alfaES.compare(a,b)||a.localeCompare(b,'es')}
+function sortCategoriesAlpha(){
+  if(!S||!Array.isArray(S.categories))return;
+  S.categories.forEach(c=>{if(c&&Array.isArray(c.subs))c.subs.sort(alfaES)});
+  S.categories.sort((a,b)=>alfaES(a&&a.name,b&&b.name));
+}
 let S = loadAppState();
+sortCategoriesAlpha();
 // Aviso (solo si hubo datos dañados; completar claves nuevas es normal y silencioso).
 setTimeout(()=>{if(window.__stateRecovery&&window.__stateRecovery.kind==='corrupt'&&typeof toast==='function')toast('Los datos locales estaban dañados: se guardó una copia y se empezó limpio. Inicia sesión para recuperar lo sincronizado.',false)},1500);
 
@@ -4141,6 +4155,7 @@ const Store = {
   addCategory(data){
     const cat={id:uid(),subs:[],...data};
     S.categories.push(cat);
+    sortCategoriesAlpha();
     save();
     if(sb&&currentUserId)cloudWrite(sb.from('categories').insert(categoryToCloud(cat)),`crear categoría ${cat.name}`);
     return cat;
@@ -4154,6 +4169,7 @@ const Store = {
     const c=this.getCategoryById(categoryId);
     if(!c)return null;
     c.subs.push(name);
+    c.subs.sort(alfaES);
     save();
     if(sb&&currentUserId&&isUUID(categoryId))cloudWrite(sb.from('subcategories').insert({user_id:currentUserId,category_id:categoryId,name}),`crear subcategoría ${name}`);
     return c;
@@ -5846,6 +5862,7 @@ function ctFillSubs(){
   const hc=S.categories.find(x=>x.name==='Hijos');
   const list=[...new Set([...stages.flatMap(k=>CHILD_CATALOG[k]||[]),...CHILD_CATALOG.common,...((hc&&hc.subs)||[])])];
   if(cur&&!list.includes(cur))list.push(cur);
+  list.sort(alfaES);
   sel.innerHTML='<option value="">Sin subcategoría</option>'+list.map(x=>`<option value="${esc(x)}">${esc(x)}</option>`).join('');
   sel.value=cur||'';
 }
@@ -6314,7 +6331,7 @@ function cbSuggestions(c){
   const hc=S.categories.find(x=>x.name==='Hijos');((hc&&hc.subs)||[]).forEach(x=>set.add(x));
   S.transactions.forEach(t=>{if(Array.isArray(t.childAlloc)&&t.childAlloc.some(a=>a&&a.childId===c.id)){const k=childCatKey(t);if(k)set.add(k)}});
   Store.getChildBudgets().forEach(r=>{if(r.childId===c.id&&r.category)set.add(r.category)});
-  return [...set];
+  return [...set].sort(alfaES);
 }
 function cbRowHTML(cat,lim){
   return`<div class="cb-row" style="display:flex;gap:6px;margin-bottom:6px"><input class="fc cb-cat" list="cb-sug" maxlength="40" placeholder="Categoría" value="${esc(cat||'')}" oninput="cbSum()"><input class="fc cb-lim" type="number" step="0.01" min="0" inputmode="decimal" placeholder="Límite" style="width:110px" value="${lim!=null&&lim!==''?Number(lim).toFixed(2):''}" oninput="cbSum()"><button class="btn bg_ sm" aria-label="Quitar" onclick="this.parentNode.remove();cbSum()">✕</button></div>`;
@@ -7186,7 +7203,7 @@ function populateTxAccFilter(){
 function populateTxCatFilter(){
   const sel=$('txcat');if(!sel)return;
   const cur=sel.value;
-  const cats=[...S.categories].sort((a,b)=>a.name.localeCompare(b.name));
+  const cats=[...S.categories].sort((a,b)=>alfaES(a.name,b.name));
   sel.innerHTML='<option value="">Todas las categorías</option>'+cats.map(c=>`<option value="${esc(c.name)}">${esc(c.icon)} ${esc(c.name)}</option>`).join('');
   if(cur)sel.value=cur;
 }
@@ -8379,7 +8396,7 @@ function renderAnalysisTrends(){
   const sel=$('an-cat-select');
   if(sel){
     const cur=sel.value;
-    const cats=S.categories.filter(c=>c.type==='expense').sort((a,b)=>a.name.localeCompare(b.name));
+    const cats=S.categories.filter(c=>c.type==='expense').sort((a,b)=>alfaES(a.name,b.name));
     sel.innerHTML=cats.map(c=>`<option value="${esc(c.name)}">${esc(c.icon)} ${esc(c.name)}</option>`).join('');
     if(cur&&cats.some(c=>c.name===cur))sel.value=cur;
   }
@@ -9740,7 +9757,7 @@ async function runImportReplace(){
     }
     // 3) El respaldo pasa a ser el estado de este dispositivo; las colas pendientes del estado anterior ya no aplican
     retryableWrites={};syncQueue=[];saveRetryableWrites();saveSyncQueue();
-    S=incoming;save();
+    S=incoming;sortCategoriesAlpha();save();
     setImportFlag({t:Date.now(),attempts:0}); // desde aquí no se baja nada de la nube hasta terminar de subir
     refreshAllUI();
     // 4) Subir y verificar
